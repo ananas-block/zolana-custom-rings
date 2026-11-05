@@ -53,7 +53,9 @@ use crate::{
     },
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{check_recipient_viewing_key, OutputKey, PoolRead, TrackingPoolRead, TrackingRead},
+    records::{
+        OutputKey, PoolRead, RecipientViewingKeys, SealedOutput, TrackingPoolRead, TrackingRead,
+    },
     relay_message::{ExpectedDeposit, ExpectedMessage},
     request::{
         self, DepositRequest, MintChunks, OwnerEntry, PolicyParams, PolicyTable, PoolEntry,
@@ -1114,7 +1116,7 @@ impl DepositDisclosure {
         let policy = ring.require_policy(rpc).await?;
         let tracking = BoundRoot::tracking(&policy, rpc).await?;
         // 1. Each distinct recipient opens one tracking row, a slot points at its recipient's row. A note
-        // sealed to a viewing key the row no longer names stays unread.
+        // sealed to a viewing key the owner's authorization no longer holds stays unread.
         let mut tracked = PoolSubjects::default();
         let mut output_entries: Vec<u32> = self
             .slots
@@ -1136,20 +1138,30 @@ impl DepositDisclosure {
         let gates = pinned.as_ref().map_or_else(SourceGates::default, |pinned| {
             SourceGates::of(&pinned.sources)
         });
+        let mut sealed = Vec::new();
         for (slot_index, slot) in self.slots.iter().enumerate() {
+            let row = rows.record(&slot.owner_pk_hash);
             OutputKey {
-                row: rows.record(&slot.owner_pk_hash),
+                row,
                 nullifier_pk: &slot.nullifier_pk,
                 slot_index,
                 gates,
             }
             .check()?;
-            check_recipient_viewing_key(
-                rows.record(&slot.owner_pk_hash),
-                &slot.viewing_u,
-                slot_index,
-            )?;
+            if row.is_some() {
+                sealed.push(SealedOutput {
+                    slot_index,
+                    owner: Address::new_from_array(slot.owner.key()),
+                    viewing_u: slot.viewing_u,
+                });
+            }
         }
+        RecipientViewingKeys {
+            registry: tracking.registry,
+            outputs: &sealed,
+        }
+        .check(rpc)
+        .await?;
         // 2. Every distinct recipient and asset takes a pool record and an enrolled recipient on a salted
         // list one more under its salted key, only the rows read above show who is enrolled.
         let salts = KnownSalts::new(

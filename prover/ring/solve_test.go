@@ -168,14 +168,13 @@ func (batch registryBatch) request(t testing.TB) (*ApplyRecordsParams, bool) {
 	return p, fields[len(fields)-1].Sign() != 0
 }
 
-// enrollmentsRequest inserts one owner per slot and rotates the last in a batch wider than one.
+// enrollmentsRequest inserts one owner per slot.
 func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) *ApplyEnrollmentsParams {
 	t.Helper()
 	tree := ringregistry.NewTracking(t)
-	entry := func(i int, revision int64) ringregistry.TrackingEntry {
+	entry := func(i int) ringregistry.TrackingEntry {
 		owner := big.NewInt(0x100 + int64(i))
-		view0, view1 := ringregistry.PackedView(big.NewInt(0x100 + revision))
-		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), View0: view0, View1: view1, Revision: big.NewInt(revision), ListTag: big.NewInt(0xd0)}
+		return ringregistry.TrackingEntry{Member: owner, NullifierPk: spptest.MustNullifierPk(t, owner), CtHash: big.NewInt(0xc0), ListTag: big.NewInt(0xd0)}
 	}
 	assignment, err := registry.NewApplyEnrollmentsCircuit(capacity)
 	if err != nil {
@@ -184,10 +183,7 @@ func enrollmentsRequest(t testing.TB, circuit common.CircuitType, capacity int) 
 	assignment.OldRoot, assignment.OldNextIndex, assignment.ChainStart = tree.Root(), tree.NextIndex(), big.NewInt(0x5eed)
 	chain := big.NewInt(0x5eed)
 	for i := range assignment.Writes {
-		e := entry(i, 1)
-		if capacity > 1 && i == capacity-1 {
-			e = entry(0, 2)
-		}
+		e := entry(i)
 		assignment.Writes[i] = tree.Apply(t, e).Wires()
 		chain = ringtest.MustPoseidonHash(t, chain, e.Hash(t))
 	}

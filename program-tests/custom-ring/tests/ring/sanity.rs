@@ -65,7 +65,7 @@ fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
         .push(AccountMeta::new_readonly(STORAGE_PROGRAM_ID, false));
     send(env.client.rpc(), &env.payer, &[instruction])?;
     let enrolled = owner_enrollment(&env, ring, owner)?.context("the PDA's enrollment")?;
-    ensure!(enrolled.viewing_u == viewing_key.pubkey().u() && enrolled.revision() == 1);
+    ensure!(enrolled.viewing_u == viewing_key.pubkey().u() && enrolled.is_pending());
     ApplyOwnerEnrollments {
         ring,
         owners: &[owner],
@@ -73,7 +73,7 @@ fn a_pda_enrolls_and_applies_its_key_on_the_validator() -> Result<()> {
     }
     .send()?;
     let applied = owner_enrollment(&env, ring, owner)?.context("the PDA's enrollment")?;
-    ensure!(applied.applied_revision() == 1);
+    ensure!(!applied.is_pending());
     Ok(())
 }
 
@@ -224,7 +224,7 @@ fn viewing_key_rotation_survives_restart_and_a_wallet_wipe() -> Result<()> {
                 .context("the rotated recipient enrollment")?;
             assert_eq!(updated.viewing_u, rotated.viewing_pubkey().u());
             assert_eq!(updated.nullifier_pk, original_address.nullifier_pk);
-            assert_eq!(updated.revision(), original_address.revision() + 1);
+            assert!(!updated.is_pending(), "a rotation leaves no tracking work");
             let history = wallet
                 .history()
                 .clone()

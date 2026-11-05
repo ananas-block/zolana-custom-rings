@@ -1,7 +1,6 @@
 package registry_test
 
 import (
-	"encoding/hex"
 	"math/big"
 	"testing"
 
@@ -13,18 +12,7 @@ import (
 type rustTrackingFields struct {
 	NullifierPk ringtest.Hex `json:"nullifier_pk"`
 	CtHash      ringtest.Hex `json:"ct_hash"`
-	ViewingU    string       `json:"viewing_u"`
-	Revision    uint64       `json:"revision"`
 	ListTag     ringtest.Hex `json:"list_tag"`
-}
-
-func (f rustTrackingFields) views(t *testing.T) (view0, view1 *big.Int) {
-	t.Helper()
-	u, err := hex.DecodeString(f.ViewingU)
-	if err != nil || len(u) != 32 {
-		t.Fatalf("viewing key %q", f.ViewingU)
-	}
-	return new(big.Int).SetBytes(u[:31]), new(big.Int).SetBytes(u[31:])
 }
 
 type rustTrackingRecord struct {
@@ -36,8 +24,7 @@ type rustTrackingRecord struct {
 
 func (r rustTrackingRecord) record(t *testing.T) ringregistry.TrackingRecord {
 	t.Helper()
-	view0, view1 := r.views(t)
-	return ringregistry.TrackingRecord{Member: r.Member.Int, Next: r.Next.Int, NullifierPk: r.NullifierPk.Int, CtHash: r.CtHash.Int, View0: view0, View1: view1, Revision: new(big.Int).SetUint64(r.Revision), ListTag: r.ListTag.Int}
+	return ringregistry.TrackingRecord{Member: r.Member.Int, Next: r.Next.Int, NullifierPk: r.NullifierPk.Int, CtHash: r.CtHash.Int, ListTag: r.ListTag.Int}
 }
 
 type rustTrackingEntry struct {
@@ -48,8 +35,7 @@ type rustTrackingEntry struct {
 
 func (e rustTrackingEntry) entry(t *testing.T) ringregistry.TrackingEntry {
 	t.Helper()
-	view0, view1 := e.views(t)
-	return ringregistry.TrackingEntry{Member: e.Member.Int, NullifierPk: e.NullifierPk.Int, CtHash: e.CtHash.Int, View0: view0, View1: view1, Revision: new(big.Int).SetUint64(e.Revision), ListTag: e.ListTag.Int}
+	return ringregistry.TrackingEntry{Member: e.Member.Int, NullifierPk: e.NullifierPk.Int, CtHash: e.CtHash.Int, ListTag: e.ListTag.Int}
 }
 
 type rustTrackingPath struct {
@@ -86,8 +72,6 @@ func TestApplyEnrollmentsMatchesRustVectors(t *testing.T) {
 			StatementHash ringtest.Hex `json:"statement_hash"`
 			Writes        []struct {
 				Entry   rustTrackingEntry  `json:"entry"`
-				Exists  bool               `json:"exists"`
-				Old     rustTrackingRecord `json:"old"`
 				Slot    rustTrackingPath   `json:"slot"`
 				Low     rustTrackingRecord `json:"low"`
 				LowPath rustTrackingPath   `json:"low_path"`
@@ -107,10 +91,8 @@ func TestApplyEnrollmentsMatchesRustVectors(t *testing.T) {
 				if entries[i].Hash(t).Cmp(w.Entry.EntryHash.Int) != 0 {
 					t.Fatalf("entry %d hash differs from Rust", i)
 				}
-				for name, record := range map[string]rustTrackingRecord{"old": w.Old, "low": w.Low} {
-					if record.record(t).Hash(t).Cmp(record.LeafHash.Int) != 0 {
-						t.Fatalf("write %d %s leaf differs from Rust", i, name)
-					}
+				if w.Low.record(t).Hash(t).Cmp(w.Low.LeafHash.Int) != 0 {
+					t.Fatalf("write %d low leaf differs from Rust", i)
 				}
 			}
 			b := applyEnrollments(t, tree, registry.ApplyBatch, app.ChainStart.Int, entries...)
@@ -128,7 +110,7 @@ func TestApplyEnrollmentsMatchesRustVectors(t *testing.T) {
 				}
 			}
 			for i, w := range app.Writes {
-				c.Writes[i] = ringregistry.TrackingWrite{Entry: entries[i], Exists: w.Exists, Old: w.Old.record(t), Slot: w.Slot.path(t), Low: w.Low.record(t), LowPath: w.LowPath.path(t)}.Wires()
+				c.Writes[i] = ringregistry.TrackingWrite{Entry: entries[i], Slot: w.Slot.path(t), Low: w.Low.record(t), LowPath: w.LowPath.path(t)}.Wires()
 			}
 			if err := solveEnrollments(t, c); err != nil {
 				t.Fatal(err)

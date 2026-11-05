@@ -19,8 +19,6 @@ fn row(list_salt: &[u8; 32]) -> TrackingRecord {
         next: [0; 32],
         nullifier_pk: [5; 32],
         ct_hash: [0; 32],
-        viewing_u: [0; 32],
-        revision: 1,
         list_tag: domain::list_tag(list_salt).unwrap(),
     }
 }

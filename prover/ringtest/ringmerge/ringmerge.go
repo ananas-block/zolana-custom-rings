@@ -71,8 +71,7 @@ func Build(t testing.TB) *Statement {
 
 // TrackingEntry enrolls member under nullifierPk.
 func (s *Statement) TrackingEntry(member, nullifierPk *big.Int) ringregistry.TrackingEntry {
-	view0, view1 := ringregistry.PackedView(big.NewInt(0xa1a2))
-	return ringregistry.TrackingEntry{Member: member, NullifierPk: nullifierPk, CtHash: big.NewInt(0xc7), View0: view0, View1: view1, Revision: big.NewInt(1), ListTag: big.NewInt(0xb7)}
+	return ringregistry.TrackingEntry{Member: member, NullifierPk: nullifierPk, CtHash: big.NewInt(0xc7), ListTag: big.NewInt(0xb7)}
 }
 
 // BuildZeroKey merges under ZeroNullifierPk with a private seed, the owner is published and no row is read.
@@ -90,7 +89,7 @@ func BuildZeroKey(t testing.TB) *Statement {
 func UnreadTracking() registry.TrackingOpening {
 	zero := big.NewInt(0)
 	return ringregistry.TrackingOpening{
-		Record: ringregistry.TrackingRecord{Member: zero, Next: zero, NullifierPk: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero},
+		Record: ringregistry.TrackingRecord{Member: zero, Next: zero, NullifierPk: zero, CtHash: zero, ListTag: zero},
 		Path:   ringregistry.ZeroTrackingWrite().Slot,
 	}.Wires()
 }

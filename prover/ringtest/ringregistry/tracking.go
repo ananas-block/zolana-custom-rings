@@ -9,37 +9,30 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 )
 
-// PackedView is the pack_be of a 32 byte viewing u, seed fills its low bytes.
-func PackedView(seed *big.Int) (view0, view1 *big.Int) {
-	var key [32]byte
-	seed.FillBytes(key[:])
-	return new(big.Int).SetBytes(key[:31]), big.NewInt(int64(key[31]))
-}
-
 type TrackingRecord struct {
-	Member, Next, NullifierPk, CtHash, View0, View1, Revision, ListTag *big.Int
+	Member, Next, NullifierPk, CtHash, ListTag *big.Int
 }
 
 func (r TrackingRecord) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.TrackingLeafDomain), r.Member, r.Next, r.NullifierPk, r.CtHash, r.View0, r.View1, r.Revision, r.ListTag)
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.TrackingLeafDomain), r.Member, r.Next, r.NullifierPk, r.CtHash, r.ListTag)
 }
 
 func (r TrackingRecord) Wires() registry.TrackingRecord {
-	return registry.TrackingRecord{Member: copied(r.Member), Next: copied(r.Next), NullifierPk: copied(r.NullifierPk), CtHash: copied(r.CtHash), View0: copied(r.View0), View1: copied(r.View1), Revision: copied(r.Revision), ListTag: copied(r.ListTag)}
+	return registry.TrackingRecord{Member: copied(r.Member), Next: copied(r.Next), NullifierPk: copied(r.NullifierPk), CtHash: copied(r.CtHash), ListTag: copied(r.ListTag)}
 }
 
 type TrackingEntry struct {
-	Member, NullifierPk, CtHash, View0, View1, Revision, ListTag *big.Int
+	Member, NullifierPk, CtHash, ListTag *big.Int
 }
 
 func (e TrackingEntry) Hash(t testing.TB) *big.Int {
 	t.Helper()
-	return ringtest.MustPoseidonHash(t, big.NewInt(shared.TrackingEntryDomain), e.Member, e.NullifierPk, e.CtHash, e.View0, e.View1, e.Revision, e.ListTag)
+	return ringtest.MustPoseidonHash(t, big.NewInt(shared.TrackingEntryDomain), e.Member, e.NullifierPk, e.CtHash, e.ListTag)
 }
 
 func (e TrackingEntry) Wires() registry.TrackingEntry {
-	return registry.TrackingEntry{Member: e.Member, NullifierPk: e.NullifierPk, CtHash: e.CtHash, View0: e.View0, View1: e.View1, Revision: e.Revision, ListTag: e.ListTag}
+	return registry.TrackingEntry{Member: e.Member, NullifierPk: e.NullifierPk, CtHash: e.CtHash, ListTag: e.ListTag}
 }
 
 // ListTag mirrors shared.ListTag.
@@ -84,19 +77,13 @@ func (o TrackingOpening) Wires() registry.TrackingOpening {
 
 type TrackingWrite struct {
 	Entry   TrackingEntry
-	Exists  bool
-	Old     TrackingRecord
 	Slot    TrackingPath
 	Low     TrackingRecord
 	LowPath TrackingPath
 }
 
 func (w TrackingWrite) Wires() registry.EnrollmentWrite {
-	exists := 0
-	if w.Exists {
-		exists = 1
-	}
-	return registry.EnrollmentWrite{Entry: w.Entry.Wires(), Exists: exists, Old: w.Old.Wires(), Slot: w.Slot.Wires(), Low: w.Low.Wires(), LowSlot: w.LowPath.Wires()}
+	return registry.EnrollmentWrite{Entry: w.Entry.Wires(), Slot: w.Slot.Wires(), Low: w.Low.Wires(), LowSlot: w.LowPath.Wires()}
 }
 
 func ZeroTrackingWrite() TrackingWrite {
@@ -108,7 +95,7 @@ func ZeroTrackingWrite() TrackingWrite {
 			path.Siblings[level][k] = zero
 		}
 	}
-	return TrackingWrite{Entry: TrackingEntry{Member: zero, NullifierPk: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero}, Old: record, Slot: path, Low: record, LowPath: path}
+	return TrackingWrite{Entry: TrackingEntry{Member: zero, NullifierPk: zero, CtHash: zero, ListTag: zero}, Slot: path, Low: record, LowPath: path}
 }
 
 // Tracking keeps the sentinel at index 0 and appends every insert.
@@ -121,7 +108,7 @@ func NewTracking(t testing.TB) *Tracking {
 	t.Helper()
 	r := &Tracking{tree: newQuadTree(t, registry.TrackingHeight)}
 	zero := big.NewInt(0)
-	r.set(t, 0, TrackingRecord{Member: zero, Next: fieldMax, NullifierPk: zero, CtHash: zero, View0: zero, View1: zero, Revision: zero, ListTag: zero})
+	r.set(t, 0, TrackingRecord{Member: zero, Next: fieldMax, NullifierPk: zero, CtHash: zero, ListTag: zero})
 	return r
 }
 
@@ -145,13 +132,10 @@ func (r *Tracking) Apply(t testing.TB, e TrackingEntry) TrackingWrite {
 	}
 	index, present := r.find(e.Member)
 	if present {
-		old := r.records[index]
-		w := TrackingWrite{Entry: e, Exists: true, Old: old, Slot: r.Path(index), Low: TrackingRecord{}, LowPath: ZeroTrackingWrite().LowPath}
-		r.set(t, index, entryRecord(e, old.Next))
-		return w
+		t.Fatalf("ringregistry: an owner enrolls once, %+v", e)
 	}
 	low, next := r.records[index], r.NextIndex()
-	w := TrackingWrite{Entry: e, Old: TrackingRecord{Member: e.Member, Next: low.Next}, Low: low, LowPath: r.Path(index)}
+	w := TrackingWrite{Entry: e, Low: low, LowPath: r.Path(index)}
 	relinked := low
 	relinked.Next = e.Member
 	r.set(t, index, relinked)
@@ -209,5 +193,5 @@ func (r *Tracking) set(t testing.TB, index uint64, record TrackingRecord) {
 }
 
 func entryRecord(e TrackingEntry, next *big.Int) TrackingRecord {
-	return TrackingRecord{Member: e.Member, Next: next, NullifierPk: e.NullifierPk, CtHash: e.CtHash, View0: e.View0, View1: e.View1, Revision: e.Revision, ListTag: e.ListTag}
+	return TrackingRecord{Member: e.Member, Next: next, NullifierPk: e.NullifierPk, CtHash: e.CtHash, ListTag: e.ListTag}
 }

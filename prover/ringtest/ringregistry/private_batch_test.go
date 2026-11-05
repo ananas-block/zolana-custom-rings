@@ -38,10 +38,9 @@ func TestPrivateWriteOpensTheOwnersTrackingRow(t *testing.T) {
 		}, owner},
 		{"an owner absent from the root", func(c *registry.PrivateApplyRecordsCircuit) {
 			other := ringregistry.SaltedTracking(t, big.NewInt(13))
-			view0, view1 := ringregistry.PackedView(big.NewInt(0xb1))
 			other.Apply(t, ringregistry.TrackingEntry{
 				Member: big.NewInt(103), NullifierPk: spptest.MustNullifierPk(t, big.NewInt(9)), CtHash: big.NewInt(19),
-				View0: view0, View1: view1, Revision: big.NewInt(1), ListTag: ringregistry.ListTag(t, big.NewInt(13)),
+				ListTag: ringregistry.ListTag(t, big.NewInt(13)),
 			})
 			opening := other.Opening(big.NewInt(103))
 			c.Owners[0].Record, c.Owners[0].Path = opening.Record.Wires(), opening.Path.Wires()

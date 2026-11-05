@@ -10,7 +10,7 @@
 //! Guarantees:
 //! 1. The owner signs, a program signs its PDA through CPI, and any payer may fund the account.
 //! 2. A first enrollment verifies `RegisterKey` with the ring id, member and auditor key the program supplies, a proof for another ring, member or auditor fails.
-//! 3. A rotation carries no proof and moves only the viewing key and the revision.
+//! 3. A rotation carries no proof and moves only the viewing key, it leaves the account's applied state and every root as they were.
 //! 4. The instruction moves no root and reads the registry alone, so enrollment traffic takes no write lock on it.
 //!
 //! Relies on:

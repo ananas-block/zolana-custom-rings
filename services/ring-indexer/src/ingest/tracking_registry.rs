@@ -14,9 +14,7 @@ use crate::{
     block::Instruction,
     indexer::{fault, from_storage, ApplyError, Projection, RegistryCall, RegistryInstruction},
     member_registry::{plant_tree, AppliedBatch},
-    storage::{
-        AppliedRevision, Enrollment, EnrollmentRevision, StorageRoot, TrackingState, TrackingStore,
-    },
+    storage::{Enrollment, StorageRoot, TrackingState, TrackingStore},
 };
 
 pub(crate) enum TrackingCall<'a> {
@@ -166,10 +164,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
             list_tag: held.list_tag,
             eph_u: held.eph_u,
             ciphertext: held.ciphertext,
-            // The account may hold a later rotation.
-            viewing_u: request.ix.viewing_u,
-            revision: 1,
-            applied_revision: 0,
+            applied: false,
         };
         self.store
             .save_first(&first, self.slot)
@@ -177,24 +172,15 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
             .map_err(from_storage)
     }
 
+    /// The program's final field check, a rotation moves no root and leaves no pending row.
     async fn rotation(self, call: EnrollCall<'_>, held: Enrollment) -> Result<(), ApplyError> {
         let EnrollCall { request, .. } = call;
         if request.proof.is_some() {
             return Err(fault("a rotation carries a proof"));
         }
-        let mut account = held.account(self.state.registry);
-        account
+        held.account(self.state.registry)
             .rotate(request.ix)
-            .map_err(|error| fault(format!("rotation refused ({error})")))?;
-        self.store
-            .save_revision(&EnrollmentRevision {
-                owner: held.owner,
-                viewing_u: account.viewing_u,
-                revision: account.revision(),
-                slot: self.slot,
-            })
-            .await
-            .map_err(from_storage)
+            .map_err(|error| fault(format!("rotation refused ({error})")))
     }
 
     /// An absent account retries, a stale read or a fork.
@@ -248,7 +234,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
         Ok(())
     }
 
-    /// Each owner's newest enrollment in block order.
+    /// Each named owner's first enrollment in block order.
     async fn applied_entries(
         &self,
         authorizations: &[Address],
@@ -266,11 +252,7 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, TrackingRegistry> {
                 .apply()
                 .map_err(|error| fault(format!("apply refused ({error})")))?;
             self.store
-                .mark_applied(&AppliedRevision {
-                    owner: held.owner,
-                    revision: held.revision,
-                    slot: self.slot,
-                })
+                .mark_applied(&held.owner, self.slot)
                 .await
                 .map_err(from_storage)?;
             entries.push(entry);

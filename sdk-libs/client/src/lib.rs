@@ -114,7 +114,7 @@ pub use crate::{
     recover::{
         MemberRecovery, RecoveredNotes, RecoveryProgress, RecoveryStep, RingRecovery, SourceMember,
     },
-    resolver::{RecipientResolver, ResolveError, ResolvedRecipient},
+    resolver::{AuthorizationCheck, RecipientResolver, ResolveError, ResolvedRecipient},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,

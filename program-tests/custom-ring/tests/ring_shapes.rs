@@ -367,25 +367,7 @@ fn narrow_key(outputs: u8) -> Option<TransferShape> {
 }
 
 fn shape_of(circuit: RingCircuit) -> Option<TransferShape> {
-    let RingCircuit::Transfer {
-        outputs,
-        inputs,
-        withdrawals,
-        owners,
-        entry,
-        wide,
-    } = circuit
-    else {
-        return None;
-    };
-    Some(TransferShape {
-        outputs,
-        inputs,
-        withdrawals,
-        owners,
-        entry,
-        wide,
-    })
+    TransferShape::of(circuit)
 }
 
 fn the_wide_key() -> Result<TransferShape> {

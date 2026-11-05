@@ -13,9 +13,10 @@ use custom_ring_interface::{
     key_catalog::{RingCircuit, RING_KEYS},
     policy_withdrawal_hash,
     storage::{Revision, Root, StorageRegistry},
-    tracking::TrackingRegistry,
+    tracking::{TrackingAuthorization, TrackingRegistry},
     verifying_key, RingProof, SignerSet, TransferBinding, TransferRoots, ANONYMOUS_PARTIES,
-    MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, TAGGED_X25519_KEY_LEN,
+    MAX_CPI_DATA_LEN, PROVING_KEY_SHA256S, REGISTER_KEY_CIPHERTEXT_LEN, STORAGE_PROGRAM_ID,
+    TAGGED_X25519_KEY_LEN,
 };
 use custom_ring_test_validator::policy::RELEASED;
 use serde_json::Value;
@@ -283,8 +284,6 @@ impl RingIndexer for SeededIndexer {
                         next: Hash(record.next),
                         nullifier_pk: Hash(record.nullifier_pk),
                         ct_hash: Hash(record.ct_hash),
-                        viewing_u: Hash(record.viewing_u),
-                        revision: record.revision,
                         list_tag: Hash(record.list_tag),
                         seal: None,
                     },
@@ -446,8 +445,6 @@ pub(super) fn tracking_tree(rows: &[ShieldedAddress]) -> Result<TrackingTree> {
             next: row.next,
             nullifier_pk: address.nullifier_pubkey,
             ct_hash: [0x05; 32],
-            viewing_u: address.viewing_pubkey.u(),
-            revision: REVISION,
             list_tag: [0x06; 32],
         }
     }))
@@ -484,6 +481,38 @@ impl AccountEdit<'_> {
         edit(&mut state);
         self.env
             .set_account_data(self.address, bytemuck::bytes_of(&state))
+    }
+}
+
+/// The applied authorization of each row, a sender reads the viewing key there.
+pub(super) struct SeededAuthorizations<'a> {
+    pub(super) env: &'a TestEnv,
+    pub(super) registry: Address,
+    pub(super) rows: &'a [ShieldedAddress],
+}
+
+impl SeededAuthorizations<'_> {
+    pub(super) fn write(self) -> Result<()> {
+        for row in self.rows {
+            let owner = Address::new_from_array(row.signing_pubkey.confidential_view_tag()?);
+            let authorization = TrackingAuthorization {
+                discriminator: TrackingAuthorization::DISCRIMINATOR,
+                registry: self.registry,
+                owner,
+                nullifier_pk: row.nullifier_pubkey,
+                list_tag: [0x06; 32],
+                viewing_u: row.viewing_pubkey.u(),
+                eph_u: [0; 32],
+                ciphertext: [0; REGISTER_KEY_CIPHERTEXT_LEN],
+                applied: 1,
+            };
+            self.env.create_account(
+                TrackingAuthorization::find_address(&self.registry, &owner).0,
+                STORAGE_PROGRAM_ID,
+                bytemuck::bytes_of(&authorization),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -862,6 +891,12 @@ fn one_key_settles_a_real_transfer_and_refuses_three_forgeries() -> Result<()> {
         .apply(|registry: &mut TrackingRegistry| registry.roots[0] = newest_root(root))
     };
     write_tracking(honest_root)?;
+    SeededAuthorizations {
+        env: &env,
+        registry: policy.tracking,
+        rows: &honest_rows,
+    }
+    .write()?;
     let Seeded {
         wallets: notes,
         notes: seeded,

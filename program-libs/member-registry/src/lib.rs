@@ -71,8 +71,10 @@ pub enum RecordTreeError {
     PoolCapacity,
     #[error("the record pool proof has the wrong shape")]
     PoolShape,
-    #[error("a tracking entry changes a final field or names a zero key")]
+    #[error("a tracking entry names a zero key")]
     TrackingKeyChanged,
+    #[error("a tracking entry names an owner the tree already holds")]
+    TrackingOwnerPresent,
 }
 
 impl From<HasherError> for RecordTreeError {

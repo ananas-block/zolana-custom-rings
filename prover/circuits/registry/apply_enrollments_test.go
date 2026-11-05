@@ -70,24 +70,23 @@ func enrollmentCircuit(t *testing.T, writes int) *registry.ApplyEnrollmentsCircu
 func TestApplyEnrollmentsAppliesEntriesInNamedOrder(t *testing.T) {
 	tree := trackingTree(t)
 	b := applyEnrollments(t, tree, registry.ApplyBatch, big.NewInt(0x5eed),
-		trackingEntry(0x20, 1, 0xb0), // insert between alice and carol
-		trackingEntry(0x10, 2, 0xa0), // alice rotates her view key
-		trackingEntry(0x05, 1, 0x50), // insert below every owner
-		trackingEntry(0x10, 3, 0xa0), // a second rotation in one batch
-		trackingEntry(0x40, 1, 0xd0), // insert above every owner
+		trackingEntry(0x20, 0xb0), // insert between alice and carol
+		trackingEntry(0x05, 0x50), // insert below every owner
+		trackingEntry(0x40, 0xd0), // insert above every owner
+		trackingEntry(0x28, 0xe0), // insert after an insert of the same batch
 	)
 	if err := solveEnrollments(t, b.circuit); err != nil {
 		t.Fatal(err)
 	}
-	if tree.NextIndex() != 6 {
-		t.Fatalf("next index %d, want the sentinel and five owners", tree.NextIndex())
+	if tree.NextIndex() != 7 {
+		t.Fatalf("next index %d, want the sentinel and six owners", tree.NextIndex())
 	}
-	alice := tree.Opening(big.NewInt(0x10))
-	if !alice.Present || alice.Record.Revision.Int64() != 3 || alice.Record.NullifierPk.Int64() != 0xa0 {
-		t.Fatalf("alice after two rotations: %+v", alice.Record)
+	bob := tree.Opening(big.NewInt(0x20))
+	if !bob.Present || bob.Record.Next.Int64() != 0x28 || bob.Record.NullifierPk.Int64() != 0xb0 {
+		t.Fatalf("bob after the batch: %+v", bob.Record)
 	}
 	for _, n := range registry.ApplyWidths {
-		one := applyEnrollments(t, tree, n, big.NewInt(1), trackingEntry(int64(0x1000+n), 1, int64(0xe000+n)))
+		one := applyEnrollments(t, tree, n, big.NewInt(1), trackingEntry(int64(0x1000+n), int64(0xe000+n)))
 		if err := solveEnrollments(t, one.circuit); err != nil {
 			t.Fatalf("width %d: %v", n, err)
 		}
@@ -99,92 +98,68 @@ func TestApplyEnrollmentsRefusals(t *testing.T) {
 	gate := []string{"gadget.AssertEqualWhen", "registry.EnrollmentWrite.apply"}
 	bracket := []string{"ringgadget.AssertOrderedWhen", "registry.EnrollmentWrite.apply"}
 	define := []string{"[assertIsEqual]", "registry.(*ApplyEnrollmentsCircuit).Define"}
-	insert := trackingEntry(0x20, 1, 0xb0)
-	rotation := trackingEntry(0x10, 2, 0xa0)
-	changed := func(mutate func(*ringregistry.TrackingEntry)) ringregistry.TrackingEntry {
-		e := rotation
-		mutate(&e)
-		return e
-	}
-	finals := []struct {
-		name  string
-		entry ringregistry.TrackingEntry
-	}{
-		{"a rotation replacing the nullifier key", changed(func(e *ringregistry.TrackingEntry) { e.NullifierPk = big.NewInt(0xa9) })},
-		{"a rotation replacing the ciphertext hash", changed(func(e *ringregistry.TrackingEntry) { e.CtHash = big.NewInt(0xa9) })},
-		{"a rotation replacing the list tag", changed(func(e *ringregistry.TrackingEntry) { e.ListTag = big.NewInt(0xa9) })},
-	}
-	for _, tt := range finals {
-		t.Run(tt.name, func(t *testing.T) {
-			b := applyEnrollments(t, trackingTree(t), 1, big.NewInt(0), tt.entry)
-			ringtest.RequireRefused(t, solveEnrollments(t, b.circuit), gate...)
-		})
-	}
+	insert := trackingEntry(0x20, 0xb0)
+	second := trackingEntry(0x28, 0xe0)
 	tests := []struct {
 		name    string
 		entries []ringregistry.TrackingEntry
 		tamper  func(*testing.T, *enrollmentBatch)
 		frames  []string
 	}{
-		{"a present owner inserted again through the record linking to it", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
+		{"a present owner inserted again through the record linking to it", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
 			tree := trackingTree(t)
 			sentinel := tree.Opening(big.NewInt(1))
-			w := ringregistry.TrackingWrite{Entry: rotation, Old: ringregistry.TrackingRecord{Next: big.NewInt(0x10)}, Slot: tree.Path(tree.NextIndex()), Low: sentinel.Record, LowPath: sentinel.Path}
+			alice := trackingEntry(0x10, 0xa0)
+			w := ringregistry.TrackingWrite{Entry: alice, Slot: tree.Path(tree.NextIndex()), Low: sentinel.Record, LowPath: sentinel.Path}
 			b.circuit.Writes[0] = w.Wires()
 		}, bracket},
-		{"an absent owner claimed present", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
-			w := b.writes[0]
-			w.Exists, w.Old, w.Slot = true, trackingTree(t).Opening(big.NewInt(0x10)).Record, trackingTree(t).Opening(big.NewInt(0x10)).Path
+		{"a present owner inserted again over its own leaf", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
+			tree := trackingTree(t)
+			alice := tree.Opening(big.NewInt(0x10))
+			w := ringregistry.TrackingWrite{Entry: trackingEntry(0x10, 0xa0), Slot: alice.Path, Low: alice.Record, LowPath: alice.Path}
 			b.circuit.Writes[0] = w.Wires()
-		}, gate},
+		}, bracket},
 		{"an insert past the next index", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
 			b.circuit.Writes[0].Slot.Index = 4
+		}, gate},
+		{"an insert over a written leaf", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
+			b.circuit.Writes[0].Slot = trackingTree(t).Opening(big.NewInt(0x30)).Path.Wires()
 		}, gate},
 		{"an insert under another low record", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
 			b.circuit.Writes[0].Low.ListTag = big.NewInt(1)
 		}, gate},
-		{"an insert linking past the low record's next", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
-			b.circuit.Writes[0].Old.Next = big.NewInt(0x40)
-		}, gate},
-		{"a rotation over another old leaf", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
-			b.circuit.Writes[0].Old.Revision = big.NewInt(9)
-		}, gate},
-		{"a rotation opening another owner's leaf", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
-			carol := trackingTree(t).Opening(big.NewInt(0x30))
-			w := b.writes[0]
-			w.Old, w.Slot = carol.Record, carol.Path
-			b.circuit.Writes[0] = w.Wires()
-		}, gate},
-		{"a substituted entry", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
-			// The tree moves to the forged view key, the chain end the program computed stays.
-			forged := applyEnrollments(t, trackingTree(t), 1, b.chain[0], changed(func(e *ringregistry.TrackingEntry) { e.View0 = big.NewInt(0x77) }))
-			forged.circuit.ChainEnd = b.circuit.ChainEnd
-			forged.bind(t)
-			*b = *forged
+		{"a substituted entry", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
+			// The tree moves to the forged key, the chain end the program computed stays.
+			forged := insert
+			forged.NullifierPk = big.NewInt(0x77)
+			moved := applyEnrollments(t, trackingTree(t), 1, b.chain[0], forged)
+			moved.circuit.ChainEnd = b.circuit.ChainEnd
+			moved.bind(t)
+			*b = *moved
 		}, define},
-		{"entries out of the named order", []ringregistry.TrackingEntry{insert, rotation}, func(t *testing.T, b *enrollmentBatch) {
-			swapped := applyEnrollments(t, trackingTree(t), registry.ApplyBatch, b.chain[0], rotation, insert)
+		{"entries out of the named order", []ringregistry.TrackingEntry{insert, second}, func(t *testing.T, b *enrollmentBatch) {
+			swapped := applyEnrollments(t, trackingTree(t), registry.ApplyBatch, b.chain[0], second, insert)
 			swapped.circuit.ChainEnd = b.circuit.ChainEnd
 			swapped.bind(t)
 			*b = *swapped
 		}, define},
-		{"a chain end short of the applied entries", []ringregistry.TrackingEntry{insert, rotation}, func(t *testing.T, b *enrollmentBatch) {
+		{"a chain end short of the applied entries", []ringregistry.TrackingEntry{insert, second}, func(t *testing.T, b *enrollmentBatch) {
 			b.circuit.ChainEnd = b.chain[1]
 			b.bind(t)
 		}, define},
-		{"a next index advanced by a rotation", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
+		{"a next index past the inserts", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
 			b.circuit.NewNextIndex = new(big.Int).Add(ringtest.AsBigInt(b.circuit.NewNextIndex), big.NewInt(1))
 			b.bind(t)
 		}, define},
-		{"a stale old root", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
+		{"a stale old root", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
 			b.circuit.OldRoot = big.NewInt(1)
 			b.bind(t)
 		}, gate},
-		{"an empty batch", []ringregistry.TrackingEntry{rotation}, func(t *testing.T, b *enrollmentBatch) {
+		{"an empty batch", []ringregistry.TrackingEntry{insert}, func(t *testing.T, b *enrollmentBatch) {
 			b.circuit.Count = 0
 			b.bind(t)
 		}, []string{"ringgadget.SelectCount"}},
-		{"the statement of another batch", []ringregistry.TrackingEntry{rotation}, func(_ *testing.T, b *enrollmentBatch) {
+		{"the statement of another batch", []ringregistry.TrackingEntry{insert}, func(_ *testing.T, b *enrollmentBatch) {
 			b.circuit.PublicInputHash = big.NewInt(1)
 		}, define},
 	}
@@ -206,21 +181,11 @@ func TestApplyEnrollmentsRefusals(t *testing.T) {
 
 func TestApplyEnrollmentsAtCapacity(t *testing.T) {
 	capacity := big.NewInt(registry.TrackingCapacity)
-	t.Run("a new enrollment fails", func(t *testing.T) {
-		b := applyEnrollments(t, trackingTree(t), 1, big.NewInt(0), trackingEntry(0x20, 1, 0xb0))
-		b.circuit.Writes[0].Slot.Index = capacity
-		b.circuit.OldNextIndex, b.circuit.NewNextIndex = capacity, new(big.Int).Add(capacity, big.NewInt(1))
-		b.bind(t)
-		ringtest.RequireRefused(t, solveEnrollments(t, b.circuit), "[ToBinary]", "registry.TrackingPath.digits")
-	})
-	t.Run("a rotation applies", func(t *testing.T) {
-		b := applyEnrollments(t, trackingTree(t), 1, big.NewInt(0), trackingEntry(0x10, 2, 0xa0))
-		b.circuit.OldNextIndex, b.circuit.NewNextIndex = capacity, capacity
-		b.bind(t)
-		if err := solveEnrollments(t, b.circuit); err != nil {
-			t.Fatal(err)
-		}
-	})
+	b := applyEnrollments(t, trackingTree(t), 1, big.NewInt(0), trackingEntry(0x20, 0xb0))
+	b.circuit.Writes[0].Slot.Index = capacity
+	b.circuit.OldNextIndex, b.circuit.NewNextIndex = capacity, new(big.Int).Add(capacity, big.NewInt(1))
+	b.bind(t)
+	ringtest.RequireRefused(t, solveEnrollments(t, b.circuit), "[ToBinary]", "registry.TrackingPath.digits")
 }
 
 func TestApplyEnrollmentsKeys(t *testing.T) {

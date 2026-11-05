@@ -1,9 +1,10 @@
 //! Storage `Enroll` writes the owner's tracking authorization, an apply moves it into the tracking tree.
 //!
 //! A first enrollment proves `RegisterKey`, the ciphertext opens to the nullifier secret and list salt
-//! under the registry's auditor key, and fixes the key, list tag and seal for good. A rotation carries
-//! no proof and moves only the viewing key, the owner's signature alone authorizes it. Neither grants
-//! anything until `ApplyEnrollments` lands its revision in a tracking root.
+//! under the registry's auditor key, and fixes the key, list tag and seal for good. It grants nothing
+//! until `ApplyEnrollments` inserts its row in a tracking root. A rotation carries no proof and writes
+//! only the viewing key on the authorization, the owner's signature alone authorizes it, and it leaves
+//! no tracking work.
 //!
 //! A signed attempt is recorded before its broadcast and reconciled by signature and by the
 //! authorization account. A first enrollment lands once, the program refuses a second key.
@@ -64,7 +65,7 @@ pub struct Enroll<'a> {
     pub payer: Address,
     pub owner: Address,
     pub nullifier_key: &'a NullifierKey,
-    /// The key senders read from the row, a rotation moves only it.
+    /// The key senders read from the authorization, a rotation moves only it.
     pub viewing_pubkey: X25519Pubkey,
     /// `ListSaltHolder::list_salt` of the ring.
     pub list_salt: [u8; 32],

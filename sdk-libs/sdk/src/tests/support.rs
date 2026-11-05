@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use custom_ring_interface::{
     storage::{RegistryId, Revision, StorageRegistry},
     storage_instruction::{InitializeIxData, InitializeTrackingIxData},
-    tracking::TrackingRegistry,
+    tracking::{TrackingAuthorization, TrackingRegistry},
     CoSignScope, CoSigner, CoSignerCounts, NewRing, PolicyUpdate, RingMode, RingPolicy, RingRoles,
     SourceSlot, CO_SIGNER, N_SOURCE_SLOTS, RING_POLICY_PDA_SEED, STORAGE_PROGRAM_ID,
 };
@@ -308,12 +308,7 @@ impl Chain {
             activated: 1,
             bump: Address::find_program_address(&[RING_AUTH_PDA_SEED], &program()).1,
         };
-        let tracking = TrackingFixture::enrolled();
-        let chain = Self {
-            tracking: Some(Arc::clone(&tracking)),
-            ..Self::default()
-        }
-        .with(TRACKING, tracking.account());
+        let chain = Self::default().with_tracking_fixture(TrackingFixture::enrolled());
         let chain = match settings.co_signer {
             Some((signer, scope)) => chain.with(
                 ring().co_signer_pda(&signer),
@@ -412,12 +407,7 @@ impl Chain {
 
     /// `addresses` alone hold tracking rows, a test of the output predicate names its keys.
     pub(crate) fn with_tracking(self, addresses: &[ShieldedAddress]) -> Self {
-        let tracking = Arc::new(TrackingFixture::of(addresses));
-        Self {
-            tracking: Some(Arc::clone(&tracking)),
-            ..self
-        }
-        .with(TRACKING, tracking.account())
+        self.with_tracking_fixture(Arc::new(TrackingFixture::of(addresses)))
     }
 
     /// One tag on every row, a test of a salt names the tag it hashes to.
@@ -426,10 +416,20 @@ impl Chain {
         addresses: &[ShieldedAddress],
         list_tag: [u8; 32],
     ) -> Self {
-        let tracking = Arc::new(TrackingFixture::tagged(addresses, list_tag));
+        self.with_tracking_fixture(Arc::new(TrackingFixture::tagged(addresses, list_tag)))
+    }
+
+    /// The tree's registry and each enrolled owner's authorization holding its address viewing key.
+    fn with_tracking_fixture(self, tracking: Arc<TrackingFixture>) -> Self {
+        let chain = tracking
+            .authorizations
+            .iter()
+            .fold(self, |chain, (address, account)| {
+                chain.with(*address, account.clone())
+            });
         Self {
             tracking: Some(Arc::clone(&tracking)),
-            ..self
+            ..chain
         }
         .with(TRACKING, tracking.account())
     }
@@ -667,6 +667,7 @@ impl Chain {
 
 struct TrackingFixture {
     tree: TrackingTree,
+    authorizations: Vec<(Address, Account)>,
 }
 
 impl TrackingFixture {
@@ -702,6 +703,7 @@ impl TrackingFixture {
                 .map_or(TrackingRecord::SENTINEL.next, |(member, _)| *member),
             ..TrackingRecord::SENTINEL
         }];
+        let mut authorizations = Vec::with_capacity(members.len());
         for (position, (member, address)) in members.iter().enumerate() {
             records.push(TrackingRecord {
                 member: *member,
@@ -710,13 +712,29 @@ impl TrackingFixture {
                     .map_or(TrackingRecord::SENTINEL.next, |(next, _)| *next),
                 nullifier_pk: address.nullifier_pubkey,
                 ct_hash: [0x05; 32],
-                viewing_u: address.viewing_pubkey.u(),
-                revision: 1,
                 list_tag,
             });
+            let owner =
+                Address::new_from_array(address.signing_pubkey.confidential_view_tag().unwrap());
+            let authorization = TrackingAuthorization {
+                discriminator: TrackingAuthorization::DISCRIMINATOR,
+                registry: TRACKING,
+                owner,
+                nullifier_pk: address.nullifier_pubkey,
+                list_tag,
+                viewing_u: address.viewing_pubkey.u(),
+                eph_u: [0; 32],
+                ciphertext: [0; 64],
+                applied: 1,
+            };
+            authorizations.push((
+                TrackingAuthorization::find_address(&TRACKING, &owner).0,
+                account(STORAGE_PROGRAM_ID, &authorization),
+            ));
         }
         Self {
             tree: TrackingTree::from_records(records).unwrap(),
+            authorizations,
         }
     }
 
@@ -760,8 +778,6 @@ fn record_view(record: &TrackingRecord) -> RingTrackingRecordView {
         next: Hash(record.next),
         nullifier_pk: Hash(record.nullifier_pk),
         ct_hash: Hash(record.ct_hash),
-        viewing_u: Hash(record.viewing_u),
-        revision: record.revision,
         list_tag: Hash(record.list_tag),
         seal: None,
     }

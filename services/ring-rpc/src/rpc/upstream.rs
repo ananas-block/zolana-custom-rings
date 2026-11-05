@@ -235,7 +235,7 @@ pub struct TrackingRoot {
     pub next_index: u64,
 }
 
-/// A pending revision grants nothing, a first enrollment past capacity never applies.
+/// A pending enrollment grants nothing, and past capacity it never applies.
 fn enrollment_of(
     authorization: Option<&TrackingAuthorization>,
     tree_full: bool,
@@ -243,9 +243,7 @@ fn enrollment_of(
     match authorization {
         None => WalletEnrollment::NotEnrolled,
         Some(held) if !held.is_pending() => WalletEnrollment::Applied,
-        Some(held) if held.applied_revision() == 0 && tree_full => {
-            WalletEnrollment::PendingPastCapacity
-        }
+        Some(_) if tree_full => WalletEnrollment::PendingPastCapacity,
         Some(_) => WalletEnrollment::Pending,
     }
 }

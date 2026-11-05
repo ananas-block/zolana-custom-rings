@@ -618,8 +618,6 @@ pub mod fixture {
                         member,
                         nullifier_pk,
                         ct_hash: hash_bytes(&sealed.ciphertext).expect("ct hash"),
-                        viewing_u: X25519Keypair::new().pubkey().u(),
-                        revision: 1,
                         list_tag,
                     }],
                 )
@@ -696,8 +694,6 @@ pub mod fixture {
                             next: Hash(record.next),
                             nullifier_pk: Hash(record.nullifier_pk),
                             ct_hash: Hash(record.ct_hash),
-                            viewing_u: Hash(record.viewing_u),
-                            revision: record.revision,
                             list_tag: Hash(record.list_tag),
                             seal: ledger.seals.get(&record.member).cloned(),
                         },

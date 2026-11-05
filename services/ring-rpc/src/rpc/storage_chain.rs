@@ -35,8 +35,6 @@ pub struct ProvedEnrollments {
     pub instruction: Instruction,
     /// The registry revision the proof starts from.
     pub revision: Revision,
-    /// The authorization revision each named account proved at, in request order.
-    pub revisions: Vec<u64>,
 }
 
 #[async_trait]
@@ -232,7 +230,6 @@ impl StorageChain for LiveStorageChain {
         Ok(ProvedEnrollments {
             instruction,
             revision,
-            revisions: response.writes.iter().map(|write| write.revision).collect(),
         })
     }
 }

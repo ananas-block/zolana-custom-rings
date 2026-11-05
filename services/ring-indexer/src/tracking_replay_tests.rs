@@ -99,7 +99,7 @@ impl Ledger {
     }
 
     /// The account as the chain holds it now, whatever slot the replay reached.
-    fn hold_account(&self, viewing: u8, revision: u64) {
+    fn hold_account(&self, viewing: u8) {
         let account_image = TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
             registry: self.registry,
@@ -109,8 +109,7 @@ impl Ledger {
             viewing_u: field(viewing),
             eph_u: field(4),
             ciphertext: [5; 64],
-            revision: revision.to_le_bytes(),
-            applied_revision: [0; 8],
+            applied: 0,
         };
         self.chain.lock().unwrap().accounts.insert(
             self.authorization.to_string(),
@@ -160,19 +159,18 @@ impl Ledger {
         Ok(())
     }
 
-    /// The tracking entry of the account at `viewing` and `revision`.
-    fn entry(&self, viewing: u8, revision: u64) -> TrackingEntry {
+    /// The tracking entry of the account, the same at every viewing key.
+    fn entry(&self) -> TrackingEntry {
         TrackingAuthorization {
             discriminator: TrackingAuthorization::DISCRIMINATOR,
             registry: self.registry,
             owner: OWNER,
             nullifier_pk: field(1),
             list_tag: field(2),
-            viewing_u: field(viewing),
+            viewing_u: field(3),
             eph_u: field(4),
             ciphertext: [5; 64],
-            revision: revision.to_le_bytes(),
-            applied_revision: [0; 8],
+            applied: 0,
         }
         .entry()
         .unwrap()
@@ -222,7 +220,7 @@ impl Ledger {
     }
 
     fn member(&self) -> [u8; 32] {
-        self.entry(3, 1).member
+        self.entry().member
     }
 
     fn store(&self) -> TrackingStore<'_, sea_orm::DatabaseConnection> {
@@ -248,18 +246,17 @@ impl Ledger {
 }
 
 #[tokio::test]
-async fn a_replayed_enrollment_takes_final_fields_from_the_account_and_its_key_from_the_block() {
+async fn a_replayed_enrollment_takes_final_fields_from_the_account() {
     let mut ledger = Ledger::new().await;
-    // A replay of the first enrollment reads revision 1 from the block.
-    ledger.hold_account(7, 2);
+    // The account may already hold a later rotation.
+    ledger.hold_account(7);
     let proof = CustomRingProof::zeroed();
     ledger
         .land(2, ledger.enroll(3, Some(&proof)))
         .await
         .unwrap();
     let held = ledger.enrollment().await.unwrap();
-    assert_eq!(held.revision, 1);
-    assert_eq!(held.viewing_u, field(3));
+    assert!(!held.applied);
     assert_eq!(
         (
             held.nullifier_pk,
@@ -274,33 +271,48 @@ async fn a_replayed_enrollment_takes_final_fields_from_the_account_and_its_key_f
 }
 
 #[tokio::test]
-async fn a_rotation_moves_only_the_view_key_and_the_revision_in_block_order() {
+async fn a_rotation_leaves_the_enrollment_the_pending_set_and_the_root_unchanged() {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     let proof = CustomRingProof::zeroed();
     ledger
         .land(2, ledger.enroll(3, Some(&proof)))
         .await
         .unwrap();
     let first = ledger.enrollment().await.unwrap();
-    let slot = 3;
-    ledger.land(slot, ledger.enroll(6, None)).await.unwrap();
-    assert_eq!(
-        ledger.enrollment().await.unwrap(),
-        Enrollment {
-            viewing_u: field(6),
-            revision: 2,
-            ..first
-        }
+    let before = ledger.state().await;
+    ledger.land(3, ledger.enroll(6, None)).await.unwrap();
+    assert_eq!(ledger.enrollment().await.unwrap(), first);
+    assert_eq!(ledger.store().pending(None, 8).await.unwrap(), [first]);
+    assert_eq!(ledger.state().await, before);
+    ledger.stop().await;
+}
+
+#[tokio::test]
+async fn a_rotation_moving_a_final_field_stops_the_projection() {
+    let mut ledger = enrolled().await;
+    let ix = EnrollIxData {
+        ciphertext: [6; 64],
+        ..ix_data(6)
+    };
+    let request = EnrollRequest {
+        ix: &ix,
+        proof: None,
+    };
+    let rotation = instruction(
+        vec![OWNER, OWNER, ledger.registry, ledger.authorization],
+        [&[tag::ENROLL][..], &request.encode()].concat(),
     );
-    assert!(ledger.state().await.fault.is_none());
+    ledger.land(3, rotation).await.unwrap();
+    let fault = ledger.state().await.fault.unwrap();
+    assert!(fault.contains("rotation refused"), "{fault}");
     ledger.stop().await;
 }
 
 #[tokio::test]
 async fn a_first_enrollment_without_a_proof_stops_the_projection() {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     ledger.land(2, ledger.enroll(3, None)).await.unwrap();
     let fault = ledger.state().await.fault.unwrap();
     assert!(fault.contains("no proof"), "{fault}");
@@ -328,7 +340,7 @@ async fn an_unreadable_authorization_retries_and_quarantines_nothing() {
 #[tokio::test]
 async fn an_authorization_of_another_owner_stops_the_projection() {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     let foreign = Address::new_from_array([52; 32]);
     let proof = CustomRingProof::zeroed();
     let ix = ix_data(3);
@@ -349,7 +361,7 @@ async fn an_authorization_of_another_owner_stops_the_projection() {
 #[tokio::test]
 async fn a_rolled_back_enrollment_leaves_no_row() {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     let proof = CustomRingProof::zeroed();
     ledger
         .land(2, ledger.enroll(3, Some(&proof)))
@@ -367,9 +379,9 @@ async fn a_rolled_back_enrollment_leaves_no_row() {
 }
 
 #[tokio::test]
-async fn pending_enrollments_serve_the_newest_revision_at_a_confirmed_tip() {
+async fn pending_enrollments_serve_first_enrollments_at_a_confirmed_tip() {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     let proof = CustomRingProof::zeroed();
     ledger
         .land(2, ledger.enroll(3, Some(&proof)))
@@ -392,8 +404,8 @@ async fn pending_enrollments_serve_the_newest_revision_at_a_confirmed_tip() {
     let [row] = page.enrollments.as_slice() else {
         panic!("one owner is pending, {:?}", page.enrollments);
     };
-    assert_eq!((row.revision, row.applied_revision), (1, 0));
-    assert_eq!(row.viewing_u, Hash(field(3)));
+    assert_eq!(row.owner, OWNER.into());
+    assert_eq!(row.nullifier_pk, Hash(field(1)));
     assert_eq!(page.next_after, Some(OWNER.into()));
     let past = GetPendingEnrollmentsRequest {
         after: page.next_after,
@@ -431,8 +443,6 @@ fn wire_record(view: &RingTrackingRecordView) -> TrackingRecord {
         next: view.next.0,
         nullifier_pk: view.nullifier_pk.0,
         ct_hash: view.ct_hash.0,
-        viewing_u: view.viewing_u.0,
-        revision: view.revision,
         list_tag: view.list_tag.0,
     }
 }
@@ -449,7 +459,7 @@ fn wire_path(path: &RingRecordPathView) -> QuadPathOf<TRACKING_QUAD_HEIGHT> {
 /// An enrollment landed at slot 2, nothing applied.
 async fn enrolled() -> Ledger {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     let proof = CustomRingProof::zeroed();
     ledger
         .land(2, ledger.enroll(3, Some(&proof)))
@@ -462,7 +472,7 @@ async fn enrolled() -> Ledger {
 async fn an_applied_enrollment_opens_under_the_program_root_with_its_seal() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
+    let apply = ledger.apply(&mut tree, &[ledger.entry()]).await;
     ledger.land(3, apply).await.unwrap();
     let state = ledger.state().await;
     assert_eq!(state.fault, None);
@@ -500,7 +510,7 @@ async fn an_applied_enrollment_opens_under_the_program_root_with_its_seal() {
     }
     .verify()
     .unwrap();
-    assert_eq!(verified.map(|record| record.revision), Some(1));
+    assert_eq!(verified.map(|record| record.nullifier_pk), Some(field(1)));
     let no_row = OpeningCheck {
         opening: &RecordOpening::Absent {
             low: wire_record(&missing.record),
@@ -559,81 +569,70 @@ async fn an_applied_enrollment_opens_under_the_program_root_with_its_seal() {
     ledger.stop().await;
 }
 
+/// A rotation on either side of an apply in one block leaves the entry and the leaf as enrolled.
 #[tokio::test]
-async fn an_apply_reads_the_newest_rotation_ordered_before_it_in_the_block() {
-    let mut ledger = enrolled().await;
-    let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(6, 2)]).await;
-    let slot = 3;
-    ledger
-        .land_all(slot, vec![ledger.enroll(6, None), apply])
-        .await
-        .unwrap();
-    let state = ledger.state().await;
-    assert_eq!(state.fault, None);
-    assert_eq!(state.account.newest().hash, tree.root().unwrap());
-    let held = ledger.enrollment().await.unwrap();
-    assert_eq!((held.revision, held.applied_revision), (2, 2));
-    let leaf = ledger
-        .store()
-        .tree()
-        .record(&ledger.member(), 1)
-        .await
-        .unwrap()
-        .unwrap()
-        .record;
-    assert_eq!((leaf.revision, leaf.viewing_u), (2, field(6)));
-    ledger.stop().await;
-}
-
-#[tokio::test]
-async fn a_rotation_after_an_apply_stays_pending_behind_the_leaf() {
-    let mut ledger = enrolled().await;
-    let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
-    let slot = 3;
-    ledger
-        .land_all(slot, vec![apply, ledger.enroll(6, None)])
-        .await
-        .unwrap();
-    let state = ledger.state().await;
-    assert_eq!(state.fault, None);
-    let held = ledger.enrollment().await.unwrap();
-    assert_eq!((held.revision, held.applied_revision), (2, 1));
-    assert_eq!(ledger.store().pending(None, 8).await.unwrap(), [held]);
-    let leaf = ledger
-        .store()
-        .tree()
-        .record(&ledger.member(), 1)
-        .await
-        .unwrap()
-        .unwrap()
-        .record;
-    assert_eq!((leaf.revision, leaf.viewing_u), (1, field(3)));
-    ledger.stop().await;
+async fn a_rotation_around_an_apply_leaves_the_leaf_and_nothing_pending() {
+    for rotation_first in [true, false] {
+        let mut ledger = enrolled().await;
+        let mut tree = TrackingTree::new().unwrap();
+        let apply = ledger.apply(&mut tree, &[ledger.entry()]).await;
+        let block = match rotation_first {
+            true => vec![ledger.enroll(6, None), apply],
+            false => vec![apply, ledger.enroll(6, None)],
+        };
+        ledger.land_all(3, block).await.unwrap();
+        let state = ledger.state().await;
+        assert_eq!(state.fault, None);
+        assert_eq!(state.account.newest().hash, tree.root().unwrap());
+        assert!(ledger.enrollment().await.unwrap().applied);
+        assert!(ledger.store().pending(None, 8).await.unwrap().is_empty());
+        let leaf = ledger
+            .store()
+            .tree()
+            .record(&ledger.member(), 1)
+            .await
+            .unwrap()
+            .unwrap()
+            .record;
+        assert_eq!(leaf.nullifier_pk, field(1));
+        ledger.stop().await;
+    }
 }
 
 #[tokio::test]
 async fn a_root_off_the_projected_entry_stops_the_projection_and_applies_nothing() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
-    // The proof names a rotation the block never holds.
-    let apply = ledger.apply(&mut tree, &[ledger.entry(6, 2)]).await;
+    // The proof names a ciphertext the account never holds.
+    let forged = TrackingEntry {
+        ct_hash: field(8),
+        ..ledger.entry()
+    };
+    let apply = ledger.apply(&mut tree, &[forged]).await;
     ledger.land(3, apply).await.unwrap();
     let fault = ledger.state().await.fault.unwrap();
     assert!(fault.contains("applied root mismatch"), "{fault}");
-    let held = ledger.enrollment().await.unwrap();
-    assert_eq!(held.applied_revision, 0);
+    assert!(!ledger.enrollment().await.unwrap().applied);
     ledger.stop().await;
 }
 
 #[tokio::test]
-async fn a_second_apply_of_one_revision_stops_the_projection() {
+async fn a_second_apply_of_one_enrollment_stops_the_projection() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
+    let apply = ledger.apply(&mut tree, &[ledger.entry()]).await;
     ledger.land(3, apply).await.unwrap();
-    let again = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
+    // The tree refuses a present owner, so the second apply names the current revision by hand.
+    let data = ApplyEnrollmentsIxData {
+        revision: ledger.state().await.account.newest().revision,
+        proof: Zeroable::zeroed(),
+        new_root: field(8),
+        new_next_index: 3u64.to_le_bytes(),
+    };
+    let again = instruction(
+        vec![ledger.registry, ledger.authorization],
+        [&[tag::APPLY_ENROLLMENTS][..], bytemuck::bytes_of(&data)].concat(),
+    );
     ledger.land(4, again).await.unwrap();
     let fault = ledger.state().await.fault.unwrap();
     assert!(fault.contains("already applied"), "{fault}");
@@ -644,7 +643,7 @@ async fn a_second_apply_of_one_revision_stops_the_projection() {
 async fn an_apply_naming_no_enrollment_stops_the_projection() {
     let mut ledger = Ledger::new().await;
     let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
+    let apply = ledger.apply(&mut tree, &[ledger.entry()]).await;
     ledger.land(2, apply).await.unwrap();
     let fault = ledger.state().await.fault.unwrap();
     assert!(fault.contains("names no enrollment"), "{fault}");
@@ -655,7 +654,7 @@ async fn an_apply_naming_no_enrollment_stops_the_projection() {
 async fn a_rolled_back_apply_replays_to_the_same_root() {
     let mut ledger = enrolled().await;
     let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
+    let apply = ledger.apply(&mut tree, &[ledger.entry()]).await;
     ledger.land(3, apply.clone()).await.unwrap();
     let applied = ledger.state().await;
     let tx = ledger.indexer.db.begin().await.unwrap();
@@ -666,7 +665,7 @@ async fn a_rolled_back_apply_replays_to_the_same_root() {
     let member = ledger.member();
     let leaf = ledger.store().tree().record(&member, u64::MAX >> 1).await;
     assert_eq!(leaf.unwrap(), None);
-    assert_eq!(ledger.enrollment().await.unwrap().applied_revision, 0);
+    assert!(!ledger.enrollment().await.unwrap().applied);
     ledger.land(3, apply).await.unwrap();
     assert_eq!(ledger.state().await, applied);
     ledger.stop().await;
@@ -696,13 +695,12 @@ async fn apply_proof_inputs_reach_the_root_the_program_records() {
         .await
         .unwrap();
     let mut tree = TrackingTree::new().unwrap();
-    let apply = ledger.apply(&mut tree, &[ledger.entry(3, 1)]).await;
+    let apply = ledger.apply(&mut tree, &[ledger.entry()]).await;
     assert_eq!(inputs.new_root, Hash(tree.root().unwrap()));
     assert_eq!(inputs.old_root, Hash(TRACKING_EMPTY_ROOT));
     let [write] = inputs.writes.as_slice() else {
         panic!("one owner writes once");
     };
-    assert!(!write.exists);
     assert_eq!(write.member, Hash(ledger.member()));
     ledger.land(3, apply).await.unwrap();
     ledger.serve(3).await;
@@ -736,7 +734,7 @@ async fn a_registry_off_its_canonical_address_is_not_indexed() {
 #[tokio::test]
 async fn a_program_owner_enrolls_through_its_own_cross_program_call() {
     let mut ledger = Ledger::new().await;
-    ledger.hold_account(3, 1);
+    ledger.hold_account(3);
     let proof = CustomRingProof::zeroed();
     let caller = Instruction {
         program_id: Address::new_from_array([61; 32]),
@@ -749,7 +747,7 @@ async fn a_program_owner_enrolls_through_its_own_cross_program_call() {
         .land_transactions(2, vec![settled(caller, vec![inner])])
         .await
         .unwrap();
-    assert_eq!(ledger.enrollment().await.unwrap().revision, 1);
+    assert!(ledger.enrollment().await.is_some());
     ledger.stop().await;
 }
 
@@ -816,8 +814,7 @@ fn sealed_authorization(
         viewing_u: field(seed),
         eph_u: sealed.eph_pk.u(),
         ciphertext: sealed.ciphertext,
-        revision: 1u64.to_le_bytes(),
-        applied_revision: [0; 8],
+        applied: 0,
     }
 }
 

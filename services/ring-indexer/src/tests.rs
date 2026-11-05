@@ -24,8 +24,8 @@ use crate::{
     migration::Migrator,
     rpc::SolanaRpc,
     storage::{
-        self, AppliedRevision, Enrollment, RingCursor, StorageRoot, StorageState, StorageStore,
-        TrackingState, TrackingStore,
+        self, Enrollment, RingCursor, StorageRoot, StorageState, StorageStore, TrackingState,
+        TrackingStore,
     },
     storage_registry::StorageCall,
     tracking_registry::TrackingCall,
@@ -325,22 +325,13 @@ async fn postgres_migrates_both_ways_and_serves_the_ring_queries() {
         list_tag: field(7),
         eph_u: [8; 32],
         ciphertext: [9; 64],
-        viewing_u: [10; 32],
-        revision: 1,
-        applied_revision: 0,
+        applied: false,
     };
     tracking.save_first(&enrollment, 5).await.unwrap();
     assert_eq!(tracking.pending(None, 8).await.unwrap(), [enrollment]);
-    tracking
-        .mark_applied(&AppliedRevision {
-            owner: [1; 32],
-            revision: 1,
-            slot: 6,
-        })
-        .await
-        .unwrap();
+    tracking.mark_applied(&[1; 32], 6).await.unwrap();
     assert!(tracking.pending(None, 8).await.unwrap().is_empty());
     let applied = tracking.enrollment_at(&[2; 32]).await.unwrap().unwrap();
-    assert_eq!(applied.applied_revision, 1);
+    assert!(applied.applied);
     Migrator::reset(&db).await.unwrap();
 }

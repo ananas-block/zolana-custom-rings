@@ -145,8 +145,6 @@ type writeView struct {
 // enrollmentView mirrors registry.EnrollmentWrite field for field.
 type enrollmentView struct {
 	Entry   trackingEntryView
-	Exists  bool
-	Old     TrackingRecordParams
 	Slot    quadPath
 	Low     TrackingRecordParams
 	LowSlot quadPath
@@ -154,14 +152,12 @@ type enrollmentView struct {
 
 // trackingEntryView mirrors registry.TrackingEntry field for field.
 type trackingEntryView struct {
-	Member, NullifierPk, CtHash, View0, View1, Revision, ListTag Field
+	Member, NullifierPk, CtHash, ListTag Field
 }
 
 func (w TrackingWrite) view() any {
 	return enrollmentView{
-		Entry:   trackingEntryView{Member: w.Member, NullifierPk: w.NullifierPk, CtHash: w.CtHash, View0: w.View0, View1: w.View1, Revision: w.Revision, ListTag: w.ListTag},
-		Exists:  w.Exists,
-		Old:     w.OldRecord,
+		Entry:   trackingEntryView{Member: w.Member, NullifierPk: w.NullifierPk, CtHash: w.CtHash, ListTag: w.ListTag},
 		Slot:    newQuadPath(w.Index, w.Path),
 		Low:     w.LowRecord,
 		LowSlot: newQuadPath(w.LowIndex, w.LowPath),

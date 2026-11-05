@@ -15,12 +15,19 @@
   "AlreadyInitialized": 9014,
   "RevisionOverflow": 9015,
   "UnsupportedBatch": 9016,
+  "NonCanonicalViewingKey": 9021,
+  "InvalidTrackingRegistry": 9022,
+  "InvalidTrackingAuthorization": 9023,
+  "EnrollmentAlreadyApplied": 9024,
+  "EnrollmentKeyFinal": 9025,
   "ZeroNullifierKey": 9028,
+  "EnrollmentProofShape": 9029,
+  "NoEnrollmentsNamed": 9030,
   "InvalidOwnerGrant": 9031,
   "InvalidReaderKey": 9032,
   "InvalidAuditorKey": 9033,
   "InvalidAssetWrite": 9034,
-  "InvalidCredentialRead": 9036,
-  "InvalidPrivateRing": 9037,
-  "PrivateWriteWithoutRing": 9035
+  "PrivateWriteWithoutTracking": 9035,
+  "TrackingTreeFull": 9036,
+  "RootHistoryRetained": 9037
 }

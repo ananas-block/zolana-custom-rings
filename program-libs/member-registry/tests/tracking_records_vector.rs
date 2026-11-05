@@ -38,8 +38,6 @@ struct Entry {
     member: String,
     nullifier_pk: String,
     ct_hash: String,
-    viewing_u: String,
-    revision: u64,
     list_tag: String,
     entry_hash: String,
 }
@@ -50,8 +48,6 @@ struct Record {
     next: String,
     nullifier_pk: String,
     ct_hash: String,
-    viewing_u: String,
-    revision: u64,
     list_tag: String,
     leaf_hash: String,
 }
@@ -65,8 +61,6 @@ struct Path {
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Write {
     entry: Entry,
-    exists: bool,
-    old: Record,
     slot: Path,
     low: Record,
     low_path: Path,
@@ -77,13 +71,11 @@ fn field(byte: u8) -> [u8; 32] {
 }
 
 /// Every field differs, a reordered hash input cannot match.
-fn entry(owner: u8, revision: u64) -> TrackingEntry {
+fn entry(owner: u8) -> TrackingEntry {
     TrackingEntry {
         member: field(owner),
         nullifier_pk: field(owner ^ 0x40),
         ct_hash: field(owner ^ 0x50),
-        viewing_u: [owner ^ 0x60; 32],
-        revision,
         list_tag: field(owner ^ 0x70),
     }
 }
@@ -94,8 +86,6 @@ fn record_vector(record: &TrackingRecord) -> Record {
         next: hex::encode(record.next),
         nullifier_pk: hex::encode(record.nullifier_pk),
         ct_hash: hex::encode(record.ct_hash),
-        viewing_u: hex::encode(record.viewing_u),
-        revision: record.revision,
         list_tag: hex::encode(record.list_tag),
         leaf_hash: hex::encode(record.hash().unwrap()),
     }
@@ -118,13 +108,9 @@ fn write_vector(write: &TrackingWriteProofInput) -> Write {
             member: hex::encode(write.entry.member),
             nullifier_pk: hex::encode(write.entry.nullifier_pk),
             ct_hash: hex::encode(write.entry.ct_hash),
-            viewing_u: hex::encode(write.entry.viewing_u),
-            revision: write.entry.revision,
             list_tag: hex::encode(write.entry.list_tag),
             entry_hash: hex::encode(write.entry.hash().unwrap()),
         },
-        exists: write.exists,
-        old: record_vector(&write.old),
         slot: path_vector(&write.slot),
         low: record_vector(&write.low),
         low_path: path_vector(&write.low_path),
@@ -163,19 +149,19 @@ fn compute_vectors() -> TrackingVectors {
         &mut tree,
         "inserts_in_named_order",
         [0x11; 32],
-        &[entry(0x20, 1), entry(0x10, 1), entry(0x30, 1)],
+        &[entry(0x20), entry(0x10), entry(0x30)],
     );
-    let rotation = apply(&mut tree, "one_rotation", [0x12; 32], &[entry(0x10, 2)]);
-    let mixed = apply(
+    let one = apply(&mut tree, "one_insert", [0x12; 32], &[entry(0x18)]);
+    let bounds = apply(
         &mut tree,
-        "rotation_and_insert",
+        "inserts_at_both_ends",
         [0x13; 32],
-        &[entry(0x20, 2), entry(0x18, 1), entry(0x20, 3)],
+        &[entry(0x48), entry(0x08)],
     );
     TrackingVectors {
         description: "Tracking tree applications with every proof input. Produced by program-libs/member-registry/tests/tracking_records_vector.rs.".to_string(),
         empty_root: hex::encode(TRACKING_EMPTY_ROOT),
-        applications: vec![inserts, rotation, mixed],
+        applications: vec![inserts, one, bounds],
     }
 }
 

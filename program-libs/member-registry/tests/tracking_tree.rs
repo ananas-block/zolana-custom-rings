@@ -13,13 +13,11 @@ fn member(byte: u8) -> [u8; 32] {
     right_align(&[byte])
 }
 
-fn entry(byte: u8, revision: u64) -> TrackingEntry {
+fn entry(byte: u8) -> TrackingEntry {
     TrackingEntry {
         member: member(byte),
         nullifier_pk: member(byte ^ 0x40),
         ct_hash: member(byte ^ 0x50),
-        viewing_u: [byte ^ 0x60; 32],
-        revision,
         list_tag: member(byte ^ 0x70),
     }
 }
@@ -44,14 +42,12 @@ fn record(tree: &TrackingTree, byte: u8) -> Option<TrackingRecord> {
 #[test]
 fn an_insert_relinks_the_low_record_and_holds_the_entry() {
     let mut tree = TrackingTree::new().unwrap();
-    let first = apply(&mut tree, [1; 32], &[entry(9, 1)]).unwrap();
-    assert_eq!(first.chain_end, entry(9, 1).chained(&[1; 32]).unwrap());
+    let first = apply(&mut tree, [1; 32], &[entry(9)]).unwrap();
+    assert_eq!(first.chain_end, entry(9).chained(&[1; 32]).unwrap());
     let relinked = tree.root().unwrap();
-    let inputs = apply(&mut tree, first.chain_end, &[entry(4, 1)]).unwrap();
+    let inputs = apply(&mut tree, first.chain_end, &[entry(4)]).unwrap();
     let insert = inputs.writes[0];
-    assert!(!insert.exists);
     assert_eq!(insert.slot.index, 2);
-    assert_eq!(insert.old.next, member(9));
     assert_eq!(insert.low.next, member(9));
     assert_eq!(
         insert.low_path.root(insert.low.hash().unwrap()),
@@ -62,11 +58,9 @@ fn an_insert_relinks_the_low_record_and_holds_the_entry() {
         Some(TrackingRecord {
             member: member(4),
             next: member(9),
-            nullifier_pk: entry(4, 1).nullifier_pk,
-            ct_hash: entry(4, 1).ct_hash,
-            viewing_u: entry(4, 1).viewing_u,
-            revision: 1,
-            list_tag: entry(4, 1).list_tag,
+            nullifier_pk: entry(4).nullifier_pk,
+            ct_hash: entry(4).ct_hash,
+            list_tag: entry(4).list_tag,
         })
     );
     assert_eq!(tree.records()[0].next, member(4));
@@ -77,54 +71,18 @@ fn an_insert_relinks_the_low_record_and_holds_the_entry() {
 }
 
 #[test]
-fn a_rotation_moves_only_the_viewing_key_and_the_revision() {
+fn a_present_owner_refuses_a_second_write_and_keeps_the_root() {
     let mut tree = TrackingTree::new().unwrap();
-    apply(&mut tree, [0; 32], &[entry(5, 1), entry(7, 1)]).unwrap();
-    let before = record(&tree, 5).unwrap();
-    let rotated = TrackingEntry {
-        viewing_u: [0xaa; 32],
-        ..entry(5, 2)
-    };
-    let inputs = apply(&mut tree, [0; 32], &[rotated]).unwrap();
-    let rotation = inputs.writes[0];
-    assert!(rotation.exists);
-    assert_eq!(rotation.old, before);
-    assert_eq!(rotation.low, TrackingRecord::default());
-    assert_eq!(inputs.new_next_index, inputs.old_next_index);
-    assert_eq!(
-        record(&tree, 5),
-        Some(TrackingRecord {
-            viewing_u: [0xaa; 32],
-            revision: 2,
-            ..before
-        })
-    );
-}
-
-#[test]
-fn a_rotation_refuses_every_final_field() {
-    let mut tree = TrackingTree::new().unwrap();
-    apply(&mut tree, [0; 32], &[entry(5, 1)]).unwrap();
+    apply(&mut tree, [0; 32], &[entry(5)]).unwrap();
     let root = tree.root().unwrap();
-    for changed in [
-        TrackingEntry {
-            nullifier_pk: member(1),
-            ..entry(5, 2)
-        },
-        TrackingEntry {
-            ct_hash: member(1),
-            ..entry(5, 2)
-        },
-        TrackingEntry {
-            list_tag: member(1),
-            ..entry(5, 2)
-        },
-    ] {
-        assert_eq!(
-            apply(&mut tree, [0; 32], &[changed]),
-            Err(RecordTreeError::TrackingKeyChanged)
-        );
-    }
+    assert_eq!(
+        apply(&mut tree, [0; 32], &[entry(5)]),
+        Err(RecordTreeError::TrackingOwnerPresent)
+    );
+    assert_eq!(
+        apply(&mut tree, [0; 32], &[entry(6), entry(6)]),
+        Err(RecordTreeError::TrackingOwnerPresent)
+    );
     assert_eq!(tree.root().unwrap(), root);
 }
 
@@ -136,14 +94,14 @@ fn the_tree_refuses_entries_the_program_never_chains() {
         (
             TrackingEntry {
                 nullifier_pk: [0; 32],
-                ..entry(5, 1)
+                ..entry(5)
             },
             RecordTreeError::TrackingKeyChanged,
         ),
         (
             TrackingEntry {
                 member: FIELD_MAX,
-                ..entry(5, 1)
+                ..entry(5)
             },
             RecordTreeError::MemberOutOfRange,
         ),
@@ -166,7 +124,7 @@ fn the_tree_opens_leaf_two_to_the_thirty_two_minus_one_and_refuses_the_next() {
 #[test]
 fn openings_prove_presence_and_absence_under_the_root() {
     let mut tree = TrackingTree::new().unwrap();
-    apply(&mut tree, [0; 32], &[entry(4, 1), entry(9, 1)]).unwrap();
+    apply(&mut tree, [0; 32], &[entry(4), entry(9)]).unwrap();
     let root = tree.root().unwrap();
     let [four, seven] = [4, 7].map(member);
     let present = tree.opening(&four).unwrap();
@@ -197,7 +155,7 @@ fn openings_prove_presence_and_absence_under_the_root() {
 #[test]
 fn a_record_pool_opens_the_taller_tree_and_refuses_the_policy_canopy() {
     let mut tree = TrackingTree::new().unwrap();
-    apply(&mut tree, [0; 32], &[entry(4, 1), entry(9, 1)]).unwrap();
+    apply(&mut tree, [0; 32], &[entry(4), entry(9)]).unwrap();
     let root = tree.root().unwrap();
     let members = [9, 6, 4, 9].map(member);
     let pool = tree
@@ -207,7 +165,7 @@ fn a_record_pool_opens_the_taller_tree_and_refuses_the_policy_canopy() {
     assert_eq!(pool.verify(&root), Ok(()));
     assert_eq!(pool.clone().padded(4).unwrap().verify(&root), Ok(()));
     let mut forged = pool;
-    forged.records[1].revision = 9;
+    forged.records[1].ct_hash = member(9);
     assert_eq!(forged.verify(&root), Err(RecordTreeError::RootMismatch));
     assert_eq!(
         tree.record_pool(&members, Canopy::covering(4).unwrap()),
@@ -216,15 +174,9 @@ fn a_record_pool_opens_the_taller_tree_and_refuses_the_policy_canopy() {
 }
 
 #[test]
-fn a_full_tree_applies_a_rotation_and_no_insert() {
-    let inputs = FullStore::with_present(member(10))
-        .apply([0; 32], &[entry(10, 2)])
-        .unwrap()
-        .proof;
-    assert!(inputs.writes[0].exists);
-    assert_eq!(inputs.new_next_index, TRACKING_CAPACITY);
+fn a_full_tree_refuses_an_insert() {
     assert!(matches!(
-        FullStore::with_present(member(10)).apply([0; 32], &[entry(7, 1)]),
+        FullStore::with_present(member(10)).apply([0; 32], &[entry(7)]),
         Err(RecordTreeError::Full)
     ));
 }
@@ -240,14 +192,12 @@ impl FullStore {
             next: present,
             ..TrackingRecord::SENTINEL
         };
-        let enrolled = entry(10, 1);
+        let enrolled = entry(10);
         let written = TrackingRecord {
             member: present,
             next: FIELD_MAX,
             nullifier_pk: enrolled.nullifier_pk,
             ct_hash: enrolled.ct_hash,
-            viewing_u: enrolled.viewing_u,
-            revision: enrolled.revision,
             list_tag: enrolled.list_tag,
         };
         Self {

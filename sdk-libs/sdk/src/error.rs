@@ -207,11 +207,8 @@ pub enum RingError {
     EnrolledRecipientAtZeroKey { slot_index: usize },
     #[error("output {slot_index} names another key than its owner's tracking row")]
     RecipientKeyMismatch { slot_index: usize },
-    #[error("output {slot_index} names a viewing key other than its owner's row at revision {row_revision}, ask for a new address")]
-    RecipientViewingKeyStale {
-        slot_index: usize,
-        row_revision: u64,
-    },
+    #[error("output {slot_index} names a viewing key other than its owner's authorization holds, ask for a new address")]
+    RecipientViewingKeyStale { slot_index: usize },
     #[error("the transfer has {owners} owner signers, its accounts leave room for {limit}")]
     TooManyOwnerSigners { owners: usize, limit: usize },
     #[error("an anonymous transfer leads with its hidden owner's note, a frame of only public owners takes the confidential family")]

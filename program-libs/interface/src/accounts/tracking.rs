@@ -14,18 +14,19 @@
 //! `prover/circuits/registry/tracking.go`, `prover/circuits/policy/tracking.go`.
 //!
 //! Invariants:
-//! 1. An authorization's nullifier key, list tag, ephemeral key and ciphertext never move after creation, `rotate` refuses a change and `ApplyEnrollmentsCircuit` keeps the row's nullifier key, ciphertext hash and list tag.
+//! 1. An authorization's nullifier key, list tag, ephemeral key and ciphertext never move after creation, `rotate` refuses a change. A row holds only these and the owner, so a row never changes once inserted and an owner holds one row.
 //! 2. Enrollment refuses `ZERO_NULLIFIER_PUBKEY` and proves every key a Poseidon output, so a present row's key is nonzero, and the policy circuit reads presence from the literal zero an absent query returns.
-//! 3. A pending authorization grants nothing, because every check reads the root.
-//! 4. A retired tracking root keeps a program constant's grace, a full history evicts its oldest root and an in-flight proof under it proves again. A source's `tracking_floor` is the one exception, and only on a salted read.
+//! 3. A pending authorization grants nothing, because every check reads the root. Only a first enrollment is pending, and each applies once.
+//! 4. The viewing key lives only on the authorization. A rotation writes that account alone, so it moves no root and leaves no tracking work. A sender authenticates the key from the account, no proof reads it.
+//! 5. A retired tracking root serves its whole grace, an apply that would evict an unexpired root refuses and its accounts stay pending. A source's `tracking_floor` is the one exception, and only on a salted read.
 
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use spr_hasher::{
     hash_chain::create_hash_chain_4_from_slice,
     primitives::{
-        hash_bytes, is_canonical_bn254_scalar_be, is_canonical_x25519_public_key, pack_be,
-        right_align, solana_owner_identity,
+        hash_bytes, is_canonical_bn254_scalar_be, is_canonical_x25519_public_key, right_align,
+        solana_owner_identity,
     },
     Hasher, HasherError, Poseidon,
 };
@@ -45,13 +46,13 @@ use crate::{
 /// Taller than a policy tree, anyone can pay to fill it and no tree replaces a full one.
 pub const TRACKING_QUAD_HEIGHT: usize = 16;
 pub const TRACKING_CAPACITY: u64 = 1 << (2 * TRACKING_QUAD_HEIGHT);
-/// Fixed by the program, only a full history shortens a retired tracking root's service.
+/// Fixed by the program, every retired tracking root serves it in full.
 pub const TRACKING_GRACE_SLOTS: u64 = GRACE_SLOTS;
 
 /// Root of the tree holding only the sentinel.
 pub const TRACKING_EMPTY_ROOT: [u8; 32] = [
-    0x22, 0xfe, 0xbb, 0x04, 0xd2, 0x84, 0x0e, 0x27, 0x26, 0xe5, 0x52, 0x99, 0x1b, 0x27, 0x3a, 0x0f,
-    0x79, 0x6f, 0x4e, 0xcb, 0xa0, 0xc6, 0xce, 0xa4, 0xb0, 0x98, 0x1b, 0xc6, 0x24, 0xd4, 0x56, 0xcc,
+    0x24, 0x25, 0xfb, 0x18, 0x96, 0x30, 0xd5, 0xf8, 0x4b, 0xcc, 0x34, 0xf4, 0x28, 0x04, 0x37, 0x7d,
+    0x85, 0x64, 0xa5, 0x59, 0x59, 0xc9, 0x2a, 0xd1, 0xfa, 0x6f, 0xee, 0x86, 0xa5, 0x90, 0x61, 0x4e,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Pod, Zeroable)]
@@ -84,10 +85,8 @@ pub struct TrackingAuthorization {
     pub eph_u: [u8; 32],
     /// The nullifier secret and the list salt sealed to the registry's auditor key.
     pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
-    /// Little endian, moves by one at every enrollment.
-    pub revision: [u8; 8],
-    /// Little endian, zero before the first apply, a revision past it grants nothing.
-    pub applied_revision: [u8; 8],
+    /// Zero until an apply inserts the owner's row, one after.
+    pub applied: u8,
 }
 
 /// The write an apply proof chains, computed from the owner's account and never from data.
@@ -96,12 +95,10 @@ pub struct TrackingEntry {
     pub member: [u8; 32],
     pub nullifier_pk: [u8; 32],
     pub ct_hash: [u8; 32],
-    pub viewing_u: [u8; 32],
-    pub revision: u64,
     pub list_tag: [u8; 32],
 }
 
-/// The account state of a first enrollment, at revision 1 with nothing applied.
+/// The account state of a first enrollment, nothing applied.
 #[must_use]
 pub struct FirstEnrollment<'a> {
     pub registry: Address,
@@ -174,7 +171,7 @@ impl TrackingRegistry {
         root_at(&self.roots, revision, slot)
     }
 
-    /// Writes nothing on a refusal, a retired root stays served for its grace unless a full history evicts it.
+    /// Writes nothing on a refusal, a retired root stays served for its whole grace.
     pub fn update(&mut self, update: TrackingRootUpdate) -> Result<(), StorageError> {
         // The circuit opens no leaf past the capacity, a larger index would name a leaf no path reaches.
         if !(1..=TRACKING_CAPACITY).contains(&update.new_next_index) {
@@ -183,7 +180,7 @@ impl TrackingRegistry {
         advance_roots(
             &mut self.roots,
             update.revision,
-            Retirement::Graced {
+            Retirement::Retained {
                 slot: update.slot,
                 grace_slots: TRACKING_GRACE_SLOTS,
             },
@@ -231,21 +228,13 @@ impl TrackingAuthorization {
             .flatten()
     }
 
-    pub const fn revision(&self) -> u64 {
-        u64::from_le_bytes(self.revision)
-    }
-
-    pub const fn applied_revision(&self) -> u64 {
-        u64::from_le_bytes(self.applied_revision)
-    }
-
-    /// Its newest revision has not reached a root yet.
+    /// Its row has not reached a root yet.
     pub const fn is_pending(&self) -> bool {
-        self.applied_revision() < self.revision()
+        self.applied == 0
     }
 
-    /// Writes nothing on a refusal, only the viewing key and the revision move. The owner's signature
-    /// alone authorizes it, so no proof seals a new secret and every sealed field stays as it was.
+    /// Writes nothing on a refusal, the owner's signature alone authorizes it so no sealed field
+    /// moves.
     pub fn rotate(&mut self, ix: &EnrollIxData) -> Result<(), StorageError> {
         if ix.nullifier_pk != self.nullifier_pk
             || ix.list_tag != self.list_tag
@@ -254,12 +243,7 @@ impl TrackingAuthorization {
         {
             return Err(StorageError::EnrollmentKeyFinal);
         }
-        let revision = self
-            .revision()
-            .checked_add(1)
-            .ok_or(StorageError::RevisionOverflow)?;
         self.viewing_u = ix.viewing_u;
-        self.revision = revision.to_le_bytes();
         Ok(())
     }
 
@@ -268,19 +252,17 @@ impl TrackingAuthorization {
             member: owner_member(&self.owner)?,
             nullifier_pk: self.nullifier_pk,
             ct_hash: hash_bytes(&self.ciphertext).map_err(|_| StorageError::HashingFailed)?,
-            viewing_u: self.viewing_u,
-            revision: self.revision(),
             list_tag: self.list_tag,
         })
     }
 
-    /// The entry the apply proof chains, an applied revision refused so one account cannot chain twice.
+    /// The entry the apply proof chains, an applied account refused so one owner never chains twice.
     pub fn apply(&mut self) -> Result<TrackingEntry, StorageError> {
         if !self.is_pending() {
             return Err(StorageError::EnrollmentAlreadyApplied);
         }
         let entry = self.entry()?;
-        self.applied_revision = self.revision;
+        self.applied = 1;
         Ok(entry)
     }
 }
@@ -296,25 +278,20 @@ impl FirstEnrollment<'_> {
             viewing_u: self.ix.viewing_u,
             eph_u: self.ix.eph_u,
             ciphertext: self.ix.ciphertext,
-            revision: 1u64.to_le_bytes(),
-            applied_revision: [0; 8],
+            applied: 0,
         }
     }
 }
 
 impl TrackingEntry {
-    /// `Poseidon(CRTQ, member, nullifier_pk, ct_hash, view0, view1, revision, list_tag)`, mirror
+    /// `Poseidon(CRTQ, member, nullifier_pk, ct_hash, list_tag)`, mirror
     /// `prover/circuits/registry/apply_enrollments.go`.
     pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        let [view0, view1] = pack_be(&self.viewing_u);
         Poseidon::hashv(&[
             &domain::field(domain::TRACKING_ENTRY),
             &self.member,
             &self.nullifier_pk,
             &self.ct_hash,
-            &view0,
-            &view1,
-            &right_align(&self.revision.to_be_bytes()),
             &self.list_tag,
         ])
     }
@@ -379,7 +356,7 @@ pub fn tracking_chain_start(
 const _: () = assert!(core::mem::align_of::<TrackingRegistry>() == 1);
 const _: () = assert!(TrackingRegistry::SIZE == 1610);
 const _: () = assert!(core::mem::align_of::<TrackingAuthorization>() == 1);
-const _: () = assert!(TrackingAuthorization::SIZE == 273);
+const _: () = assert!(TrackingAuthorization::SIZE == 258);
 
 #[cfg(test)]
 mod tests {
@@ -387,15 +364,11 @@ mod tests {
 
     #[test]
     fn the_empty_root_folds_the_sentinel_through_every_level() {
-        let [view0, view1] = pack_be(&[0u8; 32]);
         let mut node = Poseidon::hashv(&[
             &domain::field(domain::TRACKING_LEAF),
             &[0; 32],
             &crate::FIELD_MAX,
             &[0; 32],
-            &[0; 32],
-            &view0,
-            &view1,
             &[0; 32],
             &[0; 32],
         ])
