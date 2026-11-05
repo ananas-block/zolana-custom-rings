@@ -26,7 +26,7 @@ import (
 // debitBits keeps comparisons and division over integers below the BN254 scalar modulus.
 // SPP binds u64 input amounts through their hashes, and UintBytesBE bounds output amounts.
 // SPP's MAX_INTERFACE_TRANSFERS permits at most 32 u64 legs, giving gross < 2^69.
-// transfer.Shapes permits at most 40 inputs and 8 outputs, giving each owner's held < 2^70.
+// transfer.Shapes permits at most 40 inputs and 16 outputs, giving each owner's held < 2^70.
 // Exits plus gross and payment totals stay below 2^70, and DepositCapacities permits at most 8 payments.
 // While outflow is active, distinct sender rows prevent counting held amounts twice.
 // Each row's charge is at most its kept amount, giving outflow at most held and preserving the total bound.
