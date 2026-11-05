@@ -1066,6 +1066,8 @@ function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void
  * SPP's list with no read of the registries or co-signers ahead of it, since the program refuses a
  * second copy anywhere in that list and neither a registry slot nor a signer slot can hold the PDA.
  * A misplaced run would read another signer's count, the same window the program takes closes that.
+ * The counts index the run `SignerSet` keeps, first occurrences only, a raw position past a repeat
+ * reads another entry and lets a signer pass over its own omitted output.
  */
 function signerRunEntry(
   expected: ExpectedPublicOwner,
