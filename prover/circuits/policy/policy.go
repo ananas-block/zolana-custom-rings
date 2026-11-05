@@ -17,8 +17,8 @@
 //  3. An enrolled owner reads a private list at the one salted key its tracking row fixes, only an owner
 //     proven absent under the tracking root skips the read.
 //  4. Every sender rule holds over every live row, every owner rule over every live payment's nonzero
-//     owner and every asset rule over every live payment within its guard, and every unconditional asset
-//     rule over every live input's asset.
+//     owner and every asset rule over every live payment unless its guard exempts the total, and every
+//     unconditional asset rule over every live input's asset.
 //  5. Payment totals read output and withdrawal amounts, an input's amount only nets a same ring
 //     receipt of its own owner and asset.
 //  6. While Outflow is set the caps hold and Screening carries the approval bits the flows reach.

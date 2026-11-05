@@ -1,4 +1,4 @@
-// Package circuits proves a ring deposit and an anonymous ring merge.
+// Package circuits proves a ring deposit and a ring merge.
 //
 // SPP's ring_deposit takes each output's Poseidon(owner_hash, blinding) as an opaque value with a public
 // asset and amount, leaves the blinding's freshness to the ring and runs no proof. A depositor alone
@@ -113,7 +113,7 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	); err != nil {
 		return err
 	}
-	// 1. Count selects 1..Capacity occupied slots, DepositPublicInput::hash builds the flag as 0 or 1.
+	// 1. Count selects the first 1..Capacity slots as occupied, DepositPublicInput::elements counts the owner hashes it chains.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.Capacity)
 	rc := rangecheck.New(api)
 	commitments := make([]frontend.Variable, c.Capacity)

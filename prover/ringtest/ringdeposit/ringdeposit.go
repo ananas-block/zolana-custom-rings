@@ -23,7 +23,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// RingMode mirrors RingMode in program-libs/interface/src/accounts/state.rs, the flag DepositPublicInput binds follows it.
+// RingMode mirrors RingMode in program-libs/interface/src/accounts/state.rs.
 type RingMode int
 
 const (
@@ -78,7 +78,7 @@ type Spec struct {
 	Mode     RingMode
 	// ZeroKeys holds these slots under ZeroNullifierPk with no row.
 	ZeroKeys []int
-	// Recipients cycles this many owners over the slots and Assets this many mints, zero gives each slot its own owner and every slot Policy.Mint.
+	// Recipients is the owners the slots cycle and Assets the mints, zero gives each slot its own owner and every slot Policy.Mint.
 	Recipients, Assets int
 	Policy             Policy
 	BlindingOf         func(testing.TB, *big.Int) *big.Int

@@ -18,7 +18,7 @@
 //  2. Entry k equals the live data-bearing output slots owned by run member k, zero past the run.
 //  3. A run member past the last entry owns no data-bearing output slot.
 //
-// Read after shared/utxo.go, audit/audit.go. Read before transfer/transfer.go.
+// Read after shared/utxo.go, audit/audit.go, transfer/input.go. Read before policy/policy.go.
 
 package audit
 

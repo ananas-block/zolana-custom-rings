@@ -11,7 +11,7 @@
 // SPP holds a published output to a note or to a dummy with zero fields, so the file repeats no output
 // check. A proof that opens a slot SPP does not publish fails where its statement chains the hash.
 //
-// Read first. Read before audit/audit.go, audit/record.go, transfer/input.go.
+// Read after transfer/transfer.go. Read before audit/audit.go, audit/record.go, transfer/input.go.
 
 package shared
 
