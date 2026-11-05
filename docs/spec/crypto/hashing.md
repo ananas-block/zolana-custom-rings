@@ -32,7 +32,7 @@ Every commitment and statement of a custom ring is a Poseidon hash over BN254. T
 | Owner hash | `Poseidon(owner_identity, nullifier_pk)` |
 | Ring id | `hash_bytes(ring program id)` |
 | Asset | `hash_bytes(mint)`, and `SOL_ASSET_FIELD = Poseidon(0, 0) = 0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864` for SOL |
-| Zero nullifier key | `ZERO_NULLIFIER_PUBKEY = Poseidon(0) = 0x2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c`. No secret stands behind it, so no owner enrolls it. A transfer or deposit output under it proves its owner's tracking row absent |
+| Zero nullifier key | `ZERO_NULLIFIER_PUBKEY = Poseidon(0) = 0x2a09a9fd93c590c26b91effbb2499f07e8f7aa12e2b4940a3aed2411cb65e11c`. No secret stands behind it, so no owner enrolls it. A ring output of a transfer or deposit under it proves its owner's tracking row absent |
 | Owner member | `solana_owner_identity(key)` |
 | Asset member | `hash_bytes(mint)`. The CLI names SOL by the zero address. |
 | UTXO hash | `Poseidon(domain, tree_id, asset, amount, data_hash, Poseidon(ring_data_hash, ring_id), Poseidon(owner_hash, blinding))`, domains dummy `1`, address `2`, UTXO `3`, as zolana defines it |
@@ -81,8 +81,8 @@ A policy registry holds one record per member.
 | Tree node | `Poseidon(c_0, c_1, c_2, c_3)`, height 10, the leaf index as 20 bits |
 | Record write | `Poseidon(CRQW, member, right_align(mask as u64 BE), right_align(value as u64 BE), mint_policy_write, right_align(withdrawal_threshold as u64 BE), limits_0, limits_1, limits_2)`, 9 inputs |
 | Mint policy write | `0` when the write keeps the mint settings, else `2^192 + mint policy field`. `withdrawal_threshold` and every asset limit field are `0` when the write keeps them. |
-| Write chain start | `HashChain4([CRAP, hash_bytes(registry address), right_align(revision as u64 BE)])` |
-| Write chain | `chain(-1) = chain_start`, `chain(p) = Poseidon(chain(p - 1), write_p)` |
+| Write chain start | `chain_start(registry, revision) = HashChain4([CRAP, hash_bytes(registry address), right_align(revision as u64 BE)])` |
+| Write chain | `chain(-1) = chain_start(registry, revision)`, `chain(p) = Poseidon(chain(p - 1), write_p)`, one chain per `Update` |
 
 A write sets `lists' = (lists & !mask) | value`, and `value` must sit inside `mask`. It replaces the mint settings only when `mint_policy_write` is nonzero. The chain start names one registry at one revision, so an apply proof serves that registry at that revision only.
 
