@@ -1202,10 +1202,10 @@ fn public_legs_are_refused_with_the_rings_own_errors() {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
     fixture.settle_legs(&mut data, zero.to_vec());
-    assert_eq!(data.encode(), Err(CustomRingError::InvalidInstructionData));
+    assert_eq!(data.encode(), Err(CustomRingError::ZeroPublicLegAmount));
     refused(
         settle_raw(&mut ring, &zero, &payer),
-        CustomRingError::InvalidInstructionData,
+        CustomRingError::ZeroPublicLegAmount,
     );
     // The raw path parses a valid list, the refusal above is the zero leg's.
     refused(
@@ -1280,7 +1280,7 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
     // `validate_under` refuses a list past the cap in the encoder and again in the program's frame parse.
     let legs = vec![InterfaceTransfer::SolWithdrawal { amount: 1 }; MAX_INTERFACE_TRANSFERS + 1];
     fixture.settle_legs(&mut data, legs.clone());
-    assert_eq!(data.encode(), Err(CustomRingError::InvalidInstructionData));
+    assert_eq!(data.encode(), Err(CustomRingError::TooManyPublicLegs));
     fixture.settle_legs(&mut data, vec![PLACEHOLDER_LEG]);
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     let settlement = AccountMeta::new(Address::new_unique(), false);
@@ -1294,7 +1294,7 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
             spp,
             &[],
         ),
-        CustomRingError::InvalidInstructionData,
+        CustomRingError::TooManyPublicLegs,
     );
 }
 
