@@ -14,7 +14,7 @@ use super::{Rail, RingTransfer};
 use crate::client::{RingClient, RingIndexerBackend};
 use crate::{
     projection::retry_projection_lag,
-    select::{select_exact_where, select_spend_where},
+    select::{candidates, select_exact_where, select_spend_where, SpendableKeys},
     RingError,
 };
 
@@ -50,32 +50,6 @@ pub(super) fn widest(payments: usize, keyed: impl Fn(Shape) -> bool) -> Option<u
         .filter(|shape| shape.n_outputs() >= payments && keyed(*shape))
         .map(|shape| shape.n_inputs())
         .max()
-}
-
-/// Every set of up to [`MAX_INPUT_TREES`] trees the UTXOs sit on, ascending within a set.
-pub(super) fn tree_sets(utxos: &[WalletUtxo]) -> Vec<Vec<u16>> {
-    let trees: Vec<u16> = utxos
-        .iter()
-        .map(|utxo| utxo.tree_id)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let mut sets = Vec::new();
-    let mut frontier: Vec<Vec<u16>> = vec![Vec::new()];
-    for _ in 0..MAX_INPUT_TREES {
-        // A set grows only by a later tree, no set repeats in another order.
-        frontier = frontier
-            .iter()
-            .flat_map(|set| {
-                trees
-                    .iter()
-                    .filter(|tree| set.last().is_none_or(|last| *tree > last))
-                    .map(|tree| [set.as_slice(), &[*tree]].concat())
-            })
-            .collect();
-        sets.extend(frontier.iter().cloned());
-    }
-    sets
 }
 
 /// The trees `utxos` span, a selection over a wider set that spans fewer repeats a narrower one.
@@ -179,12 +153,7 @@ impl<'u> Funding<'u> {
     /// The keyed notes of the asset `keep` admits, by tree.
     fn by_tree(&self, keep: impl Fn(&WalletUtxo) -> bool) -> BTreeMap<u16, Vec<&'u WalletUtxo>> {
         let mut by_tree: BTreeMap<u16, Vec<&'u WalletUtxo>> = BTreeMap::new();
-        for utxo in self.utxos.iter().filter(|utxo| {
-            utxo.utxo.asset.asset == self.asset
-                && utxo.utxo.amount > 0
-                && utxo.nullifier_pubkey != ZERO_NULLIFIER_PUBKEY
-                && keep(utxo)
-        }) {
+        for utxo in candidates(self.utxos, self.asset, SpendableKeys::Keyed, keep) {
             by_tree.entry(utxo.tree_id).or_default().push(utxo);
         }
         by_tree

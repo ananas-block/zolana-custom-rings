@@ -39,9 +39,7 @@ impl SpendSelection<'_> {
         self,
         keep: impl Fn(&WalletUtxo) -> bool,
     ) -> Result<Vec<WalletUtxo>, TransactionError> {
-        let admitted = candidates(self.utxos, self.asset, |utxo| {
-            self.keys.admits(utxo) && keep(utxo)
-        });
+        let admitted = candidates(self.utxos, self.asset, self.keys, keep);
         select(admitted, self.asset, self.amount, self.max_inputs)
     }
 }
@@ -54,9 +52,7 @@ pub fn select_spend_where<'a>(
     max_inputs: usize,
     keep: impl Fn(&WalletUtxo) -> bool,
 ) -> Result<Vec<WalletUtxo>, TransactionError> {
-    let admitted = candidates(utxos, asset, |utxo| {
-        SpendableKeys::Keyed.admits(utxo) && keep(utxo)
-    });
+    let admitted = candidates(utxos, asset, SpendableKeys::Keyed, keep);
     select(admitted, asset, amount, max_inputs)
 }
 
@@ -68,9 +64,7 @@ pub(crate) fn select_exact_where<'a>(
     max_inputs: usize,
     keep: impl Fn(&WalletUtxo) -> bool,
 ) -> Option<Vec<WalletUtxo>> {
-    let mut admitted = candidates(utxos, asset, |utxo| {
-        SpendableKeys::Keyed.admits(utxo) && keep(utxo)
-    });
+    let mut admitted = candidates(utxos, asset, SpendableKeys::Keyed, keep);
     admitted.sort_by_key(|utxo| Reverse(utxo.utxo.amount));
     let mut remainder = amount;
     let mut selected = Vec::new();
@@ -95,9 +89,7 @@ pub fn select_merge_where<'a>(
     keep: impl Fn(&WalletUtxo) -> bool,
 ) -> Result<Vec<WalletUtxo>, TransactionError> {
     let mut trees: BTreeMap<u16, Vec<&WalletUtxo>> = BTreeMap::new();
-    let admitted = candidates(utxos, asset, |utxo| {
-        SpendableKeys::Keyed.admits(utxo) && keep(utxo)
-    });
+    let admitted = candidates(utxos, asset, SpendableKeys::Keyed, keep);
     for utxo in admitted
         .into_iter()
         .filter(|utxo| !excluded.contains(&utxo.nullifier))
@@ -118,14 +110,21 @@ pub fn select_merge_where<'a>(
     Ok(selected.into_iter().cloned().collect())
 }
 
-fn candidates<'a>(
+/// The nonzero UTXOs of `asset` the key class and `keep` admit.
+pub(crate) fn candidates<'a>(
     utxos: impl IntoIterator<Item = &'a WalletUtxo>,
     asset: Address,
+    keys: SpendableKeys,
     keep: impl Fn(&WalletUtxo) -> bool,
 ) -> Vec<&'a WalletUtxo> {
     utxos
         .into_iter()
-        .filter(|utxo| utxo.utxo.asset.asset == asset && utxo.utxo.amount > 0 && keep(utxo))
+        .filter(|utxo| {
+            utxo.utxo.asset.asset == asset
+                && utxo.utxo.amount > 0
+                && keys.admits(utxo)
+                && keep(utxo)
+        })
         .collect()
 }
 

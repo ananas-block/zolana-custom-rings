@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{cmp::Reverse, collections::BTreeSet};
 
 use custom_ring_interface::{RingMode, RingRail};
 use solana_address::Address;
@@ -14,7 +14,10 @@ use zolana_ring_transaction::{AnonymousPlan, RingDelivery, RingOutputRail};
 use super::{
     anonymous::SenderChange,
     canonical_shape, pad_under_rail, sealed,
-    selection::{payment_total, spanned_trees, tree_sets, widest, Candidate, Funding},
+    selection::{
+        payment_total, spanned_trees, staged_tree_search, widest, Candidate, Funding,
+        PAIR_POOL_TREES,
+    },
     shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
     RingTransfer, Spend, Staged, TransferAuthority,
 };
@@ -236,33 +239,49 @@ impl<'a> DelegateMove<'a> {
             .select_where(|utxo| trees.contains(&utxo.tree_id))
             .ok()
         };
-        let spendable_sets = tree_sets(&utxos);
-        let mut ranked: Vec<_> = spendable_sets
+        // 1. Trees holding more of the move's mints lead the pair pool, a pair must hold every mint.
+        let mut trees: Vec<u16> = utxos
             .iter()
-            .filter_map(|trees| {
-                let funded = fundings
-                    .iter()
-                    .map(|funding| {
-                        funded_on(funding, trees)
-                            .map(|utxos| (funding.asset, funding.amount, utxos))
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                if spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos)) < trees.len() {
-                    return None;
-                }
-                let notes = funded
-                    .iter()
-                    .map(|(_, _, utxos)| utxos.len())
-                    .sum::<usize>();
-                let total: u128 = funded
-                    .iter()
-                    .flat_map(|(_, _, utxos)| utxos)
-                    .map(|utxo| u128::from(utxo.utxo.amount))
-                    .sum();
-                Some(((trees.len(), notes, total, trees), funded))
-            })
+            .map(|utxo| utxo.tree_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
-        ranked.sort_unstable_by_key(|(order, _)| *order);
+        trees.sort_by_key(|tree| {
+            Reverse(
+                fundings
+                    .iter()
+                    .filter(|funding| {
+                        utxos.iter().any(|utxo| {
+                            utxo.tree_id == *tree && utxo.utxo.asset.asset == funding.asset
+                        })
+                    })
+                    .count(),
+            )
+        });
+        let pool = &trees[..trees.len().min(PAIR_POOL_TREES)];
+        // 2. Every mint funds on one shared set, a pair runs only when no tree alone funds them all.
+        let mut ranked = staged_tree_search(&trees, pool, |set| {
+            let funded = fundings
+                .iter()
+                .map(|funding| {
+                    funded_on(funding, set).map(|utxos| (funding.asset, funding.amount, utxos))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            if spanned_trees(funded.iter().flat_map(|(_, _, utxos)| utxos)) < set.len() {
+                return None;
+            }
+            let notes = funded
+                .iter()
+                .map(|(_, _, utxos)| utxos.len())
+                .sum::<usize>();
+            let total: u128 = funded
+                .iter()
+                .flat_map(|(_, _, utxos)| utxos)
+                .map(|utxo| u128::from(utxo.utxo.amount))
+                .sum();
+            Some(((notes, total, set.to_vec()), funded))
+        });
+        ranked.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         let attempts = ranked
             .into_iter()
             .map(|(_, funded)| {
@@ -281,9 +300,7 @@ impl<'a> DelegateMove<'a> {
         let funding = fundings
             .iter()
             .find(|funding| {
-                spendable_sets
-                    .iter()
-                    .all(|trees| funded_on(funding, trees).is_none())
+                staged_tree_search(&trees, pool, |set| funded_on(funding, set)).is_empty()
             })
             .or_else(|| fundings.first())
             .ok_or(TransactionError::ZeroSpendAmount)?;
