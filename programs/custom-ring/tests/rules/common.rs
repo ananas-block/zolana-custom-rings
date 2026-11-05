@@ -202,6 +202,8 @@ impl Ring {
         };
         let policy_key = ring.roles.policy.pubkey();
         ring.store_registry(RECORDS, &policy_key, &[root(0, [0x0e; 32])]);
+        // The SDK creates the records paired with their ring.
+        ring.pair_registry(RECORDS, PROGRAM, 0);
         let table = match setup.kind().has_policy() {
             true => allow_list_table(limits),
             false => PolicyTableIxData {
@@ -266,6 +268,22 @@ impl Ring {
             },
         );
         registry.roots[..roots.len()].copy_from_slice(roots);
+        self.store(
+            address,
+            STORAGE_PROGRAM_ID,
+            bytemuck::bytes_of(&registry).to_vec(),
+        );
+    }
+
+    /// Rewrites the private ring and absence floor of `address`, zero `ring_program` unpairs it.
+    pub fn pair_registry(&mut self, address: Address, ring_program: Address, floor: u64) {
+        let mut registry: StorageRegistry = self.read(&address);
+        registry.private_ring_id = if ring_program == Address::default() {
+            [0; 32]
+        } else {
+            ring_id_field(ring_program.as_array()).expect("ring id")
+        };
+        registry.absence_floor = floor.to_le_bytes();
         self.store(
             address,
             STORAGE_PROGRAM_ID,

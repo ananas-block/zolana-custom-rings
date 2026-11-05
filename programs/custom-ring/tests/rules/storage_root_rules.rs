@@ -1,19 +1,19 @@
 //! Policy transfers read every root from the live registries they pass, each bound to the ring.
 
 use custom_ring_interface::{
-    storage::{Revision, StorageRegistry},
+    storage::Revision,
     tag, CredentialRead, CustomRingError, PolicyTableIxData, RingPolicy, RingRail, RingRole,
-    RingTransactData, SourceSpec, UpdatePolicyIxData, STORAGE_PROGRAM_ID,
+    RingTransactData, SourceSpec, UpdatePolicyIxData,
 };
 use solana_address::Address;
 use solana_instruction::AccountMeta;
 use solana_keypair::{Keypair, Signer};
-use zolana_ring_policy::{ring_id_field, ListId, ListSet};
+use zolana_ring_policy::{ListId, ListSet};
 
 use crate::{
     common::{
         address_tree, allow_list_table, credential_accounts, credential_tree, credential_tree_data,
-        list_table, policy_pda, reaches_verification, refused, retired, root, rules_write,
+        list_table, policy_pda, reaches_verification, refused, retired, root,
         transact, Ring, Sent, Setup, UpdatePolicyIx, PROGRAM, RECORDS,
     },
     transact_rules::{spp_list, Fixture},
@@ -184,33 +184,21 @@ fn a_credential_tree_with_copied_data_at_another_address_is_refused() {
     reaches_verification(reading(credential_tree(), &mut ring));
 }
 
+/// Configures a private allow list on the paired records, then pins `pair` and `floor` as a read finds them.
 fn read_private_allow_list(ring: &mut Ring, pair: Address, floor: u64) {
     let authority = ring.holder(RingRole::Policy);
-    let update = rules_write(
-        &authority.pubkey(),
-        list_table(ListId::PrivateAllow, Vec::new()),
-    );
+    let update = UpdatePolicyIx {
+        authority: authority.pubkey(),
+        update: UpdatePolicyIxData::Rules(list_table(ListId::PrivateAllow, Vec::new())),
+        trailing: &[RECORDS],
+    }
+    .instruction();
     ring.send(update, &[&authority]).unwrap();
     pin_records(ring, pair, floor);
 }
 
 fn pin_records(ring: &mut Ring, pair: Address, floor: u64) {
-    pin_registry(ring, RECORDS, pair, floor);
-}
-
-fn pin_registry(ring: &mut Ring, address: Address, pair: Address, floor: u64) {
-    let mut records: StorageRegistry = ring.read(&address);
-    records.private_ring_id = if pair == Address::default() {
-        [0; 32]
-    } else {
-        ring_id_field(pair.as_array()).unwrap()
-    };
-    records.absence_floor = floor.to_le_bytes();
-    ring.store(
-        address,
-        STORAGE_PROGRAM_ID,
-        bytemuck::bytes_of(&records).to_vec(),
-    );
+    ring.pair_registry(RECORDS, pair, floor);
 }
 
 fn address_history_data() -> Vec<u8> {
@@ -299,8 +287,7 @@ fn a_public_list_ignores_its_curators_private_ring_and_floor() {
     let fixture = Fixture::new();
     let mut ring = subscriber_ring();
     store_address_history(&mut ring);
-    pin_registry(
-        &mut ring,
+    ring.pair_registry(
         CURATOR,
         Address::new_from_array([0x61; 32]),
         u64::MAX,
@@ -317,6 +304,7 @@ fn a_private_list_mapped_to_a_curator_on_another_ring_is_refused() {
     let mut ring = Ring::new(Setup::Policy);
     let authority = ring.holder(RingRole::Policy);
     ring.store_registry(CURATOR, &Keypair::new().pubkey(), &[root(4, [0x0c; 32])]);
+    ring.pair_registry(CURATOR, PROGRAM, 0);
     let curated = PolicyTableIxData {
         sources: vec![SourceSpec {
             list_id: ListId::PrivateAllow as u8,
@@ -334,14 +322,14 @@ fn a_private_list_mapped_to_a_curator_on_another_ring_is_refused() {
         &[&authority],
     )
     .unwrap();
-    pin_registry(&mut ring, CURATOR, Address::new_from_array([0x61; 32]), 0);
+    ring.pair_registry(CURATOR, Address::new_from_array([0x61; 32]), 0);
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, true);
     data.policy.as_mut().unwrap().curator_revision = Some(Revision::from(4));
     refused(
         transfer_reading(&mut ring, &[RECORDS, CURATOR], &data),
         CustomRingError::SaltedSourceOtherRing,
     );
-    pin_registry(&mut ring, CURATOR, PROGRAM, 0);
+    ring.pair_registry(CURATOR, PROGRAM, 0);
     reaches_verification(transfer_reading(&mut ring, &[RECORDS, CURATOR], &data));
 }
 

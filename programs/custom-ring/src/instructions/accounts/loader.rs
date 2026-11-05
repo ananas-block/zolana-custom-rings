@@ -202,16 +202,14 @@ impl RegistrySlots<'_> {
             Ok(account)
         };
         let ring = self.ring;
-        let ring_id = ring_id_field(self.program_id.as_array()).map_err(CustomRingError::from)?;
+        let program_id = self.program_id;
         let mut absence_floor = 0;
         let mut storage = |bound: Option<Address>| {
             bound
                 .map(|bound| {
                     let source = load_storage_registry(bound_account(&bound)?)?;
                     // Private sources bind the ring whose credentials established their absence floor.
-                    if ring.reads_salted(&bound) && source.private_ring_id != ring_id {
-                        return Err(CustomRingError::SaltedSourceOtherRing.into());
-                    }
+                    ring.check_salted_source(program_id, &bound, &source)?;
                     absence_floor = absence_floor.max(ring.absence_floor(&bound, &source));
                     Ok::<_, ProgramError>(source)
                 })
