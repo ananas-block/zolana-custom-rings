@@ -1,6 +1,6 @@
 # Proof composition
 
-A ring transfer settles only when the ring proof and SPP's proof both verify over values the ring program rebuilds. This guide states which side enforces each guarantee of statement version 3. Read it before you change a ring circuit, a statement builder or a program binding. The exact encoding is in [Public inputs](../spec/crypto/public-inputs.md#transfer).
+A ring transfer settles only when the ring proof and SPP's proof both verify over values the ring program rebuilds. This guide states which side enforces each guarantee. Read it before you change a ring circuit, a statement builder or a program binding. `TransferStatement::elements` in `program-libs/interface/src/proof/statement.rs` contains the exact encoding.
 
 ## Enforcers
 
@@ -16,13 +16,14 @@ A statement element enforces nothing alone. It fixes a value, and a constraint o
 ## The cross-component argument
 
 1. The program builds the statement from the frame it forwards to SPP. The statement hash is the one public input of the ring proof, so the prover picks no element the program derives.
-2. The circuit opens each slot once through `shared.UtxoWires.Open`. Audit, policy and delivery read those wires, so no two sections describe different notes.
-3. The circuit reopens `private_tx_hash` over the opened slots. SPP's proof binds the same hash to its nullifiers and outputs, so the opened slots are the slots SPP settles.
-4. The program hands SPP the output hashes that `output_chain` covers. SPP zero-fills past `m`, and the circuit multiplies each cell past `m` by zero. Both sides read one list, the ring under `HashChain4` and SPP under `RightHashChain4`.
-5. SPP derives every output blinding and `private_tx_blinding` from one seed. The circuit holds each published blinding to `TXOB` under `CRBS(tx_viewing_sk, salt)`. Slot 0 is always published, so the sealed key fixes SPP's seed.
-6. The program reads each registry root live from the account the ring binds. A record opening under that root therefore carries the write rules of the Storage program and of ApplyRecords.
+2. The circuit opens each output through `audit.OpenSlots` and each input through `OpenInputs`, both through `shared.UtxoWires.Open`. Audit, policy and tracking read those wires, so no two sections describe different notes.
+3. The circuit reopens `private_tx_hash` over the opened inputs, the opened outputs, the address chain and the blinding. SPP's proof binds the same hash to its nullifiers and outputs, so the opened slots are the slots SPP settles.
+4. The program hands SPP the output hashes that `output_chain` covers. SPP zero-fills past `m`, and the circuit multiplies each cell past `m` by zero. Both sides read one list.
+5. SPP derives every output blinding and `private_tx_blinding` from one seed. The circuit holds each published blinding to the seed the sealed key derives. Slot 0 is always published, so the sealed key fixes SPP's seed.
+6. The program reads each registry root live from the account the ring binds. A record opening under that root therefore carries the write rules of the Storage program and of its apply circuits.
+7. SPP's external data hash covers each frame's tags, bodies and messages. It binds the submitted bytes and proves nothing about what they contain.
 
-No Go test composes the ring proof with SPP's proof. Steps 3, 4 and 5 hold across the program binding.
+No Go test composes the ring proof with SPP's proof. Steps 3, 4, 5 and 7 are true across the program binding.
 
 ## Predicate ledger
 
@@ -30,237 +31,197 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 ### The statement has one schema and one length
 
-- The program builds `TransferStatement::elements` in `program-libs/interface/src/proof/statement.rs`.
-- The circuit ends each `Define` with one `HashChain4` equality. `closeStatement` in `transfer/transfer.go` appends the element count and the nonzero version.
-- `TestTransferStatementVector` pins the Go elements to the vector `go_vectors.rs` reads, and `TestTransferStatementsMatchRustVectors` compares the Rust elements. `TestStatementBindsEveryElement` moves one element against an unchanged witness.
+- The program builds `TransferStatement::elements`, with the element count last.
+- The circuit ends `Define` with one `HashChain4` equality, and `closeStatement` appends the same count.
+- The tests are `TestTransferStatementVector`, `TestSignerSetVector` and `TestStatementBindsEveryElement`.
 
 ### A rail is one fixed combination of bits
 
-- The program sets `in_proof` from the frame's `OWNER_IN_PROOF` flag and `delegate` from tag 46. `TransactFlags::check` refuses the flag off the confidential rail and `EXEMPT` on the authority rail. `TransactCheck` refuses a public leg on the authority rail.
-- The circuit holds the bits boolean, refuses `delegate` with `in_proof`, and holds `sender` to zero off the in-proof rail, in `assertRail`.
-- The circuit requires the escrow flag on the authority rail, in `decodeLayout`.
-- The tests are `TestRailCellsStayOnTheirRail`, and in `TestConfidentialRefusals` the cases `delegate with in_proof`, `delegate with a statement sender` and `delegate without key escrow`.
+- The program fixes the rail from the instruction tag, the ring mode and the frame flags. `rail_bits` writes `in_proof`, `hidden` and `delegate`.
+- The program refuses `OWNER_IN_PROOF` on an anonymous ring and on the delegate rail. It refuses reply metadata except on the anonymous frame. It refuses a policy section on the delegate rail.
+- The circuit holds the bits boolean with at most one set, and holds `sender` to zero except on the in-proof rail, in `assertRail`.
+- One key serves every rail, so only the program-set `delegate` bit separates the signer and delegate rails.
+- The tests are `TestRailsSolve`, `TestRailCells` and `TestDelegateBitIsTheProgramsWall`.
 
-### Every input slot is an opened note or a canonical dummy
+### Every input slot is a note, an address or a canonical dummy
 
-- The circuit opens each slot in `OpenInputs`, with no address input. A dummy holds `CheckDummy` fields.
-- The circuit holds `input_count` to 1 through the class by `SelectCount`. A live note at or past the count is refused, and a dummy never precedes a live note.
+- The circuit opens each slot in `OpenInputs`. A dummy contains `CheckDummy` fields, and an address spends nothing.
+- The circuit holds `input_count` to at least one through the class by `SelectCount`. A live note at or past the count is refused, and a dummy never precedes a live note.
 - The program sets `input_count` to the frame's nullifier count.
 - SPP's `AssertDummiesLast` orders its slots the same way, so entry `k` names nullifier `k`.
-- The circuit feeds one list, `Utxo_i * Hash_i`, to `NonZeroHashChain` and to the evidence. A chain node cannot pose as an input, because each entry is an opened commitment.
-- The tests are `TestInputSlotsHoldTheirDomain`, `TestDummyBetweenSpentInputsIsRefused`, `TestChainNodeCannotHideAnInput` and `in-proof UTXO at the input count`.
+- The tests are `TestInputOrder` and `TestAddressSlots`.
 
 ### Every live input answers its rail's owner predicate
 
-- The circuit holds each live input to its rail's owner on the in-proof, authority and entry rails, in `AssertOwnedBy`. Input 0 is live there.
-- The circuit holds each live input to the signer set on the signer rail. Slot 0 may be a dummy, so a public-funded transfer stays valid.
-- The circuit reads `sender` as input 0's owner on the commitment key. Input 0 is live, `sender` is outside the set, and each other live input matches `sender` or a set member.
-- The circuit holds each live input on a confidential or commitment key to this ring, in `AssertRingNotes`. `RingCircuit::transfer` keys no confidential spend of a default-ring note.
-- SPP verifies each owner signer, and its hidden owner signature inside its proof. `HiddenOwnerSigners` requires a hidden input, so a frame of public owners belongs to the confidential family.
-- `TestConfidentialRefusals` holds `signer input of an owner outside the set`, `signer input of another ring` and `in-proof input of another owner`.
-- It also holds `delegate move with a second member's input` and `delegate move without a spent input`.
-- `TestAnonymousRailSpends` holds the anonymous cases, and so does `TestAnonymousPublicCoOwners` in `prover/circuits/audit`.
+- Except on the delegate rail, the circuit holds each live input to the run, the hidden owner or the in-proof sender, in `AssertOwners`.
+- The circuit reads the hidden owner from input 0, holds that input live and holds the owner outside the run.
+- The circuit holds each live ring note to the transfer's ring, in `AssertRingNotes`. Only a key with entry capacity also spends a default-ring note.
+- SPP verifies each owner signer, and the hidden owner's signature inside its proof. SPP's authority rail holds every input to the ring.
+- The tests are `TestOwnerPredicates`, `TestAnonymousOwnerRails` and `TestEntry`.
+
+### Every live input has its owner's row
+
+- The circuit holds each live input to a live row, in `AssertInputOwners`. Only a zero-key note on the delegate rail goes without.
+- The circuit holds a ring note's nonzero key to the row's enrolled key under the tracking root. A default-ring note carries a key the ring never enrolled.
+- The circuit refuses a hidden owner's zero-key input, since anyone who holds the opening computes that nullifier.
+- The circuit holds live rows strictly ascending with zero rows last, except on the delegate rail, in `assertRowsAscending`.
+- The tests are `TestInputPredicateOnEveryRail`, `TestZeroKeyInputs`, `TestDelegateInputOwners`, `TestOwnerCapacity`, and `TestRowsAscend` in `prover/circuits/policy`.
 
 ### The signer set is the run SPP authorizes
 
-- The program reads the SPP owner run, deduplicates by first occurrence, and builds `signer_count` and `signer_chain`. The payer enters only when the run lists it, and the program refuses a demanded co-signer in the run with `CoSignerIsOwner`.
-- The program refuses an owner signer on the in-proof rail and a nonempty run on the entry key. It refuses an empty run under a policy on the signer rail.
-- The program accepts the payer, the run and the co-signer as anonymous signers, and refuses any other signer with `InvalidAnonymousSigner`.
-- The circuit holds each member past the count to zero, and chains zero at a count of zero, in `OpenSigners`. Both the in-proof and authority rails bind count zero.
-- The tests are `TestSignerSetStatementBindsTheRun`, `TestSignerSetVector` and `TestSignerRailSpends`.
+- The program reads the SPP owner run, deduplicates by first occurrence, and builds `signer_count` and `signer_chain`. Each entry must sign, and none can be a demanded co-signer.
+- The program refuses a note-spending frame with an empty run on the signer and public-owner rails.
+- On the hidden and public-owner rails the program refuses any signer other than the payer, the run, the co-signers and the funders, with `InvalidAnonymousSigner`.
+- The circuit holds each member past the count to zero, and chains zero at a count of zero. It holds the count to zero on the delegate rail.
+- The tests are `TestSignerSetVector` and `TestRailsSolve`.
 
-### Policy sections switch from the rail and `policy_hash`
+### Every live ring output reads its owner's row
 
-- The circuit derives every gate once in `Rail.Gates`. A nonzero `policy_hash` sets `Screened`, and `Outflow` is `Screened` off the authority rail.
-- The circuit activates the own pool under `Screened`, `KeyEscrow`, `Exempt` or `Delivery`, and the curator pool under `Screened` with a foreign source. `pooledTable.lookup` holds each active query to an active pool.
-- The program writes `policy_hash` from the ring account, zero on an audit-only ring.
-- A disabled section keeps its range checks, table decoding and lookups. The inactive witness is dummy slots, zero rows and index zero, sent as `RecordPool::unopened` and `unopenedRecordPool`.
-- The tests are `TestGateOffDropsItsPredicates`, and in `prover/circuits/policy` `TestPooledPolicyModes` and `TestPooledPolicyConstraintMatrix`.
+- The circuit holds a nonzero key to the row's key and a zero key to an absent row, in `AssertOutputOwners`. A literal zero is refused.
+- An exit reads `Ring = 0`, so it stands outside the rule.
+- The tests are `TestOutputPredicateOnEveryRail`, and `TestTrackingOpeningRefusals` in `prover/circuits/registry`.
 
-### Every spending owner is screened
+### Policy sections switch from the rail and two statement values
 
-- The circuit fixes `senders` per rail and never takes them as a witness. The signer rail reads the set. The in-proof and authority rails read their owner. The commitment key reads `sender` and the set. The entry key reads its one owner.
-- The circuit screens each sender under every sender rule in `assertSenderRules`, whether or not it receives an output.
-- The circuit holds the set to the key's sender rows under a policy. The confidential and commitment keys keep four rows, and the entry key keeps one. An audit-only ring takes the whole run.
-- `TestSignerRailSpends` holds `a policy refuses more owners than its sender rows` and `a co-owner off the policy is refused though it receives nothing`.
-- `sender on the frozen list` is a refusal, and `TestEveryCoOwnerIsScreened` sits in `prover/circuits/policy`.
+- The circuit derives every gate once in `Rail.Gates`. Except on the delegate rail, a nonzero `policy_hash` sets `Screened`. A nonzero `own_root` sets `Outflow`.
+- The program writes `policy_hash` and `own_root` through `RootRead::transfer`, so no prover bit clears a threshold.
+- The circuit holds `policy_hash`, `own_root` and `curator_root` to zero on the delegate rail, in `assertBypass`.
+- A disabled section keeps its range checks, table decoding and lookups over zero rows.
+- The test is `TestDelegateBypass`, and the tests in `prover/circuits/policy` are `TestPooledPolicyModes`, `TestThresholdsBindOffAPolicy` and `TestDelegateClearsTheMask`.
+
+### Every subject reads its lists from an authenticated record
+
+- The circuit answers each query through a pool bound to a root, present or proven absent, in `resolveSubjects`. No prover list bit reaches a rule.
+- `curatorColumns` projects list bits alone, and mint settings read the own pool.
+- The circuit forces a present owner's salt to open its row's `list_tag`, then reads the record at the forced salted key.
+- The program refuses a tracking root below a salted source's floor, in `LiveRoots::tracking`.
+- The tests in `prover/circuits/policy` are `TestPooledPolicyBindsSubjectReferences`, `TestRecordPoolBindsEveryActiveQuery`, `TestPublicAndPrivateBlocksAreTwoRules` and `TestPresentRowCannotSkipTheSaltedRead`.
+
+### Every owner, payment and input asset meets its rules
+
+- The circuit screens each live row under every sender rule, in `assertSenderRules`, whether or not that owner receives an output.
+- The circuit screens each live output and withdrawal leg by owner and asset within its guard, in `assertPaymentRules`.
+- A guard reads same-ring receipts net of the owner's own inputs, and exits and legs gross. Entry funding stays a receipt.
+- The circuit screens each live input's asset under every unconditional asset rule, in `assertInputAssetRules`. A zero-value note therefore cannot carry a delisted asset past the rules.
+- The tests in `prover/circuits/policy` are `TestEveryCoOwnerIsScreened`, `TestReceiptTable`, `TestAssetGuardNetsChange`, `TestZeroValueDelistedInputFailsAnUnconditionalAssetRule` and `TestPolicyWithdrawalBindingAndPadding`.
 
 ### The settled outputs are the audited outputs
 
-- The circuit opens each slot once in `OpenSlots`, then hands one `shared.Output` to delivery, the policy and the stream.
-- The circuit reopens `private_tx_hash` in `bindTransaction`, over `Utxo_i * Hash_i` of the inputs and of the outputs.
-- SPP binds `private_tx_hash` in its own proof. It holds each output's ring id to 0 or the ring's in `AssertRingMemberOrFree`, and to the ring's on the authority rail in `AssertRingMember`.
-- The circuit holds a live note's `DataHash` and `RingDataHash` to zero. The auditor rebuilds its commitment with neither.
-- The tests are `TestExitEntersBothProjections` and `TestDummySlotEntersTheOutputChainOnly`.
+- The circuit opens each slot once in `OpenSlots`, then hands one `shared.Output` to tracking, the policy and the stream.
+- The circuit reopens `private_tx_hash` in `bindTransaction`. A note called an address would leave the input chain SPP hashed.
+- SPP holds each output's ring id to 0 or the ring's in `AssertRingMemberOrFree`. Its authority rail holds it to the ring's in `AssertRingMember`, and its exit selector lets an output leave.
+- The circuit holds both data hashes to zero while `has_data` is clear, and opens them in the tail while it is set.
+- The tests are `TestDataOutputs`, and `TestDataTails` in `prover/circuits/audit`.
 
 ### Every published blinding derives from the sealed key
 
-- The circuit holds each published slot to `TXOB` under `CRBS(tx_viewing_sk, salt)` in `AssertBlinding`, a hidden dummy included. Omission removes a suffix, so no index moves.
-- SPP's `Transaction.Constrain` holds each output to `TXOB` under its private seed. The circuit publishes output slot 0 on every key, and SPP opens a nonzero published hash, so step 5 of the argument holds.
-- The circuit proves no freshness of `tx_viewing_sk`. Its derivation from the wallet is SDK policy, and the authority rail draws it at random.
-- The tests are `every output a dummy under an unrelated envelope key`, and in `prover/circuits/audit` `dummy blinding off the CRBS seed` and `TestDeliveredCompactCells`.
+- The circuit holds each published slot's blinding to the sealed key's derivation in `AssertBlinding`, a hidden dummy included. Omission removes a suffix, so no index moves.
+- The circuit holds `tx_viewing_sk` to its clamped encoding, so one byte string names the key the auditor recovers.
+- The circuit proves no freshness of that key or the salt. A resend repeats the key, and the salt gives it a different keystream.
+- The tests in `prover/circuits/audit` are `TestSealedKeyStaysClamped` and `TestResendUnderAnotherSaltSealsAnotherStream`.
 
 ### Compact padding removes a suffix and nothing else
 
-- The program parses `1 <= m <= N` and refuses a set exit or change bit at or past `m`. It refuses a frame of any other length.
+- The program parses `1 <= m <= N`, refuses a bitmap bit at or past `m`, and refuses a frame of any other length.
 - The circuit reads `SelectCount(m, 1, N)`. A live note at or past `m` is refused, and every statement cell past `m` multiplies by zero.
-- The circuit runs each omitted slot's gadgets on the base point path, so the key's cost does not fall with `m`.
+- The key's cost does not fall with `m`.
 - A hidden dummy is a published slot. Its hash enters `output_chain` and stays out of the private chain.
-- The tests are `TestConfidentialCompactSlots`, and in `prover/circuits/audit` `TestCompactPadding` and `TestDeliveredCompactCells`.
+- The tests are `TestCompactFrames` in `prover/circuits/audit`, and `bitmap_bits_past_the_count_are_refused` in `program-libs/interface/tests/transact.rs`.
 
-### A recipient identity is public only on the confidential family
+### The auditor stream opens every slot
 
-- The program takes `recipient_o` from the frame under a policy, and the anonymous family has no such element.
-- The circuit holds `recipient_o` to the slot owner under `Screened AND Published`, and to zero otherwise, in `assertRecipients`.
-- The tests are `recipient other than the slot owner` and `recipient published on the anonymous rail`.
+- The program supplies the auditor key from the ring account, and hashes the transmitted envelope, records and tails from the frame.
+- The circuit proves one key expansion and one `CTREncrypt` under `CRING/adt` over every region, in `SealStream`. `countedDigest` covers the transmitted envelope with its length as a tag.
+- The circuit derives each record's kind from the slot, holds the owner key to the owner identity, and holds the mint to the asset. A slot's counter is fixed by its index.
+- The auditor rebuilds each commitment and accepts only an exact match with the published hash. That check is the reader's, and the record proof makes it complete.
+- The tests in `prover/circuits/audit` are `TestStreamVector`, `TestStreamRangesAreTheSharedVector`, `TestEveryRecordFieldIsSealed`, `TestKindFollowsTheSlot`, `TestReaderRebuildsEverySlot`, `TestZeroAndEnrolledKeysReadApart` and `TestRecordAtAnotherSlotFailsTheReader`.
 
-### An output owed an escrow opens the owner's record
+### The envelope counts the spent notes and opens entry inputs
 
-- The program reads the `key_escrow` bit of `layout` from the frame and refuses a flag off the ring mode.
-- The circuit holds each output owner's `escrow_key` to `Poseidon(nullifier_pk, ct_hash)` in `assertEscrow`. `shared.EscrowOwed` waives this for `ZeroNullifierPk` only, and such a note still answers every other rule.
-- The escrow key names a ciphertext hash. Ring RPC checks the register key proof off chain, and no chain program verifies it.
-- A direct write by the storage authority can escrow a key the auditor cannot open.
-- The tests are `escrow of another key ciphertext`, `delegate output owner without a registered key` and `TestZeroNullifierKeyWaivesOnlyTheEscrow` in `prover/circuits/policy`.
+- The circuit seals `R` as the count of live inputs, and binds `no_spend` in the statement as `R == 0`.
+- The circuit refuses a default-ring input on a key with no entry capacity, since no evidence would open it.
+- On an entry key the circuit derives the default bits from the slots, and seals each default-ring input's opening per input.
+- No constraint binds a nullifier to an earlier record. The auditor's link is a reader check.
+- The tests in `prover/circuits/audit` are `TestRealInputCountIsSealed`, `TestNoSpendEqualsAZeroCount`, `TestDefaultInputNeedsEntryCapacity`, `TestDefaultBitsAndEvidenceFollowTheSlots`, `TestEntryEvidenceServesMixedOwners` and `TestReaderRebuildsADefaultInput`.
 
-### Each owner's debit stays within the asset's limits
+### Each owner's outflow stays within the asset's limits
 
-- The circuit computes `debit_j_a` in `constrainOutflow` from opened inputs and ring outputs, per sender and asset, clamped at zero. Credits never move between owners.
-- An exit reads `Ring = 0`, so it counts as leaving even when it pays its own owner.
-- The circuit holds each debit to a nonzero `cap`, and sets the approval verdict above a nonzero `cosign_above`. `approval_required` equals that verdict.
-- The program demands a co-signer on the approval bit, and refuses the bit on the authority rail.
-- SPP's range checks bind input amounts through their hash, and `UintBytesBE` binds output amounts. Both bounds keep the comparisons inside `debitBits`.
-- The tests are `TestDebitKeepsOwnersApart`, `TestSameOwnerExitCountsAsLeaving`, `TestDepositOffsetsASingleOwnersDebit` and `TestDebitVector` in `prover/circuits/policy`, and `approval bit clear past the co-sign bound`.
+- The circuit computes `debit`, `kept`, `charge` and `outflow` per row and asset in `constrainOutflow`. The rows' order alone fixes each share.
+- The circuit holds each asset's peak outflow to a nonzero `cap`. It consumes the statement's gross and does not rebuild it from legs.
+- The program folds settled legs into `PublicSlots`, and the gross per asset excludes deposits.
+- The tests in `prover/circuits/policy` are `TestDebitKeepsOwnersApart`, `TestSameOwnerExitCountsAsLeaving`, `TestDepositOffsetsASingleOwnersDebit`, `TestOutflowSettlesAtItselfAndRefusesOneBelow`, `TestOwnerPastTheCapBesideOneUnderIt`, `TestOutflowWithNothingLeaving`, `TestDebitVector` and `TestQuantitiesVector`.
 
-### Two owners never share a positive public net of a spent asset
+### The approval mask is proven and the program acts on it
 
-- The circuit reads input owners and assets the program cannot see. It refuses a positive public net of an asset a mixed-owner transfer spends. `assertNoMixedDeposit` runs on every ring.
-- An unrelated asset stays allowed, and so does a single owner.
-- The SDKs refuse the same frame with `MixedOwnerDeposit` and `RING_MIXED_OWNER_DEPOSIT`, ahead of proving.
-- The tests are `TestMixedOwnerDepositOfASpentAssetIsRefused` in `prover/circuits/policy`, `a mixed owner deposit of a spent asset`.
+- The circuit sets `OUTFLOW` from each peak and `WITHDRAWAL` from each gross, and holds the statement's `approval_mask` equal to them.
+- The program demands the class of each set bit, and refuses a set bit on the delegate rail.
+- The circuit binds a nonzero `approval_totals` to the outflow section's values under a blinder, and refuses one while the section is off.
+- The test is `TestApprovalTotalsReachTheStatement`, and the tests in `prover/circuits/policy` are `TestWithdrawalBitReadsTheGross`, `TestApprovalTotalsBindTheProvedOutflow`, `TestApprovalTotalsCoverPrivateAssets`, `TestApprovalTotalsCannotUnderstateOutflow` and `TestApprovalTotalsNeedTheOutflowSection`.
 
-### A withdrawal exemption reads the settled gross
+### Each signer's data-bearing outputs are counted
 
-- The program folds settled legs into `PublicSlots` in `program-libs/interface/src/codec/spp.rs`. The gross per asset excludes deposits.
-- The circuit holds each gross at or below the asset record's `withdrawal_threshold` under `exempt`, in `assertExemption`. It consumes the statement's gross and does not rebuild it from withdrawal witnesses.
-- The program waives the withdrawals co-sign class on the frame's flag, with verification still ahead of any SPP call.
-- The tests are `exempt gross above the threshold`, `exempt withdrawal of an asset without a record` and `exempt gross past u64`.
-- `an unexempt transfer ignores the gross` holds the gate off.
+- SPP takes one signature as authorization for every data-bearing output of that signer. A selective opening cannot show the sender named them all.
+- The circuit counts each run entry's live slots with a nonzero `data_hash`, and holds the packed element to those counts, in `SignerDataCounts`. An entry past the run reads zero.
+- A member past the last entry must own no data-bearing slot, since it has no bits to publish a count.
+- The element publishes which signers receive data-bearing outputs and how many.
+- The tests are `TestSignerDataCountsOnTheRails`, `TestSignerDataCountsRefusedOnTheRails`, `TestEveryKeyFitsTheSignerDataEncoding`, and `TestRunsPastTheLastEntry` in `prover/circuits/audit`.
 
 ### Roots come from the ring's registries
 
-- The program reads each root live at the frame's revision, from the account the ring binds. `RootRead::transfer` returns at least `Own` on an anonymous ring.
-- The program refuses an anonymous ring with no records at `Initialize`. It refuses a records registry of another ring at `Initialize` and at the records write, on every ring mode.
-- A curator source reads list bits only, and delivery reads the own root only. `curatorColumns` in `policy/record_pool.go` projects nothing else.
-- The tests are `screened under another own root`, `TestPooledPolicyBindsSubjectReferences` in `prover/circuits/policy`, and `programs/custom-ring/tests/rules/operator_rules.rs`.
+- The program reads each root live at the frame's revision, from the account the ring binds, through `RootRead`.
+- The program refuses a records registry of another ring at `Initialize`, and refuses a salted source that pins another tracking registry.
+- The tests are `programs/custom-ring/tests/rules/storage_root_rules.rs` and `programs/custom-ring/tests/rules/operator_rules.rs`.
 
-### An address enters a record only through the owner
+### An enrollment binds its owner and its seal
 
-- The program stores the owner-signed address in an `AddressAuthorization` account. `owner.is_signer()` is the only authorization, so a wallet and a CPI signing PDA take one path.
-- The program refuses a changed `nullifier_pk` at a later enrollment. It accepts a new `viewing_u` and moves `revision` by one.
-- The program computes `address_hash` from the account on a write kind `ADDRESS`, then sets `applied_revision`. A second apply of one revision is refused, so an authority cannot roll an address back.
-- The program builds a zero `address_hash` for every record and escrow write.
-- The circuit keeps the old hash under a zero entry hash, in `RecordWrite.apply`. A relink of a predecessor keeps it too.
-- `chain_start` binds the registry and batch revision. `queue_chain` binds the entry, so a root under any other address fails.
-- The tests are `TestAuthorityBatchCannotSubstituteAnAddress` in `prover/circuits/registry`, and `programs/storage/tests/lifecycle.rs`.
+- The program computes the member from the signer, and takes the ring id and the auditor key from the tracking registry it created.
+- The circuit holds the nullifier key and the list tag to nonzero secrets, and seals both secrets under `CRING/nfk`, in `RegisterKeyCircuit`.
+- The program computes each applied entry from its account and refuses an applied revision. `ApplyEnrollmentsCircuit` keeps the final fields on a rotation, and keeps the tree sorted.
+- The proof does not show that the secret came from a particular derivation. A wallet that seals another secret harms itself alone.
+- The tests in `prover/circuits/registry` are `TestRegisterKeySealsTheEnrolledSecret`, `TestRegisterKeyRefusals`, `TestApplyEnrollmentsAppliesEntriesInNamedOrder`, `TestApplyEnrollmentsRefusals` and `TestApplyEnrollmentsAtCapacity`, with `programs/storage/tests/lifecycle.rs`.
 
-### Address and escrow key name one nullifier key
+### A policy write applies in queue order
 
-- The circuit enforces this in the accepted state transition, `assertAddressMatchesEscrow`, so no account can be omitted and no alternate write path skips it.
-- The check fires on a write that sets the address or fills an empty escrow key and leaves both present. An unrelated write opens no preimage.
-- Each write reads the running state, so conflicting writes of one batch fail at the second.
-- `EnrollAddress::check_record` in `sdk-libs/sdk/src/operations/storage.rs` and Ring RPC's `KeyAgreement::check` refuse a disagreeing key early. Neither is the enforcement.
-- The tests are `TestAddressAndEscrowAgreeInEitherOrder`, `TestAddressAndEscrowMismatchIsRefused` and `TestPairingWriteWithoutPreimagesIsRefused` in `prover/circuits/registry`.
-
-### Each live anonymous ring slot pays an enrolled address
-
-- The circuit opens `address_hash(ring_id, owner, nullifier_pk, viewing key, revision)` against the owner's pool row, in `DeliverRecipients`. An absent record reads zero and never matches.
-- The ring id in that hash keeps a record of another ring from opening.
-- The circuit binds the sender's own row the same way, with the sender's nullifier key as a witness. A note under an older key can therefore spend into change at the bound address.
-- The circuit derives each change bit from the exact address match, and the statement carries the result as `change_bitmap`. No witness flag decides it.
-- The program refuses `change_bits` other than `0`, `0b1` or `0b11`, and refuses overlap with `exit_bits`.
-- An exit opens no address, because `Ring` is zero on it. A dummy and an omitted slot open none.
-- The tests are `TestSlotAddressBindsEveryKey`, `TestSenderAddressBindsTheBundleKey` and `TestChangeIsTheExactAddressMatch` in `prover/circuits/audit`, `a sender with no enrollment`.
-
-### Live anonymous recipient bodies and sender bundles encrypt the opened fields
-
-- The circuit holds a live ring recipient's body to scheme 11 under `CRING/rcp1` and its `CRDS` secret, in `assertRecipientBody`.
-- The circuit binds `slot.Asset` to the body's mint chunks through `HashChain`, so a recipient learns a mint it has never seen.
-- The circuit seals the bundle under `CRING/snd1` at index `m`, past every body's index. The bundle encrypts the same slot wires, recipient keys and `output_seed`.
-- The program hashes each body and the bundle from the frame, into `recipient_body_chain` and `sender_bundle_digest`.
-- A reader rebuilds the commitment with its own bound keys, so a match establishes ownership. The commitment is the only authentication, since the cipher has none.
-- The tests are `TestRecipientBodyEncryptsTheOpening`, `TestSenderBundleBindsTheSlots` and `TestAnonymousBodiesVector` in `prover/circuits/audit`.
-
-### Each anonymous tag has its form
-
-- The circuit holds a live recipient's tag to `Poseidon(CRRT, CRDS_i)` and the bundle's to `Poseidon(CRST, CRDS_m)`, in `DeliverRecipients`. The live flag is computed, so a slot cannot take the dummy path.
-- The circuit holds a hidden dummy's tag to `Poseidon(CRRT, s)` for a witness `s`, and proves no random sampling. Deliberate encoding through `s` stays open to a sender.
-- The circuit holds a change, exit or omitted cell to zero. The program refuses a nonzero tag on change and a recipient, dummy or bundle tag at or above `q`.
-- The program rebuilds `recipient_tag_chain` from the frame. SPP binds the same tag bytes through its external data hash, and does not prove what they are.
-- No proof shows that a reader found its tag. [Discovery](../spec/crypto/disclosure.md#discovery) names the forms.
-- The tests are `TestSlotTagIsDerived`, `TestSenderBundleTagIsDerived` and `TestRecipientTagChainBindsTheFrame` in `prover/circuits/audit`, and `program-libs/interface/tests/transact.rs`.
-
-### The statement binds reply bytes only
-
-- The program computes `reply_digest` from the frame's reply region, zero without the flag. It refuses the flag off the anonymous rail and a `reply_len` below 97.
-- The circuit carries `reply_digest` as a public element and constrains no plaintext. The statement fixes presence, length and bytes.
-- A reader stores a decrypted reply as a claim. `confirmReplyClaim` and the Rust `ReplyClaim` keep it unverified until the wallet confirms it.
-- The tests are `the reply digest binds alone`, and `sdk-libs/ts/test/state/ring-anonymous-sync.test.ts`.
-
-### A confidential body opens for its published key
-
-- The circuit holds a ring output's body to the opening under `CRING/bdy1` and the `CRDS` slot secret, in `deliver`. Under key escrow the equality stops at 72 bytes.
-- The circuit holds the slot's owner to the identity of the body's owner key.
-- The circuit refuses a zero amount. A body names no asset, and balance ties it to a settled mint.
-- The circuit constrains no plaintext on a hidden dummy's body. It binds only the bytes through `output_ciphertext_chain`.
-- A reader compares the decrypted owner and nullifier keys with its own before it accepts the note, in `RingDeliveryOpening::open` and `openRingDelivery`. A rebuilt commitment alone does not establish ownership.
-- The tests are `TestDeliveredAuditRefusals` in `prover/circuits/audit`.
-
-### The auditor stream opens every slot and names every spent note
-
-- The program supplies the auditor key from the ring account and hashes the transmitted envelope and records. It derives every length from family, layout, `N`, `m`, `n` and the exit bits.
-- The circuit proves one key expansion and one `CTREncrypt` under `CRING/adt1` over every region, in `SealStream`. `countedDigest` covers the transmitted envelope, with its length as a tag.
-- The circuit discloses `be32(hash_i)` per slot on the signer, in-proof, authority and commitment rails, and every opening on the entry key. A dummy reads zero.
-- The circuit holds a live entry input to one nullifier key with no data hash and no ring data hash. The auditor can then test each hash under the note's tree id, with either ring id.
-- The circuit proves no freshness of `eph_sk` or the salt. The Rust and TypeScript SDKs draw both per build, and `two_builds_of_one_transfer_draw_a_fresh_salt_and_a_fresh_ephemeral_key` pins Rust.
-- The tests are `TestStreamRangesAreTheSharedVector`, `TestStreamRegionsHoldTheirPlaintext`, `TestAnonymousEvidenceHoldsEveryInputHash`, `TestAnonymousEntryEvidenceOpensEachInput` and `TestDeliveredSenderEvidenceFollowsTheInputCount` in `prover/circuits/audit`.
-
-### Anonymous and exit records open their slot
-
-- The circuit derives `exits_bitmap` from the opened slots, and pins each layout flag outside its free set in `DecodeLayout`. The bitmap is the one record of exits.
-- The circuit opens a ring output's owner key, asset, amount and nullifier key on the anonymous family. It opens an exit's record on both families, and zeros on a dummy.
-- SPP publishes each exit owner, and the scheme 3 exit body stays unproven by the ring.
-- The tests are `TestAnonymousRecordsOpenTheirSlot`, `TestAnonymousRecordsKeepTheirKind`, `TestAnonymousRecordsStayOnTheirSlots`, `TestAnonymousAmountsStayBelowTwoTo64` and `TestLayoutRefusesTheClearBits` in `prover/circuits/audit`.
+- The program chains each entry from the instruction data, and classifies the grace from the masks.
+- `ApplyRecordsCircuit` keeps list bits outside each mask, moves mint settings only under the entry's flag, and keeps the records sorted.
+- The tests in `prover/circuits/registry` are `TestApplyRecordsAppliesTheQueueInOrder`, `TestApplyRecordsRefusals` and `TestMintRecordsMatchRustAndPreserveSettings`.
 
 ### A hidden sender stays apart from the public parties
 
-- The program supplies the identities of payer, signing co-signer and withdrawal destination as `party_0` through `party_2`.
-- The circuit refuses each nonzero party that equals `sender`, in `AssertAnonymousParties`.
+- The program supplies the identities of the payer, each co-signer, each funder and a hidden sender's withdrawal destination as party cells.
+- The circuit refuses each nonzero party that equals the hidden owner, in `AssertAnonymousParties`.
 - No layer checks a key only linked to the sender.
-- The tests are `party identity equal to the hidden sender`, and `TestAnonymousParties` in `prover/circuits/audit`.
+- The test is `TestAnonymousOwnerRails`.
 
-### A merge discloses its input list and keeps one owner
+### A merge seals its output and keeps one owner
 
-- The program sets `input_count` to the frame's nullifier count and checks the field count against the width. It reads `member_registry_root` on a key escrow ring only.
-- The circuit keeps one owner, one asset and the ring across every slot, and sums the amounts into the output. It reopens `private_tx_hash` with slot `i` as SPP's slot `i`.
-- The circuit holds `1 <= input_count <= width`, and every slot at or past the count to a dummy. A published slot can be a hidden dummy, so `input_count` never reads as a count of real inputs.
-- The circuit discloses `be32(hash_i)` per slot, 32 zero bytes at a dummy, under the `CR_MD` pad keyed by a key sealed to the auditor.
-- The circuit holds an escrowed owner's record to the nullifier key the merge spends under. `shared.EscrowOwed` waives this for `ZeroNullifierPk` alone.
-- SPP's merge proof binds the same `private_tx_hash` and nullifiers, and range-checks every amount. SPP's own merge ciphertext stays unverified.
-- The circuit refuses an owner equal to the payer or the co-signer on every ring mode, in `AssertAnonymousParties`, and holds `party_2` to zero. The program supplies the party identities.
-- A merge proves no list membership. It moves no value between parties.
-- The tests are `TestMergeRefusals`, `TestEscrowedMergeRefusals`, `TestMergePublishedCountHoldsHiddenDummies`, `TestMergeEscrowHoldsTheZeroKeyException` and `TestMergeParties` in `prover/circuits`.
+- The program forwards SPP's merge and reads the tracking root under the ring authority alone.
+- The circuit holds the output hash to the record's fields and the seed's blinding. It seals the record and the seed under `CRING/mrg`.
+- The circuit holds a nonzero key to its owner's row and refuses that owner as the payer. A zero key reads no row, and the statement names the owner for SPP's signature.
+- SPP's proof ties every input to that owner, asset and sum, and refuses a note with a data hash. No list, guard, cap or co-signer rule is proven.
+- The tests are `TestMergeRefusals`, `TestMergeRecordOffItsOpening`, `TestMergeTrackingRow`, `TestMergeModes`, `TestMergeZeroKeyIgnoresEveryRow`, `TestMergePayer` and `TestMergeRecordRebuildsTheOutput` in `prover/circuits`.
 
 ### A deposit opens its notes to the auditor
 
-- The program builds `context_hash` over the forwarded SPP data and supplies each root and `policy_hash` from its accounts.
-- The circuit binds each occupied slot's commitment to its 96 byte opening, and that opening's key to `owner_pk_hash`. Blindings stay in the `CRDB` domain.
-- The circuit screens the owner and asset rules through the section a transfer uses, runs no sender rule, and applies the escrow rule with the same `ZeroNullifierPk` waiver.
-- The tests are `TestDepositRefusals`, `TestDepositScreensEachAssetOnItsRecord`, `TestDepositScreensEachAssetOnItsCuratorRecord` and `TestDepositEscrowHoldsTheZeroKeyException` in `prover/circuits`.
+- The program builds `context_hash` over the forwarded SPP data, and supplies each root and `policy_hash` from its accounts.
+- The circuit binds each occupied slot's commitment to its opening record. Blindings stay in the `CRDB` domain.
+- The circuit holds each key to its owner's row, present or absent, in `AssertOutputOwners`. It screens each recipient and asset through the section a transfer uses. It runs no sender rule.
+- The path touches no nullifier tree, and a transfer with a deposit leg stays valid beside it.
+- The tests are `TestDepositSlotRefusals`, `TestDepositRecordOffItsOpening`, `TestDepositZeroKeyHoldsAtTheRootTheFrameNames`, `TestDepositScreensEachRecipientOnTheBlockList`, `TestDepositScreensEachAssetOnItsRecord` and `TestDepositReaderRebuildsEachNoteFromItsRecord` in `prover/circuits`.
 
-## Limits of the composition
+### A buffered frame is the frame its signers signed
 
-- A proof constrains a dummy tag by its preimage alone, so a tag can carry information the sender chooses.
-- A reader's coverage describes finalized history, and no proof backs it. [Reading through Ring RPC](audit-and-escrow.md#reading-through-ring-rpc) states what it claims.
+- `SettleBuffered` takes only the frame's digest as data, compares it with the buffer, and refuses another tag.
+- The program runs the same transfer path over the buffered bytes, and holds the SPP payer to the buffer's writer. The party check therefore covers the writer.
+- A self-CPI event carries the frame, so a reader recovers it after the buffer closes.
+- A buffer moves bytes and passes neither the address ceiling nor the CPI data ceiling.
+- The tests are `programs/custom-ring/tests/rules/buffer_rules.rs`.
+
+## What no proof covers
+
+- The circuit constrains no recipient body, slot tag, sender bundle or reply. `the_external_data_hash_binds_every_delivery_byte` in `program-libs/interface/tests/transact.rs` pins the byte binding.
+- A reader rebuilds a commitment under its own keys, and that match is its only authentication. [Recipient delivery](audit-and-recovery.md#recipient-delivery) states what recovers a bad tag and a bad body.
+- A reader's coverage describes finalized history, and no proof backs it. [Reading through Ring RPC](audit-and-recovery.md#reading-through-ring-rpc) states what it claims.
 - A hidden owner's privacy rests on the conditions in [privacy](privacy.md). No constraint covers them.
 
 ## Review practice
@@ -271,4 +232,4 @@ For a predicate test, construct an invalid transaction and recompute its stateme
 
 Compare ordered elements and counts before hashes when you test across languages. A fixture that repeats the circuit's layout cannot prove agreement with another language. Use compiled BN254 constraints and proof verification alongside solve tests, and check the verifier's public input and commitment structure for each key.
 
-Treat circuit capacity, SPP shape support and serialized transaction fit as separate limits. Measure the assembled frame with its payer, co-signer, settlement accounts and header. An SDK size refusal does not establish a circuit or program restriction.
+Treat circuit capacity, SPP shape support and serialized transaction fit as separate limits. Measure the assembled frame with its payer, co-signer, settlement accounts and header. A shape with no key is a catalog choice, and an SDK size refusal does not establish a circuit or program restriction.
