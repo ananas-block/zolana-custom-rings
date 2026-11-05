@@ -1,3 +1,4 @@
+import { CredentialRead } from "../../../src/protocol/codec/credential-read.js";
 import { frameDigest, settleBufferedData } from "../../../src/protocol/transaction/frame-buffer.js";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -1079,7 +1080,15 @@ describe("RpcTransactionOrigin", () => {
       tamper = false,
       wrapperTag: number = RingInstructionTag.merge,
     ) {
-      const request = { ...vectorFrame, authority };
+      // An owner signed merge reads no credential, the ring authority reads the vector's root.
+      const request = {
+        ...vectorFrame,
+        authority,
+        credentialRead:
+          authority === MergeRingAuthority.ownerSigned
+            ? CredentialRead.empty()
+            : vectorFrame.credentialRead,
+      };
       const forwarded = forwardedMergeData(
         request,
         sppMergeBody(request.compactBody),

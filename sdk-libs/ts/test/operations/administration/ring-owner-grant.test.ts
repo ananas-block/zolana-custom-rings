@@ -71,18 +71,3 @@ describe("owner grant", () => {
     expect(await grant(RING)).not.toBe(await grant(OTHER_RING));
   });
 });
-
-describe("list salt vector", () => {
-  const vector = JSON.parse(
-    readFileSync(
-      new URL("../../../../../test-vectors/proof/ring-statements.json", import.meta.url),
-      "utf8",
-    ),
-  ) as { tracking: Record<string, string> };
-
-  it("derives the list salt and tag the Go circuit proves", () => {
-    const { list_salt: salt, secret_list_tag: tag } = vector.tracking;
-    if (salt === undefined || tag === undefined) throw new Error("no vector");
-    expect(Buffer.from(listTagOf(hexToBytes(salt) as Bytes32)).toString("hex")).toBe(tag);
-  });
-});

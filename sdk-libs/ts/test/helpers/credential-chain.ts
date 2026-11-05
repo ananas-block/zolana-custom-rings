@@ -45,6 +45,7 @@ import {
   type AuditCredential,
 } from "../../src/protocol/membership/credential.js";
 import { FIELD_MAX } from "../../src/protocol/membership/member-opening.js";
+import { CredentialRoots } from "../../src/protocol/codec/credential-read.js";
 import { stateTreeAt } from "./state-tree.js";
 
 const TREE = treeAddress(ADDRESS_TREE_ID);
@@ -255,4 +256,29 @@ export class CredentialChain {
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((byte, at) => byte === right[at]);
+}
+
+/**
+ * A vector's flat `credential_fields`, `[owner, address_root, tree_id_0, root_0, ...]`, hex with
+ * or without `0x`. `stateOnly` reads a merge table, `[owner, tree_id, root]`.
+ */
+export function vectorCredentialRoots(
+  fields: readonly string[],
+  stateOnly = false,
+): CredentialRoots {
+  const elements = fields.map(
+    (value) => Uint8Array.from(Buffer.from(value.replace(/^0x/, ""), "hex")) as Bytes32,
+  );
+  const [ownerHash, ...rest] = elements;
+  const addressRoot = stateOnly ? ZERO_32 : rest.shift();
+  if (ownerHash === undefined || addressRoot === undefined || rest.length % 2 !== 0)
+    throw new Error("credential fields");
+  return CredentialRoots.read({
+    ownerHash,
+    addressRoot: addressRoot as Bytes32,
+    stateRoots: Array.from({ length: rest.length / 2 }, (_, pair) => ({
+      treeId: Number(BigInt(`0x${Buffer.from(rest[2 * pair] as Bytes32).toString("hex")}`)),
+      root: rest[2 * pair + 1] as Bytes32,
+    })),
+  });
 }

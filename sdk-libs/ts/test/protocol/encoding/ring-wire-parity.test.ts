@@ -24,7 +24,7 @@ import {
   fittedSpend,
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
-import { CredentialRoots } from "../../../src/protocol/codec/credential-read.js";
+import { vectorCredentialRoots } from "../../helpers/credential-chain.js";
 import {
   RingTransactData,
   railShapes,
@@ -189,14 +189,7 @@ describe("transfer_statement.json", () => {
         policyHash: field(vector.policy_hash),
         ownRoot: field(vector.own_root),
         curatorRoot: field(vector.curator_root),
-        // The credential owner, address root and padded state table, Rust `CredentialRoots`.
-        credentials: CredentialRoots.read({
-          ownerHash: field((vector as unknown as { credential_owner: string }).credential_owner),
-          addressRoot: field((vector as unknown as { address_root: string }).address_root),
-          stateRoots: (
-            vector as unknown as { state_roots: readonly { tree_id: number; root: string }[] }
-          ).state_roots.map((entry) => ({ treeId: entry.tree_id, root: field(entry.root) })),
-        }),
+        credentials: vectorCredentialRoots(vector.credential_fields),
       },
       publicAssets: vector.public_assets.map(field),
       publicAmounts: vector.public_amounts.map(field),

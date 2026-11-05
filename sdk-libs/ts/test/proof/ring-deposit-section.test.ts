@@ -151,7 +151,7 @@ describe("readDepositSection", () => {
 });
 
 describe("relayListSalts", () => {
-  const salts = [{ owner: OWNER(), salt: SALT }];
+  const salts = [{ owner: new Uint8Array(32).fill(9) as Bytes32, salt: SALT }];
 
   it("sends a salt to a relay on a ring reading a salted list", () => {
     expect(relayListSalts(saltedRing(), salts)).toEqual(salts);

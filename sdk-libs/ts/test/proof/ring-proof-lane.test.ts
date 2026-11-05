@@ -58,8 +58,10 @@ import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
 import type { AuditCredential } from "../../src/protocol/membership/credential.js";
 import { CredentialRoots } from "../../src/protocol/codec/credential-read.js";
+import { vectorCredentialRoots } from "../helpers/credential-chain.js";
 import {
   ringProofRequestBody,
+  type CredentialLeafProofInput,
   type CredentialOpeningProofInput,
   type TransferProofRequest,
 } from "../../src/rpc/prover/ring.js";
@@ -349,8 +351,8 @@ describe("deposit.json", () => {
     amounts: readonly number[];
     auditor_pubkey: string;
     eph_pk: string;
-    tracking_root: string;
-    ring_id?: string;
+    ring_id: string;
+    credential_fields: readonly string[];
     own_root: string;
     curator_root: string;
     policy_hash: string;
@@ -370,9 +372,8 @@ describe("deposit.json", () => {
       })),
       auditorPk: field(entry.auditor_pubkey) as unknown as Bytes33,
       ephPk: field(entry.eph_pk) as unknown as Bytes33,
-      // The vector predates the credential table, Rust regenerates it with the switch.
-      ringId: field(entry.ring_id ?? entry.context_hash),
-      credentials: CredentialRoots.empty(entry.owner_utxo_hashes.length),
+      ringId: field(entry.ring_id),
+      credentials: vectorCredentialRoots(entry.credential_fields),
       registry: {
         ownRoot: field(entry.own_root),
         curatorRoot: field(entry.curator_root),
@@ -383,6 +384,27 @@ describe("deposit.json", () => {
     expect(bytesToHex(hashChain4(elements))).toBe(entry.public_input_hash);
   });
 });
+
+/** Go `CredentialLeafParams` as a vector writes it. */
+function leafOf(leaf: Readonly<Record<string, unknown>>): CredentialLeafProofInput {
+  const at = (key: string): Bytes32 => field(leaf[key] as string);
+  const pair = (key: string): readonly [Bytes32, Bytes32] => {
+    const [first = "", second = ""] = leaf[key] as readonly string[];
+    return [field(first), field(second)];
+  };
+  return {
+    member: at("member"),
+    nullifierPk: at("nullifierPk"),
+    listTag: at("listTag"),
+    aud: pair("aud"),
+    eph: pair("eph"),
+    ctHash: at("ctHash"),
+    blinding: at("blinding"),
+    treeSlot: leaf["treeSlot"] as number,
+    stateIndex: BigInt(leaf["stateIndex"] as number),
+    statePath: (leaf["statePath"] as readonly string[]).map(field),
+  };
+}
 
 describe("merge.json", () => {
   type Request = Readonly<Record<string, unknown>> &
@@ -403,8 +425,16 @@ describe("merge.json", () => {
         ringProgramId: text("ringProgramId"),
         auditorPk: text("auditorPk"),
         payer: text("payer"),
-        // The vector predates the credential owner and state root, Rust regenerates it.
-        credentialRoots: CredentialRoots.empty(1),
+        credentialRoots: CredentialRoots.read({
+          ownerHash: text("credentialOwner"),
+          addressRoot: new Uint8Array(32) as Bytes32,
+          stateRoots: [
+            {
+              treeId: (request["stateRoot"] as { treeId: number }).treeId,
+              root: field((request["stateRoot"] as { root: string }).root),
+            },
+          ],
+        }),
         ephSk: text("ephSk"),
         ownerKey: text("ownerKey"),
         ownerPkHash: text("ownerPkHash"),
@@ -415,6 +445,7 @@ describe("merge.json", () => {
         seed: text("seed"),
         outputTreeId: text("outputTreeId"),
         outputRingDataHash: text("outputRingDataHash"),
+        ...(request.credential === null ? {} : { credential: leafOf(request.credential) }),
       }),
     ).toEqual(request);
   });

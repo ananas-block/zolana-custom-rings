@@ -1,4 +1,5 @@
-import { CredentialRead, CredentialRoots } from "../../src/protocol/codec/credential-read.js";
+import { CredentialRead } from "../../src/protocol/codec/credential-read.js";
+import { vectorCredentialRoots } from "../helpers/credential-chain.js";
 import { describe, expect, it } from "vitest";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
@@ -58,7 +59,14 @@ describe("the merge record vector", () => {
         publishedOwner: zeroMode
           ? (hex(request.ownerPkHash) as Bytes32)
           : (new Uint8Array(32) as Bytes32),
-        credentials: CredentialRoots.empty(1),
+        credentials: vectorCredentialRoots(
+          [
+            request.credentialOwner,
+            request.stateRoot.treeId.toString(16).padStart(64, "0"),
+            request.stateRoot.root,
+          ],
+          true,
+        ),
       };
       expect(mergePublicInputElements(input).map((element) => `0x${bytesToHex(element)}`)).toEqual(
         testCase.elements,

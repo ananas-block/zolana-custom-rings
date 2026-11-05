@@ -304,13 +304,13 @@ export const RingProgramError = Object.freeze({
   framePayerNotWriter: 8526,
   invalidSignerDataCounts: 8527,
   tooManyAnonymousParties: 8528,
-  invalidCredentialPda: 8529,
-  invalidEnrollmentAccounts: 8530,
+  absenceRootBelowFloor: 8535,
+  invalidAddressCheckpoint: 8534,
   invalidAddressTree: 8531,
+  invalidCredentialPda: 8529,
   invalidCredentialRead: 8532,
   invalidCredentialRoots: 8533,
-  invalidAddressCheckpoint: 8534,
-  absenceRootBelowFloor: 8535,
+  invalidEnrollmentAccounts: 8530,
   saltedSourceOtherRing: 8536,
 } as const);
 
@@ -347,9 +347,9 @@ export const StorageProgramError = Object.freeze({
   invalidReaderKey: 9032,
   invalidAuditorKey: 9033,
   invalidAssetWrite: 9034,
-  privateWriteWithoutRing: 9035,
   invalidCredentialRead: 9036,
   invalidPrivateRing: 9037,
+  privateWriteWithoutRing: 9035,
 } as const);
 
 export class RingError extends Error {

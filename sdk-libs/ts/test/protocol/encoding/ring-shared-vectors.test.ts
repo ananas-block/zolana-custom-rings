@@ -1,5 +1,5 @@
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
-import { CredentialRoots } from "../../../src/protocol/codec/credential-read.js";
+import { vectorCredentialRoots } from "../../helpers/credential-chain.js";
 import {
   credentialElements,
   registerKeyHash,
@@ -233,22 +233,6 @@ describe("ring-statements.json", () => {
           sender: field(vector.sender ?? "00".repeat(32)),
         };
 
-  /** The credential owner, address root and padded state table the statement binds. */
-  type CredentialVector = Readonly<{
-    credential_owner: string;
-    address_root?: string;
-    state_roots: readonly Readonly<{ tree_id: number; root: string }>[];
-  }>;
-  const vectorRoots = (vector: CredentialVector): CredentialRoots =>
-    CredentialRoots.read({
-      ownerHash: field(vector.credential_owner),
-      addressRoot: field(vector.address_root ?? "00".repeat(32)),
-      stateRoots: vector.state_roots.map((entry) => ({
-        treeId: entry.tree_id,
-        root: field(entry.root),
-      })),
-    });
-
   const statementOf = (vector: TransferCase, outputs: TransferStatement["outputs"]) => ({
     head: {
       firstNullifier: field(vector.first_nullifier),
@@ -276,7 +260,7 @@ describe("ring-statements.json", () => {
       policyHash: field(vector.policy_hash),
       ownRoot: field(vector.own_root),
       curatorRoot: field(vector.curator_root),
-      credentials: vectorRoots(vector as unknown as CredentialVector),
+      credentials: vectorCredentialRoots(vector.credential_fields),
     },
     publicAssets: vector.public_assets.map(field),
     publicAmounts: vector.public_amounts.map(field),
@@ -328,9 +312,9 @@ describe("ring-statements.json", () => {
       chainStart: field(apply.chain_start),
       chainEnd: field(apply.chain_end),
       count: BigInt(apply.count),
-      credentialWrites: (apply as unknown as { credential_writes: number }).credential_writes,
-      privateRingId: field((apply as unknown as { private_ring_id: string }).private_ring_id),
-      credentials: vectorRoots(apply as unknown as CredentialVector),
+      credentialWrites: apply.credential_writes,
+      privateRingId: field(apply.private_ring_id),
+      credentials: vectorCredentialRoots(apply.credential_fields),
     };
     expect(hexes(applyRecordsStatementElements(applyStatement))).toEqual(apply.elements);
     expect(hex(applyRecordsStatementHash(applyStatement))).toBe(apply.public_input_hash);
@@ -406,16 +390,10 @@ describe("transfer key selection", () => {
 
   it("holds the pools of pool_capacity.json", () => {
     expect(poolCapacity.keys).toEqual(
-      transferKeys().map((circuit) => {
-        const { own, curator, credentials } = transferPoolCapacity(circuit);
-        // The vector names the credential capacity by Rust `RecordPools::tracking`.
-        return {
-          key: transferCircuitType(circuit).replaceAll("-", "_"),
-          own,
-          curator,
-          tracking: credentials,
-        };
-      }),
+      transferKeys().map((circuit) => ({
+        key: transferCircuitType(circuit).replaceAll("-", "_"),
+        ...transferPoolCapacity(circuit),
+      })),
     );
   });
 
