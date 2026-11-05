@@ -1,171 +1,144 @@
 # Disclosure
 
-A ring transfer opens to the auditor through one AES-256-CTR stream and its delivered bodies. The stream's envelope region seals the transaction viewing secret and names the spent notes. Its record regions open the outputs that carry no delivered body. [Spec](../../spec.md) [Envelope](envelope.md)
+A ring transfer opens to the auditor through one AES-256-CTR stream, the auditor message. Its envelope seals the transaction viewing secret and the count of spent notes. Its records open every published output slot. Recipient bodies, tags, replies and the sender bundle stay outside every proof. [Spec](../../spec.md) [Envelope](envelope.md)
 
 ## Verified audit recovery
 
-Every published slot of a transfer whose proof verifies opens for the auditor. One ring disclosure ciphertext per slot is the guarantee.
+Every published slot of a transfer whose proof verifies opens for the auditor from its own record. The record is the guarantee, whatever the slot's recipient body contains.
 
-- An exit's scheme 3 recipient body is a zolana ciphertext, and no ring proof binds it.
-- An evidence entry can name a note the auditor has not opened. An unseen note withholds no output slot.
-- A key escrow slot needs its owner's nullifier key to rebuild its commitment. Until the auditor reads the owner's escrow record, a delivered slot gives the proven owner key, amount and blinding. An exit gives its asset and amount, its blinding from `seed_out`, and its owner from the owner key SPP publishes. A delivered body omits the asset, so the asset of a ring output stays unknown until the key arrives.
+- A ring output, an exit and a dummy each have one record. An exit's record opens the created default-ring note, its owner key included.
+- A spent ring note has no record. The auditor links its nullifier from an opening it already holds and the owner's enrolled secret. A note the auditor never opened stays unlinked until its opening arrives, and it withholds no output slot.
+- A spent default-ring note opens in full in the envelope of an entry key, and no secret is disclosed.
+- A wrong recipient body leaves the auditor's record unchanged. Ring RPC serves the owner its opening from that record, see [auditor fallback](../../design/audit-and-recovery.md#auditor-fallback).
 
 ## Discovery
 
-The proof holds each anonymous tag to one of these forms:
+Each published slot carries an owner tag. A non-exit slot's tag is an unproved hint: no proof constrains it, and SPP's external data hash binds only its bytes. A frame carries the low 8 bytes of a non-exit tag, and the program restores the 24 leading zero bytes before SPP reads it.
 
-```text
-recipient_tag_i = Poseidon(CRRT, CRDS_i)     live recipient
-bundle_tag      = Poseidon(CRST, CRDS_m)     sender bundle
-dummy_tag       = Poseidon(CRRT, s)          hidden dummy, s a witness
-```
+| Slot | Tag |
+|---|---|
+| Ring output, confidential frame | low 8 bytes of the recipient's `viewing_u` |
+| Dummy, confidential frame | low 8 bytes of a fresh random key's `u` |
+| Ring output, anonymous frame | low 8 bytes of `Poseidon(CRRT, CRDS_i)` |
+| Change, anonymous frame | zero |
+| Dummy, anonymous frame | low 8 bytes of `Poseidon(CRRT, s)`, `s` drawn uniform below `q` |
+| Exit | SPP's 32-byte owner tag, which SPP's proof holds to the exit's owner |
+| Sender bundle | `Poseidon(CRST, CRDS_m)`, 32 bytes |
 
-`CRDS_i` is the [slot secret](hashing.md#slot-secret) the body already proves, and no second agreement runs. A change slot, an exit and an omitted slot chain a zero cell, and the program refuses a nonzero tag on change. An exit's `owner_tag` stays its scheme 3 owner key. `recipient_tag_chain` binds each cell and the bundle tag.
-
-The preimage constrains a dummy tag and does not prove random sampling. It stops a sender selecting an arbitrary target tag without finding a preimage. It does not stop deliberate encoding through witness selection, so a dummy tag can carry information the sender chooses.
-
-The proof shows what a tag is, and it does not show that a reader found it. [Wallet scanning](../../design/audit-and-escrow.md#wallet-scanning) states how a reader finds its notes.
+`CRDS_i` is the [slot secret](hashing.md#slot-secret) that also keys slot `i`'s body. A wrong tag hides no decryptable note, because a full scan tries every body without a tag. [Wallet scanning](../../design/audit-and-recovery.md#wallet-scanning) states how a reader finds its notes.
 
 ## Auditor message
 
-The auditor message data, under the auditor view tag, is:
+The auditor message is SPP's last message, under the auditor's `u` as its view tag. Its data is:
 
 ```text
-0x04 || eph_u || envelope_ct || record_ct...
+0x04 || tx_viewing_u || envelope_ct || record_ct_0 .. record_ct_{m-1} || tail_ct_0 .. tail_ct_{m-1}
 ```
 
-`record_ct...` holds the records of the slots that have one, in slot order. A delivered body stays in the slot frame under scheme 10, its length fixed by the layout's key escrow bit. A recipient body stays in its slot under scheme 11.
+`tx_viewing_u` is SPP's `tx_viewing_pk` without its tag. Each record ciphertext has 105 bytes. The tails are present exactly when `has_data` is set, 64 bytes each.
 
-`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. Family, layout, `N`, `m`, `n`, the exit and change bits and `reply_len` fix every length. The program refuses a frame of any other length.
+`n` is the published input count, the frame's nullifier count. It is never the key capacity and never a private live count. The key's input class and entry flag, its output capacity `N`, `m`, `n`, `has_data`, the exit and bodiless bitmaps, each body length under `has_data` and `reply_len` fix every length. The program refuses a frame of any other length.
 
 ## Stream regions
 
-The stream has one key, one nonce and one `CTREncrypt` call in the circuit over the capacity-sized plaintext. Each region is zero padded to a multiple of 16 bytes, so it starts on its own counter and no counter serves two regions. The prover and the readers use a keystream. The frame carries only transmitted bytes, and padding and unused ranges never leave the prover.
+The stream has one key, one nonce and one `CTREncrypt` call in the circuit over the capacity-sized plaintext. Each region is zero padded to a multiple of 16 bytes, so it starts on its own counter and no counter serves two regions. The key alone fixes every counter, so a reader decrypts slot `i` with no other slot. The frame carries only transmitted bytes, and padding and unpublished slots never leave the prover.
 
 | Region | Start counter | Maximum blocks | Transmitted bytes |
 |---|---|---|---|
-| Envelope | `2` | `2 + E_max(key)` | `32 + evidence_len` |
-| Record of slot `i` | `R0 + i * R`, `R0 = 2 + 2 + E_max(key)` | `R(family)` | the record length of the slot's kind, none for a delivered slot |
+| Envelope | `2` | `E` | `33`, or `41 + 200 n` on an entry key |
+| Record of slot `i` | `R0 + 7 i`, `R0 = 2 + E` | `7` | `105` for `i < m` |
+| Tail of slot `i` | `T0 + 4 i`, `T0 = R0 + 7 N` | `4` | `64` for `i < m` under `has_data` |
 
-`E_max(key)` is `ceil(max_evidence_len(key) / 16)` at the key's input class `c`:
-
-| Key | `max_evidence_len` |
-|---|---|
-| Confidential family | `32 * c` |
-| Anonymous, commitment key | `32 * c` |
-| Anonymous, entry key | `64 + 104 * c` |
-
-`R(family)` is 7 on the anonymous family and 5 on the confidential family.
+`E = ceil(33 / 16)` on a key without entry capacity, and `E = ceil((41 + 200 c) / 16)` on an entry key of input class `c`.
 
 ## Envelope plaintext
 
-The envelope plaintext is `tx_viewing_sk || evidence`.
+```text
+tx_viewing_sk || u8(R)                                                  key without entry capacity
+tx_viewing_sk || u8(R) || u64be(default_input_bits) || entry_input * n  entry key
+entry_input = owner_key || fe32(nullifier_pk) || u64be(amount) || mint || fe32(blinding) || fe32(data_hash) || fe32(ring_data_hash)
+```
 
-| Rail or key | Evidence |
-|---|---|
-| Signer, in-proof and authority rails | `fe32(input_hash_i)` for `i < n` |
-| Anonymous, commitment key | `fe32(input_hash_i)` for `i < n` |
-| Anonymous, entry key | `sender_key \|\| fe32(sender_nullifier_pk) \|\| (fe32(input_hash_i) \|\| u64be(amount) \|\| fe32(asset) \|\| fe32(blinding)) * n` |
-
-Slots at or past `n` stay absent. A published dummy reads as zeros. Spent notes come first in SPP's order, so entry `k` names nullifier `k`.
+`R` counts the spent notes among the published inputs. Dummies come last in SPP's order, so a nullifier at position `k < R` is a spend and one at `k >= R` is padding. Bit `k` of `default_input_bits` is set exactly when input `k` is a default-ring note. `entry_input_k` opens that note in 200 bytes and is all zero on every other input. `mint` is the 32-byte mint address, and the proof holds the input's asset to it.
 
 ## Spent notes
 
-- Every rail discloses each spent note's full hash, so one evidence entry fits one note.
-- The auditor matches each hash among the ring notes and merge outputs it opened. No match leaves the input unnamed with its hash, and it holds the row as unresolved.
-- Under the commitment key an unnamed first note leaves the sender unnamed, because only that note binds the owner key. Its outputs open, and a later read with the note names the sender.
-- The entry key serves a spend of default-ring notes, which the auditor never opened. It discloses every spent note's amount, asset and blinding, and the sender's key and nullifier key. The circuit holds every entry input to that one nullifier key.
-- The circuit does not hold an entry input to ring id 0. The reader tries the ring id and the default id against each hash.
+- A key without entry capacity refuses a default-ring input, since no evidence would open it.
+- The auditor recomputes SPP's nullifier of a note from the opening it already read and the owner's secret from enrollment, or zero under the zero nullifier key, then matches SPP's published list. A match links the spend.
+- No constraint binds a nullifier to an opening. A real nullifier with no match stays unresolved and never reads as padding.
+- An entry input discloses its owner key, nullifier key, amount, mint, blinding and both data hashes, and no nullifier secret. Each input carries its own owner and key, so one frame spends default-ring notes of several owners.
 
 ## Records
 
-| Slot kind | Record plaintext | Bytes |
-|---|---|---|
-| Anonymous ring output | `owner_key \|\| fe32(asset) \|\| u64be(amount) \|\| fe32(nullifier_pk)` | 104 |
-| Exit | `fe32(asset) \|\| u64be(amount) \|\| fe32(nullifier_pk)`, the last field omitted under key escrow | 72 or 40 |
-
-An exit's owner stays where zolana publishes it.
-
-## Delivered body
-
 ```text
-fe32(blinding) || u64be(amount) || owner_key || fe32(nullifier_pk)
+record = u8(kind) || u64be(amount) || owner_key || mint || fe32(nullifier_pk)   105 bytes
+tail   = fe32(data_hash) || fe32(ring_data_hash)                                 64 bytes
 ```
 
-The last field is omitted under key escrow, so a body has 72 bytes under key escrow and 104 otherwise. The secret is the [slot secret](hashing.md#slot-secret) under `CRING/bdy1`. The recipient and the auditor read the same bytes.
+| `kind` | Slot | Plaintext |
+|---|---|---|
+| `0` | dummy | all zero |
+| `1` | ring output | the slot's opening |
+| `2` | exit | the slot's opening |
 
-The body omits the asset. A reader tries each asset it knows against the commitment. The recipient also compares the decrypted owner key and nullifier key with its own before it accepts the note. A rebuilt commitment alone does not establish ownership. Under key escrow the body has no nullifier key, so the recipient compares the owner key and rebuilds the commitment with its own nullifier key.
+The proof derives `kind` from the domain and ring id the slot's hash commits, so no prover choice passes a note as a dummy. `owner_key` is the raw key whose `solana_owner_identity` the commitment hashes, and `mint` the raw mint whose `hash_bytes` is its asset. The auditor names an owner and an asset with no directory. The record omits the blinding, which the sealed key derives. A tail is zero on a dummy, and a clear `has_data` holds both data hashes of every slot to zero.
 
 ## Recipient body
 
-Scheme 11 keys each anonymous live ring slot, under `CRING/rcp1` and the slot secret of the owner's record-bound viewing key:
+The SDKs seal one form on every frame, under `CRING/rcp` and the slot secret of the recipient's viewing key:
 
 ```text
-fe32(blinding) || u64be(amount) || mint
+fe32(blinding) || u64be(amount) || mint                                         72 bytes
+|| u8(has_ring_data) || ring_data_hash? || (data_hash || application_data)?    only when either part is present
 ```
 
-The body has 72 bytes. `mint` is the 32-byte address, and the proof holds the slot's asset to its chunks. The recipient rebuilds the commitment with its registered nullifier key, then with `ZERO_NULLIFIER_PUBKEY`. A rebuilt commitment establishes ownership, because the body names no key. A change or exit slot has no body. A hidden dummy carries 72 random bytes.
+`ring_data_hash` follows when `has_ring_data` is `1`. `data_hash` and the application data follow when the note's `data_hash` is nonzero. The commitment covers both, so the reader needs them to rebuild it.
+
+The body travels as SPP output data under scheme 10, `u16le(body_len) || body || reply`. No proof constrains it. A recipient rebuilds the commitment under its enrolled nullifier key, then under `ZERO_NULLIFIER_PUBKEY`, and accepts the note only on a match. A rebuilt commitment establishes ownership, because the body names no key. A dummy carries 72 random bytes. A slot in the bodiless bitmap carries no SPP data, and an exit carries zolana's scheme 3 body instead.
 
 ## Reply metadata
 
-A frame opts in with `REPLY_METADATA`, on the anonymous rail only. The reply follows its body in the slot, under `CRING/rpl1` and the same slot secret:
+A frame opts in with `REPLY_METADATA`, on an anonymous frame only. The reply follows its body inside the slot's scheme 10 data, under `CRING/rpl` and the same slot secret:
 
 ```text
 viewing_u || owner_key || nullifier_pk || wincode(Data), zero padded to reply_len
 ```
 
-`reply_len` is one length per frame, at least 97. Every body-bearing slot carries one, and a slot with no reply or a hidden dummy carries random bytes of that length. The statement binds the bytes through `reply_digest` and proves nothing about their meaning. A reply is an unauthenticated claim about the sender. A reader never turns it into a verified sender identity.
+`reply_len` is one length per frame, at least 97. Every body-bearing slot carries one, and a slot with no reply or a dummy carries random bytes of that length. SPP's external data hash binds the bytes, and no proof reads their meaning. A reply is an unauthenticated claim about the sender. A reader never turns it into a verified sender identity.
 
 ## Sender bundle
 
-Scheme 12 is the first SPP message, under `CRING/snd1` and the slot secret at `i = m` of the sender's record-bound viewing key:
+Scheme 9 is the first SPP message of an anonymous frame, under `CRING/snd` and the slot secret at `i = m` of the sender's viewing key:
 
 ```text
 mint0 || u64be(amount0) || u64be(amount1) || output_seed || recipient_u * m
 ```
 
-The bundle has `80 + 32 m` bytes. `mint0` and `amount0` are slot 0's when bit 0 of `change_bits` is set, else zero. `amount1` is slot 1's when bit 1 is set, else zero, and that slot's asset is native SOL. `recipient_u_i` is the record-bound key on a live slot that is not change, and zero on change, exit and dummy. The reader rebuilds change from `change_bits`, its own address and `TXOB(n0, output_seed, i)`.
-
-## One ring disclosure ciphertext per output
-
-| Slot kind | Ciphertext | Bytes |
-|---|---|---|
-| Confidential ring output | delivered body | 72 or 104 |
-| Anonymous ring output | auditor record | 104 |
-| Exit, either family | auditor record | 72 or 40 |
-| Hidden dummy, confidential family | random delivered body | 72 or 104 |
-| Hidden dummy, anonymous family | auditor record over a zero plaintext | 104 |
-
-The anonymous family pins key escrow to `0`, so its exit record has 72 bytes.
+The bundle has `80 + 32 m` bytes. `mint0` and `amount0` are slot 0's when slot 0 is change, else zero. `amount1` is slot 1's when slot 1 is change, else zero, and that slot's asset is native SOL. `recipient_u_i` is the viewing key the sender sealed slot `i`'s body to, and zero on change, exit and dummy. The reader rebuilds change at slots 0 and 1 from these cells, its own address and `TXOB(n0, output_seed, i)`, and accepts a slot only when its commitment rebuilds.
 
 ## Opening a transfer
 
-1. The auditor computes `X25519(auditor_sk, eph_u)`, derives the stream and recovers `tx_viewing_sk` from the envelope.
+1. The auditor computes `X25519(auditor_sk, tx_viewing_u)`, the salted [stream secret](envelope.md#shared-secret) and the stream, then recovers `tx_viewing_sk`, `R` and any entry evidence from the envelope.
 2. It derives `seed_out = TXOS(n0, CRBS(tx_viewing_sk, salt))` and each blinding `TXOB(n0, seed_out, i)`. No frame field carries `seed_out`.
-3. It rebuilds each slot secret from `tx_viewing_sk` and the published `u`, then opens each delivered body. A slot whose commitment is the dummy hash under its blinding opens as a hidden dummy.
-4. It opens each record at its counter from the stream.
-5. It rebuilds each output commitment from the opened fields and the blinding. Under key escrow the escrow records give the output nullifier keys, and a slot whose record the auditor has not read keeps its opened fields without a rebuilt commitment.
+3. It decrypts the record of slot `i` at its counter, and its tail under `has_data`.
+4. It rebuilds slot `i`'s commitment from the record, the tail, the blinding, the ring id on kind `1` or zero on kind `2`, and the frame's tree id, and accepts it only when it equals the published hash at `i`. A kind `0` slot rebuilds as SPP's dummy hash under its blinding. A record moved to another slot rebuilds nothing.
+5. It links each nullifier below `R` that is not a default-ring input, see [spent notes](#spent-notes).
 
-## Layout bits
+## Layout
 
 | Bit value | Name | Set when |
 |---|---|---|
-| 1 | none | always clear, every key refuses it |
-| 2 | key escrow | the ring is in `ConfidentialEscrow` mode. Bodies and exit records omit the nullifier key, and the escrow records give it. |
-| 4 | reserved | always clear, every key refuses it |
-| 8 | full openings | the frame selects the entry key |
+| 1 | `has_data` | the frame carries one tail per published slot |
+| 2 | `entry` | the frame selects a key with entry capacity |
 
-The layout value is `key_escrow << 1 | full_openings << 3`. `exits_bitmap` is the one record of exits. The confidential family varies key escrow and pins full openings to `0`. The anonymous family's commitment layout pins both to `0`. Its entry layout pins full openings to `1` and key escrow to `0`.
+The layout value is `has_data | entry << 1`. The circuit decomposes it into these two bits and holds `entry` to the key's entry capacity.
 
-## Merge disclosure
+## Deposits and merges
 
-Only a merge uses a field pad. A merge seals a fresh 32-byte disclosure key under `CRING/mrg1` and masks its fields with:
+A deposit seals one opening record per occupied slot, and a merge seals one opening record of its output:
 
 ```text
-seed  = Poseidon(CR_MD, PackBytesBE(disclosure_key), right_align(salt))
-pad_i = Poseidon(seed, i)
-plaintext = fe32(input_hash_0) || .. || fe32(input_hash_{width-1})
-fields    = pack_left31(plaintext) + pad
+opening_record = record || 7 zero bytes || fe32(secret)   144 bytes
 ```
 
-The salt is the SPP merge output salt. Slot `i` of the list is slot `i` of SPP's private transaction hash, and a dummy slot reads 32 zero bytes. The field count is 9 at width 8 and 25 at width 24. The disclosure names no owner, mint or amount. The auditor inherits them from the opened inputs and records the output with their sum.
+The secret is the deposit note's blinding, or the merge's seed. No envelope key derives either blinding, so the record seals what rebuilds it. The auditor rebuilds a merged note's blinding as `TMOB(seed, n0)`. A merge's ring proof opens no input, since SPP's merge proof ties every input to the output's owner, asset and sum. [Envelope uses](envelope.md#envelope-uses) states the keys and counters.
