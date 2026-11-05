@@ -96,7 +96,7 @@ impl Outflows<'_> {
         }))
     }
 
-    /// `outflow` per row and asset.
+    /// `charged_outflow` per row and asset.
     pub fn flows(&self) -> Result<Vec<OwnerDebit>, RingError> {
         self.read_transfer(owner_debits)
     }
@@ -130,11 +130,11 @@ impl Outflows<'_> {
     ) -> Result<(), RingError> {
         for flow in flows {
             let cap = policy_of(&flow.asset).cap;
-            if cap != 0 && flow.outflow > u128::from(cap) {
+            if cap != 0 && flow.charged_outflow > u128::from(cap) {
                 return Err(RingError::OutflowCapExceeded {
                     asset: flow.asset,
                     cap,
-                    outflow: flow.outflow,
+                    charged_outflow: flow.charged_outflow,
                 });
             }
         }

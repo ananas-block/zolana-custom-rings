@@ -2332,7 +2332,7 @@ describe("anonymous rail on a policy ring", () => {
     const sender = anonymousSender();
     const fixture = await policyRing(sender, { cap: 399n, cosignAbove: 0n });
     await expect(pay(fixture, sender)).rejects.toThrow(
-      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "399", outflow: "400" }),
+      ringError("RING_OUTFLOW_CAP_EXCEEDED", { cap: "399", chargedOutflow: "400" }),
     );
     noProofs(fixture);
   });

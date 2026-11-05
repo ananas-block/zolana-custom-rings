@@ -1,4 +1,4 @@
-/** Each owner's guard, debit and outflow per asset, Rust `zolana_ring_policy::quantities`. */
+/** Each owner's guard, debit and charged outflow per asset, Rust `zolana_ring_policy::quantities`. */
 import { bytesKey, bytesToBigInt, equalBytes, isZero } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 
@@ -23,14 +23,15 @@ export interface PublicGross {
   readonly gross: bigint;
 }
 
-/** One row's quantities of one asset, `held = debit + kept`. */
+/** One row's quantities of one asset, `held = debit + kept`, `debit` is the owner's net outflow. */
 export interface OwnerDebit {
   readonly owner: Bytes32;
   readonly asset: Bytes32;
   readonly debit: bigint;
   readonly kept: bigint;
   readonly charge: bigint;
-  readonly outflow: bigint;
+  /** `debit + charge`, the value the cap and `cosignAbove` read. */
+  readonly chargedOutflow: bigint;
 }
 
 /** One transfer's parties, the assets are its output and public assets. */
@@ -42,12 +43,12 @@ export interface DebitTransfer {
   readonly publicGross: readonly PublicGross[];
 }
 
-/** Nonzero outflow rows by ascending owner then assets order, no caller input selects a share. */
+/** Nonzero charged outflow rows by ascending owner then assets order, no caller input selects a share. */
 export function ownerDebits(transfer: DebitTransfer): readonly OwnerDebit[] {
   const owners = orderedOwners(transfer);
   const flows = distinct(transfer.assets)
     .flatMap((asset) => assetFlows(transfer, owners, asset))
-    .filter((flow) => flow.outflow !== 0n);
+    .filter((flow) => flow.chargedOutflow !== 0n);
   // Array sort is stable, each owner keeps its assets' order.
   return Object.freeze(flows.sort((left, right) => compareField(left.owner, right.owner)));
 }
@@ -102,7 +103,7 @@ export function assetFlows(
     const share = displaced === 0n ? 0n : (displaced * running) / sumKept;
     const charge = share - previous;
     previous = share;
-    return Object.freeze({ ...row, charge, outflow: row.debit + charge });
+    return Object.freeze({ ...row, charge, chargedOutflow: row.debit + charge });
   });
 }
 
@@ -150,7 +151,7 @@ export function approvalMask(
   const { flows, publicGross, policyOf } = input;
   const overOutflow = flows.some((flow) => {
     const above = policyOf(flow.asset).cosignAbove;
-    return above !== 0n && flow.outflow > above;
+    return above !== 0n && flow.chargedOutflow > above;
   });
   const overWithdrawal = publicGross.some((slot) => {
     const threshold = policyOf(slot.asset).withdrawalThreshold;

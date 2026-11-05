@@ -380,7 +380,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
-                    outflow: debit.outflow,
+                    outflow: debit.charged_outflow,
                     deposited: 0,
                     withdrawn: 0,
                 },

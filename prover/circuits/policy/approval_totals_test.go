@@ -49,7 +49,7 @@ func (tc quantityCase) layout(slots int) []*big.Int {
 			fields = append(fields, field(0), field(0), field(0))
 			continue
 		}
-		peak, sum := peakAndSum(tc, tc.Outputs[o].Asset, func(row quantityRow) uint64 { return row.Outflow })
+		peak, sum := peakAndSum(tc, tc.Outputs[o].Asset, func(row quantityRow) uint64 { return row.ChargedOutflow })
 		fields = append(fields, big.NewInt(tc.Outputs[o].Asset), field(peak), field(sum))
 	}
 	for k := range transaction.NPublicSlots {

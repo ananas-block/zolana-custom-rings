@@ -44,7 +44,7 @@ use spr_transaction::{
 };
 use zolana_ring_client::{rpc::SubjectListSalt, AsyncRingIndexer};
 use zolana_ring_keys::RingKeys;
-use zolana_ring_policy::{ApprovalTotals, Member};
+use zolana_ring_policy::{ApprovalTotals, Member, OwnerDebit};
 use zolana_ring_transaction::{published_outputs, PublishedSlot, RingDelivery, RingOutputRail};
 use zolana_ring_transaction::{random_field_element, ClassifiedInput};
 
@@ -149,6 +149,8 @@ pub struct ProvenRingTransfer {
     pub co_sign_demand: CoSignDemand,
     /// For a co-signer that reads exact totals, never the transaction secret.
     pub approval_opening: Option<ApprovalOpening>,
+    /// Per owner and asset, a composed payment can charge an owner whose funds return to it.
+    pub charged_outflows: Vec<OwnerDebit>,
 }
 
 /// A transfer past its outputs' sealing, ready for its statements.
@@ -1130,6 +1132,7 @@ impl Assembled {
             accounts,
             co_sign_demand,
             approval_opening,
+            policy,
             ..
         } = self.frame;
         parts.proof = proof;
@@ -1162,6 +1165,7 @@ impl Assembled {
             co_signers,
             co_sign_demand,
             approval_opening,
+            charged_outflows: policy.charged_outflows,
         })
     }
 }

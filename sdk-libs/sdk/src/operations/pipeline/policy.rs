@@ -12,8 +12,8 @@ use spr_interface::{N_PUBLIC_SLOTS, ZERO_NULLIFIER_PUBKEY};
 use spr_transaction::instructions::transact::SppProofInputs;
 use zolana_ring_client::{records::RecordPoolRead, AsyncRingIndexer};
 use zolana_ring_policy::{
-    ApprovalInputs, EncodedRuleTable, Member, MintPolicy, OutputSubjects, PaymentSubjects,
-    PublicGross, RecordLists, SourceMap,
+    ApprovalInputs, EncodedRuleTable, Member, MintPolicy, OutputSubjects, OwnerDebit,
+    PaymentSubjects, PublicGross, RecordLists, SourceMap,
 };
 use zolana_ring_transaction::ClassifiedInput;
 
@@ -65,6 +65,8 @@ pub(super) struct PolicyInputs {
     input_asset_entries: Vec<PoolEntry>,
     public_asset_entries: Vec<u32>,
     pub approval: ApprovalMask,
+    /// Empty while the ring reads no own records, the circuit then bounds no outflow.
+    pub charged_outflows: Vec<OwnerDebit>,
 }
 
 pub(super) struct PolicyRead<'a> {
@@ -241,6 +243,7 @@ impl PolicyRead<'_> {
             input_asset_entries,
             public_asset_entries,
             approval: ApprovalMask::default(),
+            charged_outflows: Vec::new(),
         };
         if read != RootRead::None {
             ScreenedRecords {
@@ -635,6 +638,7 @@ impl ScreenedRecords<'_> {
             .bits(),
         )
         .ok_or(CustomRingError::FlagNotAllowed)?;
+        inputs.charged_outflows = flows;
         inputs.own = Some(own);
         inputs.curator = curator;
         inputs.own_pool = Some(own_pool);

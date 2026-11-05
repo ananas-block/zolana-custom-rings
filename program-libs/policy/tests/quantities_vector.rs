@@ -21,7 +21,8 @@ struct Row {
     debit: u128,
     kept: u128,
     charge: u128,
-    outflow: u128,
+    #[serde(rename = "outflow")]
+    charged_outflow: u128,
 }
 
 #[derive(Deserialize)]
@@ -151,7 +152,7 @@ fn every_quantity_matches_the_circuit() {
                     row.debit,
                     row.kept,
                     row.charge,
-                    row.outflow,
+                    row.charged_outflow,
                 )
             })
             .collect();
@@ -165,7 +166,7 @@ fn every_quantity_matches_the_circuit() {
                     row.debit,
                     row.kept,
                     row.charge,
-                    row.outflow,
+                    row.charged_outflow,
                 )
             })
             .collect();

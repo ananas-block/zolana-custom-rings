@@ -9,7 +9,7 @@ const U128_MAX = (1n << 128n) - 1n;
 /** "CRAO". */
 export const APPROVAL_TOTALS_DOMAIN = 0x4352_414fn;
 
-/** `peak` is one owner's largest outflow of the asset, the value `cosignAbove` compares. */
+/** `peak` is one owner's largest charged outflow of the asset, the value `cosignAbove` compares. */
 export interface OutputTotals {
   /** Zero on a dummy slot. */
   readonly asset: Bytes32;
@@ -69,7 +69,7 @@ export class ApprovalTotals {
           ? Object.freeze({ asset: ZERO_32, peak: 0n, outflow: 0n })
           : Object.freeze({
               asset,
-              ...peakAndSum(assetFlows(transfer, owners, asset).map((row) => row.outflow)),
+              ...peakAndSum(assetFlows(transfer, owners, asset).map((row) => row.chargedOutflow)),
             }),
       ),
       publicSlots: input.publicSlots.map(({ asset, gross }) =>

@@ -23,7 +23,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
-// WithdrawalWires feeds the payment rules alone, net outflow reads the statement's gross.
+// WithdrawalWires feeds the payment rules alone, the charged outflow reads the statement's gross.
 type WithdrawalWires struct{ Owner, Asset, Amount frontend.Variable }
 
 func (p *PolicyInputs) openWithdrawals(api frontend.API, rc frontend.Rangechecker) []Payment {

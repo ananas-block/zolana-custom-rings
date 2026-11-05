@@ -77,6 +77,7 @@ import {
   type TransferApproval,
 } from "../../proof/transfer-proof.js";
 import type { ApprovalOpening } from "../../protocol/membership/approval-totals.js";
+import type { OwnerDebit } from "../../protocol/membership/owner-debits.js";
 import { policyWithdrawalHash } from "../../proof/withdrawals.js";
 import {
   framesData,
@@ -209,6 +210,8 @@ export class ProvenRingTransfer {
   readonly policy?: BoundPolicy;
   /** What opens the frame's digest, handed to a co-signer under `CoSignerRule` exact. */
   readonly approvalOpening?: ApprovalOpening;
+  /** Per owner and asset, a composed payment can charge an owner whose funds return to it. */
+  readonly chargedOutflows: readonly OwnerDebit[];
 
   /** @internal */
   constructor(fields: Omit<ProvenRingTransfer, "instruction">) {
@@ -221,6 +224,7 @@ export class ProvenRingTransfer {
     this.trackingRoot = fields.trackingRoot;
     if (fields.policy !== undefined) this.policy = fields.policy;
     if (fields.approvalOpening !== undefined) this.approvalOpening = fields.approvalOpening;
+    this.chargedOutflows = fields.chargedOutflows;
     Object.freeze(this);
   }
 
@@ -726,6 +730,7 @@ async function proveAssembled(
       ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
       : {}),
     ...(assembled.approval === undefined ? {} : { approvalOpening: assembled.approval.opening }),
+    chargedOutflows: policy.chargedOutflows,
   });
 }
 

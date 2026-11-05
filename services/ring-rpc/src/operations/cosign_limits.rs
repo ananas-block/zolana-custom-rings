@@ -360,7 +360,7 @@ fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
             debit: flow.flow.outflow,
             kept: 0,
             charge: 0,
-            outflow: flow.flow.outflow,
+            charged_outflow: flow.flow.outflow,
         })
         .collect();
     let public_gross: Vec<PublicGross> = flows

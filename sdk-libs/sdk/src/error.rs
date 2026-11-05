@@ -220,12 +220,12 @@ pub enum RingError {
     MissingCoOwnerKey { owner: Address },
     #[error("output {index} owner marker does not match whether it leaves the ring")]
     RingOutputMarkerMismatch { index: usize },
-    #[error("the outflow {outflow} of {asset:?} exceeds the cap {cap}")]
+    #[error("the charged outflow {charged_outflow} of {asset:?} exceeds the cap {cap}")]
     OutflowCapExceeded {
         asset: [u8; 32],
         cap: u64,
         /// A public gross reaches past `u64::MAX` under the policy's 72-bit aggregate bound.
-        outflow: u128,
+        charged_outflow: u128,
     },
     #[error("the payments' total overflows")]
     PaymentOverflow,
