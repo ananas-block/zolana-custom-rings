@@ -28,8 +28,8 @@ func NewDepositPolicy(deposits, saltedKeys int) (Policy, error) {
 	return NewPolicy(InputsShape{Outputs: deposits, SaltedKeys: saltedKeys}.Inputs(), RecordPoolShape{Own: records, Curator: records}, 0)
 }
 
-// ScreenDeposit runs the payment section alone, public funds spend no input and every deposit reads as a receipt.
-func (p *Policy) ScreenDeposit(api frontend.API, rc frontend.Rangechecker, tracking TrackingPool, deposits []shared.Output) {
+// ScreenDeposit runs the payment section alone and returns its salted payee gate, public funds spend no input and every deposit reads as a receipt.
+func (p *Policy) ScreenDeposit(api frontend.API, rc frontend.Rangechecker, tracking TrackingPool, deposits []shared.Output) frontend.Variable {
 	g := Rail{ThresholdsActive: 0, Delegate: 0}.Gates(api, p.PolicyHash)
-	p.screenPayments(api, newComparator(rc), g, Spend{Tracking: tracking}, slotPayments(deposits))
+	return p.screenPayments(api, newComparator(rc), g, Spend{Tracking: tracking}, slotPayments(deposits)).saltedPayees
 }
