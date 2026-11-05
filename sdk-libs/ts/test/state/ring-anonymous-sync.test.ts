@@ -113,6 +113,19 @@ describe("anonymous sync", () => {
     expect(scan.sent.map((row) => row.amount)).toEqual([100n, 40n]);
   });
 
+  it("lists a sent payment and its change once when the indexer repeats the row", async () => {
+    const indexer = new ScanIndexer();
+    const carol = new ScanWallet(3);
+    const bob = new ScanWallet(4);
+    const paid = await carol.pay(indexer, [{ to: bob.address, amount: 40n }]);
+    indexer.publish(paid);
+    const scan = await carol.sync(indexer, carol.fresh());
+    expect(scan.utxos.map((note) => note.utxo.amount)).toEqual([60n]);
+    expect(scan.sent.map((row) => [hex(row.utxoHash), row.amount])).toEqual([
+      [hex(output(paid, 1)), 40n],
+    ]);
+  });
+
   it("resumes each deposit stream from its watermark and a full rescan reads from index 0", async () => {
     const indexer = new ScanIndexer();
     const alice = new ScanWallet(1);

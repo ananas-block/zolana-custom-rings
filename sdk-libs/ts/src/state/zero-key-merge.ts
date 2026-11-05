@@ -1,5 +1,6 @@
 /** A zero-key merge opens from the owner's viewing key alone, it needs no input history. */
 import {
+  bytesKey,
   decryptMergeOutput,
   equalBytes,
   readMergeOutputBody,
@@ -48,10 +49,10 @@ export async function openZeroKeyMerges(
   });
   if (sites.length === 0) return [];
   const opened: OpenedZeroKeyMerge[] = [];
+  const openedHashes = new Set<string>();
   for (const viewingPublicKey of input.keys.viewingPublicKeys()) {
     const unopened = sites.filter(
-      ({ slot }) =>
-        !opened.some(({ utxo }) => equalBytes(utxo.outputContext.hash, slot.outputContext.hash)),
+      ({ slot }) => !openedHashes.has(bytesKey(slot.outputContext.hash)),
     );
     if (unopened.length === 0) break;
     const seeds = await input.keys.mergeSeeds(
@@ -65,8 +66,9 @@ export async function openZeroKeyMerges(
     for (const [site, seed] of answered(unopened, seeds)) {
       try {
         const utxo = decoded(() => noteOf({ ...site, seed, owner: input.owner }));
-        if (utxo !== undefined)
-          opened.push({ utxo, row: site.row, position: site.position, viewingPublicKey });
+        if (utxo === undefined) continue;
+        openedHashes.add(bytesKey(utxo.outputContext.hash));
+        opened.push({ utxo, row: site.row, position: site.position, viewingPublicKey });
       } finally {
         seed.fill(0);
       }

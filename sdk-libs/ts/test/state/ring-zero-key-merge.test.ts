@@ -163,3 +163,47 @@ describe("a scan", () => {
     },
   );
 });
+
+describe("an every-site recovery", () => {
+  it("opens each page's zero-key merges before it reads the next page", async () => {
+    const indexer = new ScanIndexer();
+    const owner = new ScanWallet(3);
+    const seed = seedOf(owner.keypair.viewingKey());
+    const hashes = [1n, 2n, 3n].map((page) => {
+      const { row, hash } = zeroKeyMergeRow({ owner, seed, amount: 60n + page });
+      indexer.publish({ ...row, slot: 5n + page, txSignature: signature(5n + page) });
+      return hash;
+    });
+    const events: string[] = [];
+    const served = indexer.client();
+    const client = {
+      ...served,
+      getShieldedTransactionsByTags: (
+        request: Parameters<typeof served.getShieldedTransactionsByTags>[0],
+      ) => {
+        events.push("page");
+        return served.getShieldedTransactionsByTags(request);
+      },
+    };
+    const keys = new Proxy(owner.keys, {
+      get(target, property) {
+        if (property === "mergeSeeds")
+          return (...args: Parameters<typeof target.mergeSeeds>) => {
+            events.push("seeds");
+            return target.mergeSeeds(...args);
+          };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    const scan = await AnonymousSync.create(keys, ASSETS)
+      .withScanLimits({ pageSize: 1 })
+      .fullScan(client, owner.fresh(), RING);
+
+    // A row leaves the scan with its page, no later read reopens the history.
+    expect(events.slice(0, 6)).toEqual(["page", "seeds", "page", "seeds", "page", "seeds"]);
+    expect(events.filter((event) => event === "seeds")).toHaveLength(3);
+    expect(scan.utxos.map((note) => hex(note.outputContext.hash))).toEqual(hashes.map(hex));
+  });
+});
