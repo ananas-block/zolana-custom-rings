@@ -412,7 +412,9 @@ struct StoredFlow {
     owner: Hash,
     asset: SerializablePubkey,
     #[serde(with = "decimal")]
-    outflow: u128,
+    debit: u128,
+    #[serde(with = "decimal")]
+    charged_outflow: u128,
     #[serde(with = "decimal")]
     deposited: u128,
     #[serde(with = "decimal")]
@@ -503,7 +505,8 @@ fn stored_co_sign(pending: &PendingCoSign) -> StoredCoSign {
                     .map(|OwnerFlow { owner, flow }| StoredFlow {
                         owner: Hash(*owner.as_bytes()),
                         asset: flow.asset.into(),
-                        outflow: flow.charged_outflow,
+                        debit: flow.debit,
+                        charged_outflow: flow.charged_outflow,
                         deposited: flow.deposited,
                         withdrawn: flow.withdrawn,
                     })
@@ -595,7 +598,8 @@ fn pending_co_sign(stored: StoredCoSign) -> Result<PendingCoSign, DbErr> {
                                 .map_err(|_| corrupt("co_sign"))?,
                             flow: AssetFlow {
                                 asset: flow.asset.0,
-                                charged_outflow: flow.outflow,
+                                debit: flow.debit,
+                                charged_outflow: flow.charged_outflow,
                                 deposited: flow.deposited,
                                 withdrawn: flow.withdrawn,
                             },
@@ -755,6 +759,7 @@ mod tests {
                     owner: Member::from_bytes([7; 32]).expect("member"),
                     flow: AssetFlow {
                         asset: FEE_PAYER,
+                        debit: u128::MAX,
                         charged_outflow: u128::MAX,
                         deposited: past_u64,
                         withdrawn: 0,

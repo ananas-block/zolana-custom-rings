@@ -253,6 +253,7 @@ fn deposit_read(
                 owner,
                 flow: AssetFlow {
                     asset,
+                    debit: 0,
                     charged_outflow: 0,
                     deposited: leg.amount.into(),
                     withdrawn: 0,
@@ -380,6 +381,7 @@ impl OwnerFlows<'_> {
                 owner: member(debit.owner)?,
                 flow: AssetFlow {
                     asset: mint_of(&debit.asset)?,
+                    debit: debit.debit,
                     charged_outflow: debit.charged_outflow,
                     deposited: 0,
                     withdrawn: 0,
@@ -401,6 +403,7 @@ impl OwnerFlows<'_> {
                         owner,
                         flow: AssetFlow {
                             asset: public.mint,
+                            debit: 0,
                             charged_outflow: 0,
                             deposited: 0,
                             withdrawn: 0,

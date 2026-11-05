@@ -33,6 +33,7 @@ fn flow(owner: u8, asset: Address, debit: u64) -> OwnerFlow {
         owner: member(owner),
         flow: AssetFlow {
             asset,
+            debit: debit.into(),
             charged_outflow: debit.into(),
             deposited: 0,
             withdrawn: 0,
@@ -154,14 +155,14 @@ impl Window {
         let mut rows: Vec<_> = connection
             .query_all(Statement::from_string(
                 connection.get_database_backend(),
-                "SELECT owner, slot, outflow FROM cosign_usage",
+                "SELECT owner, slot, debit FROM cosign_usage",
             ))
             .await
             .expect("rows")
             .iter()
             .map(|row| {
                 let owner: Vec<u8> = row.try_get("", "owner").expect("owner");
-                let debit: Vec<u8> = row.try_get("", "outflow").expect("outflow");
+                let debit: Vec<u8> = row.try_get("", "debit").expect("debit");
                 (
                     owner[0],
                     row.try_get("", "slot").expect("slot"),

@@ -357,7 +357,7 @@ fn approval_mask(flows: &[OwnerFlow], checks: &[AssetCheck]) -> ApprovalMask {
         .map(|flow| OwnerDebit {
             owner: *flow.owner.as_bytes(),
             asset: flow.flow.asset.to_bytes(),
-            debit: flow.flow.charged_outflow,
+            debit: flow.flow.debit,
             kept: 0,
             charge: 0,
             charged_outflow: flow.flow.charged_outflow,
@@ -559,6 +559,7 @@ mod tests {
             owner: member(owner),
             flow: AssetFlow {
                 asset: ASSET,
+                debit: amount.into(),
                 charged_outflow: amount.into(),
                 deposited: 0,
                 withdrawn: 0,
@@ -932,7 +933,10 @@ mod tests {
         }
         .rows(|_| Ok(ASSET))
         .expect("rows");
-        assert_eq!(flows[0].flow.charged_outflow, 100);
+        assert_eq!(
+            (flows[0].flow.debit, flows[0].flow.charged_outflow),
+            (0, 100)
+        );
         let read = || {
             FrameRead::Transfer(TransferRead {
                 flows: flows.clone(),
@@ -969,6 +973,7 @@ mod tests {
                     owner: member(7),
                     flow: AssetFlow {
                         asset: ASSET,
+                        debit: outflow,
                         charged_outflow: outflow,
                         deposited: 0,
                         withdrawn,
@@ -1015,6 +1020,7 @@ mod tests {
                     owner: member(7),
                     flow: AssetFlow {
                         asset: ASSET,
+                        debit: 101,
                         charged_outflow: 101,
                         deposited: 0,
                         withdrawn: 101,

@@ -1773,6 +1773,7 @@ impl RelayPayload {
                         .map_err(|error| RelayError::Proof(error.to_string()))?,
                     flow: AssetFlow {
                         asset: inputs.asset.mint(),
+                        debit: 0,
                         charged_outflow: 0,
                         deposited: inputs.amount.into(),
                         withdrawn: 0,

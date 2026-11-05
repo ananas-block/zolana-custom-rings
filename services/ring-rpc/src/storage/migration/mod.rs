@@ -47,7 +47,7 @@ impl MigrationTrait for Schema {
         for sql in [
             format!("CREATE TABLE records_batches (id {serial}, registry {blob} NOT NULL, signature {blob} NOT NULL, revision BIGINT NOT NULL, last_valid_block_height BIGINT NOT NULL, status TEXT NOT NULL)"),
             format!("CREATE TABLE cosign_admission (ring {blob} NOT NULL, asset {blob} NOT NULL, PRIMARY KEY(ring, asset))"),
-            format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, outflow {blob} NOT NULL, deposited {blob} NOT NULL, withdrawn {blob} NOT NULL, confirmed BOOLEAN NOT NULL, message_digest {blob} NOT NULL, PRIMARY KEY(signature, owner, asset))"),
+            format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, debit {blob} NOT NULL, charged_outflow {blob} NOT NULL, deposited {blob} NOT NULL, withdrawn {blob} NOT NULL, confirmed BOOLEAN NOT NULL, message_digest {blob} NOT NULL, PRIMARY KEY(signature, owner, asset))"),
             format!("CREATE TABLE finalized_notes (ring {blob} NOT NULL, commitment {blob} NOT NULL, sealed {blob} NOT NULL, nullifier_tag {blob}, revision BIGINT NOT NULL, PRIMARY KEY(ring, commitment))"),
             format!("CREATE TABLE projection_revisions (ring {blob} NOT NULL PRIMARY KEY, revision BIGINT NOT NULL)"),
             format!("CREATE TABLE owner_notes (ring {blob} NOT NULL, owner_tag {blob} NOT NULL, note_tag {blob} NOT NULL, sealed {blob} NOT NULL, spent_slot BIGINT, PRIMARY KEY(ring, owner_tag, note_tag))"),
