@@ -167,13 +167,9 @@ export function signerSlots(circuit: TransferKeyCircuit): number {
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
   const withdrawalAssets = Math.min(circuit.withdrawals, N_PUBLIC_SLOTS);
-  // A zero value input can name any asset, every input slot takes its own row.
-  const distinct =
-    circuit.owners +
-    2 * circuit.outputs +
-    circuit.withdrawals +
-    saltedKeys(circuit) +
-    circuit.class;
+  // An input slot takes no row, its asset reads a payment's record or a free one and a spend past
+  // the rows selects the wide key.
+  const distinct = circuit.owners + 2 * circuit.outputs + circuit.withdrawals + saltedKeys(circuit);
   return Object.freeze({
     own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
     curator: distinct + withdrawalAssets,

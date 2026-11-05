@@ -21,7 +21,7 @@ import (
 type PolicyInputs struct {
 	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each.
 	Senders, Outputs int `gnark:"-"`
-	// Spent counts the input slots, the pools hold a row for each slot's asset.
+	// Spent counts the input slots, each queries the pools by its asset and takes no row.
 	Spent int `gnark:"-"`
 	// SaltedKeys widens each pool past its public subjects.
 	SaltedKeys      int `gnark:"-"`

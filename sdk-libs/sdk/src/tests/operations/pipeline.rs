@@ -3980,6 +3980,51 @@ async fn a_policy_transfer_places_each_input_asset_past_every_payment() {
     assert_eq!(params.asset_entries[payments], params.asset_entries[0]);
 }
 
+/// Zero value notes in unmatched mints spend, 13 of them leave the 15 narrow rows for the wide key.
+#[tokio::test]
+async fn unmatched_zero_value_inputs_past_the_narrow_rows_select_the_wide_key() {
+    use crate::tests::support::{keypair, Registry};
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let settings = RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    };
+    let client = Chain::ring(settings)
+        .with_registry(
+            Registry::new(&[(&sender, 1), (&recipient, 1)]),
+            &crate::tests::pipeline_rules(),
+        )
+        .client();
+    let key_of = |unmatched: u8| {
+        let mut notes = vec![ring_utxo(&sender, Mint::SOL, 10, 0)];
+        notes.extend((1..=unmatched).map(|mint| {
+            let asset = Mint::new(Address::new_from_array([mint; 32]), 100 + u64::from(mint));
+            ring_utxo(&sender, asset, 0, u64::from(mint))
+        }));
+        let mut transaction = ring_transaction(notes);
+        transaction
+            .transfer_with_ring(
+                &recipient.shielded_address().unwrap(),
+                Mint::SOL,
+                3,
+                Some(ring().program_id()),
+            )
+            .unwrap();
+        owner_transfer(&sender, transaction)
+    };
+    let narrow = key_of(12).assemble(&client).await.unwrap();
+    assert!(matches!(
+        narrow.frame.policy.circuit(),
+        RingCircuit::Transfer { wide: false, .. }
+    ));
+    let wide = key_of(13).assemble(&client).await.unwrap();
+    assert!(matches!(
+        wide.frame.policy.circuit(),
+        RingCircuit::Transfer { wide: true, .. }
+    ));
+}
+
 /// A delisted note no payment moves refuses before proving, the guarded rule leaves it alone.
 #[tokio::test]
 async fn a_zero_value_input_of_a_delisted_asset_fails_before_proving() {
