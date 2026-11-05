@@ -13,7 +13,8 @@ impl MigratorTrait for Migrator {
 #[derive(DeriveMigrationName)]
 struct Schema;
 
-const TABLES: [&str; 22] = [
+const TABLES: [&str; 23] = [
+    "records_update_members",
     "projection_revisions",
     "owner_notes",
     "projection_leases",
@@ -92,6 +93,10 @@ impl MigrationTrait for Schema {
             "CREATE INDEX records_updates_joined ON records_updates(joined)".to_owned(),
             "CREATE INDEX records_updates_member ON records_updates(ring, member)".to_owned(),
             "CREATE INDEX records_updates_queue ON records_updates(registry, status, seq)".to_owned(),
+            "CREATE INDEX records_updates_role ON records_updates(registry, role, status, seq)".to_owned(),
+            "CREATE INDEX records_updates_expiry ON records_updates(registry, status, valid_until_slot)".to_owned(),
+            format!("CREATE TABLE records_update_members (seq BIGINT NOT NULL, registry {blob} NOT NULL, member {blob} NOT NULL, PRIMARY KEY(seq, member))"),
+            "CREATE INDEX records_update_members_member ON records_update_members(registry, member, seq)".to_owned(),
             "CREATE INDEX records_updates_ring ON records_updates(ring, status, seq)".to_owned(),
             "CREATE INDEX relay_relays_status ON relay_relays(status)".to_owned(),
             "CREATE INDEX replay_nonces_signed_at ON replay_nonces(signed_at)".to_owned(),

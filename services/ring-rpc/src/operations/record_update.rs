@@ -159,17 +159,19 @@ pub(crate) enum QueuedState {
     Deferred,
 }
 
-/// `queue` holds no update past its valid until slot.
-#[must_use]
-pub(crate) struct BatchPlan<'a> {
-    pub queue: &'a [QueuedUpdate],
-    pub slot: u64,
+/// An authority update with whether an earlier queued wallet update writes one of its records.
+pub(crate) struct AuthorityHead {
+    pub update: QueuedUpdate,
+    pub blocked: bool,
 }
 
-/// All authority updates or all wallet updates, in submit order.
+/// The oldest queued updates of either role in submit order, one past a full batch.
 #[must_use]
-pub(crate) struct PlannedBatch<'a> {
-    pub updates: Vec<&'a QueuedUpdate>,
+pub(crate) struct WalletBatch {
+    pub oldest: Vec<QueuedUpdate>,
+    /// An authority update waits behind the wallet updates.
+    pub blocking: bool,
+    pub slot: u64,
 }
 
 #[must_use]
@@ -349,47 +351,37 @@ impl QueuedCheck<'_> {
     }
 }
 
-impl<'a> BatchPlan<'a> {
-    /// Authority updates go at the next pass ahead of wallet ones on other records, wallet ones once full, aged or blocking an authority one.
-    pub fn decide(self) -> Result<Option<PlannedBatch<'a>>, RecordUpdateRefusal> {
-        let authority = self.authority()?;
-        if !authority.is_empty() {
-            return Ok(Some(PlannedBatch { updates: authority }));
-        }
-        let wallet = within_batch(
-            self.queue
-                .iter()
-                .take_while(|update| !update.signer.is_authority()),
-        );
-        let carried: usize = wallet.iter().map(|update| update.writes.len()).sum();
-        let full = carried == APPLY_BATCH
-            || self
-                .queue
-                .get(wallet.len())
-                .is_some_and(|next| !next.signer.is_authority());
-        let blocking = self.queue.iter().any(|update| update.signer.is_authority());
-        let aged = self.queue.first().is_some_and(|oldest| {
-            self.slot >= oldest.queued_slot.saturating_add(BATCH_WINDOW_SLOTS)
-        });
-        Ok((!wallet.is_empty() && (full || blocking || aged))
-            .then_some(PlannedBatch { updates: wallet }))
-    }
+/// Authority updates go at the next pass ahead of wallet ones on other records, up to the first
+/// that shares a record with an earlier wallet update, so each record keeps its write order.
+pub(crate) fn authority_batch(heads: Vec<AuthorityHead>) -> Vec<QueuedUpdate> {
+    within_batch(
+        heads
+            .into_iter()
+            .take_while(|head| !head.blocked)
+            .map(|head| head.update),
+    )
+}
 
-    /// Stops at an authority update sharing a record with an earlier wallet one, each record keeps its write order.
-    fn authority(&self) -> Result<Vec<&'a QueuedUpdate>, RecordUpdateRefusal> {
-        let mut wallet_members = Vec::new();
-        let mut authority = Vec::new();
-        for update in self.queue {
-            let members: Vec<[u8; 32]> = update.writes.iter().map(|write| write.member).collect();
-            if !update.signer.is_authority() {
-                wallet_members.extend(members);
-            } else if members.iter().any(|member| wallet_members.contains(member)) {
-                break;
-            } else {
-                authority.push(update);
-            }
-        }
-        Ok(within_batch(authority))
+impl WalletBatch {
+    /// Wallet updates go once full, aged or blocking an authority one.
+    pub fn decide(self) -> Option<Vec<QueuedUpdate>> {
+        let Self {
+            oldest,
+            blocking,
+            slot,
+        } = self;
+        let aged = oldest
+            .first()
+            .is_some_and(|oldest| slot >= oldest.queued_slot.saturating_add(BATCH_WINDOW_SLOTS));
+        let wallet_heads = oldest
+            .iter()
+            .take_while(|update| !update.signer.is_authority())
+            .count();
+        let batch = within_batch(oldest.into_iter().take(wallet_heads));
+        let carried: usize = batch.iter().map(|update| update.writes.len()).sum();
+        // A wallet update left out of the batch fills it, the read holds one past a full batch.
+        let full = carried == APPLY_BATCH || batch.len() < wallet_heads;
+        (!batch.is_empty() && (full || blocking || aged)).then_some(batch)
     }
 }
 
@@ -471,7 +463,7 @@ pub(crate) fn limits_within_bounds(entry: &RecordUpdateEntry) -> bool {
 }
 
 /// The longest prefix one `Update` carries without splitting an update.
-fn within_batch<'a>(updates: impl IntoIterator<Item = &'a QueuedUpdate>) -> Vec<&'a QueuedUpdate> {
+fn within_batch(updates: impl IntoIterator<Item = QueuedUpdate>) -> Vec<QueuedUpdate> {
     let mut writes = 0;
     updates
         .into_iter()

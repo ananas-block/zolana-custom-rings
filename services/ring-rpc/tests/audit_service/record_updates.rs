@@ -1,4 +1,4 @@
-//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold every update while the ring account is unread, send a graced batch signed for the cli window at its batch window over a full history, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, requeue an expired batch once, send a salted owner write with its tracking revision and the pinned tracking registry, and send nothing without a private write source.
+//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold an authority update behind an earlier wallet update on its record, hold every update while the ring account is unread, send a graced batch signed for the cli window at its batch window over a full history, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, requeue an expired batch once, send a salted owner write with its tracking revision and the pinned tracking registry, and send nothing without a private write source.
 
 use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
@@ -608,6 +608,51 @@ async fn an_authority_grant_goes_out_without_waiting_for_the_wallet_batch_window
 
     assert_eq!(flushed.mode, tag::UPDATE);
     assert_eq!(flushed.members, [member]);
+}
+
+#[tokio::test]
+async fn an_authority_update_waits_behind_an_earlier_wallet_update_on_the_same_record() {
+    let records = Records::new().await;
+    let wallet = wallet();
+    let member = *Member::owner_tag(wallet.pubkey().as_array())
+        .expect("member")
+        .as_bytes();
+    let earlier = records
+        .submit(signed(
+            &wallet,
+            vec![list_write(member, ListId::RingViewing)],
+        ))
+        .await
+        .expect("queued");
+    let later = records
+        .submit(signed(
+            &authority(),
+            vec![list_write(member, ListId::Allow)],
+        ))
+        .await
+        .expect("queued");
+
+    // The authority update blocks on the wallet one, so the wallet batch goes out first and alone.
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.members, [member]);
+    assert_eq!(
+        u64::from_le_bytes(flushed.writes[0].lists.mask),
+        ListId::RingViewing.record_bit()
+    );
+    assert!(matches!(
+        records.status(&earlier).await,
+        RecordUpdateStatus::Submitted { .. }
+    ));
+    assert_eq!(records.status(&later).await, RecordUpdateStatus::Queued);
+
+    *records.chain.outcome.lock().unwrap() = Some(ChainOutcome::Confirmed { slot: NOW });
+    records.writer.flush().await.expect("settle");
+    let flushed = records.flushed().await;
+    assert_eq!(flushed.members, [member]);
+    assert_eq!(
+        u64::from_le_bytes(flushed.writes[0].lists.mask),
+        ListId::Allow.record_bit()
+    );
 }
 
 #[tokio::test]
