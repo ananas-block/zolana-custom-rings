@@ -1,3 +1,7 @@
+//! Measures each shape's frame under the frame encoders, SPP's account builders and the v1 compiler.
+//!
+//! `run` prints `test-vectors/proof/ring-frame-fit.md`, and a test pins the committed table.
+
 use std::{collections::BTreeSet, fmt::Write};
 
 use anyhow::{Context, Result};

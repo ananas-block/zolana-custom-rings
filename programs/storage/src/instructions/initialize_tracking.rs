@@ -8,7 +8,7 @@
 //!
 //! Guarantees:
 //! 1. `ring_id` and `auditor_pubkey` are final, and every first enrollment seals to that key.
-//! 2. A key no proof can seal to is refused here, it would lock enrollment for good.
+//! 2. An untagged, zero or non-canonical auditor key is refused here, it would lock enrollment for good.
 //!
 //! Relies on:
 //! 1. The ring compares the registry's address on every read, its seeds and `ring_id` authenticate nothing.

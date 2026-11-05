@@ -1,3 +1,7 @@
+//! The audit layout element and the packing of a ciphertext into statement fields, mirror of `prover/circuits/audit/layout.go`.
+//!
+//! Read after `program-libs/interface/src/proof/audit_stream.rs`. Read before `program-libs/interface/src/codec/output.rs`.
+
 use spr_hasher::primitives::{pack_be_chunks, PACK_BE_CHUNK_BYTES};
 
 pub const DELIVERED_AUDIT_CAPACITIES: [usize; 4] = [2, 4, 8, 16];

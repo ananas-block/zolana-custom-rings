@@ -215,7 +215,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env.client)?;
     let member = &env.sender.keypair;
-    // 1. A keyed note needs its owner's tracking row.
+    // A keyed note needs its owner's tracking row.
     EnrollOwners {
         ring,
         owners: &[member],
@@ -236,7 +236,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     let RingDepositReceipt { signature, utxo } =
         env.run(deposit(member_address).send(env.client.ring_client()))?;
     let input = indexed_note(utxo, member, &env, env.tree)?;
-    // 2. Recover the direct deposit before any transfer can disclose its
+    // Recover the direct deposit before any transfer can disclose its
     // opening.
     assert_transaction_compute_units(
         rpc,
@@ -273,7 +273,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
     }
     .send(&env)?;
 
-    // 3. The auditor opens the key from the owner's enrollment.
+    // The auditor opens the key from the owner's enrollment.
     let enrolled =
         owner_enrollment(&env, ring, member.pubkey())?.context("the member's enrollment")?;
     let nullifier_key = SealedNullifierKey {
@@ -330,7 +330,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         Ok(transfer)
     };
 
-    // 4. A keyed output needs its owner's row and key, refused before any prover round.
+    // A keyed output needs its owner's row and key, refused before any prover round.
     let unreachable = env.client_with(|| {
         AsyncProverClient::new("http://127.0.0.1:1".to_owned())
             .with_proof_data_source(ProofDataSource::Client)
@@ -373,7 +373,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         other => bail!("expected RecipientKeyMismatch, got {other}"),
     }
 
-    // 5. A deposit to an owner without a row is refused before proving.
+    // A deposit to an owner without a row is refused before proving.
     match env.run(deposit(unregistered).send(env.client.ring_client())) {
         Err(RingError::RecipientNotEnrolled { slot_index: 0 }) => {}
         Err(other) => return Err(anyhow!("expected RecipientNotEnrolled, got {other}")),
@@ -388,7 +388,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         u64::from(compute_unit_limit(InstructionTag::Deposit)),
     )?;
 
-    // 6. The delegate moves the enrolled member's note back to the member.
+    // The delegate moves the enrolled member's note back to the member.
     let moved_nullifier = moved.nullifier;
     let proven = DelegateTransfer::new(DelegateTransferInput {
         ring,

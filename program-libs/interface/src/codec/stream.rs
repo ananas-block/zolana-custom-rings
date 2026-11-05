@@ -1,5 +1,7 @@
 //! Slot secrets and the sender commitment of ring transfers, mirrored by the
 //! Go package `prover/circuits/shared`.
+//!
+//! Read after `program-libs/interface/src/codec/output.rs`. Read before `program-libs/interface/src/proof/key_catalog.rs`.
 
 use spr_hasher::{
     primitives::{is_canonical_bn254_scalar_be, pack_be, right_align},

@@ -105,8 +105,8 @@ impl Column {
         }
     }
 
-    /// Every note slot and leg the key publishes, on the frames `ring-frame-fit.md` fits. Owner rows
-    /// stay at one, a key's owner capacity is the run its transaction signs.
+    /// Every note slot and leg the key publishes, on the frames `test-vectors/proof/ring-frame-fit.md`
+    /// fits. Owner rows stay at one, a key's owner capacity is the run its transaction signs.
     const fn full_capacity(self) -> &'static [KeyCase] {
         match self {
             Self::ConfidentialPolicy => CONFIDENTIAL_POLICY_CAPACITY,

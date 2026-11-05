@@ -1,3 +1,11 @@
+//! The instruction tags, compute budgets and data of every ring instruction but the transfer.
+//!
+//! `WriteRecordsIxData::entry_within` holds a list write to its writer's lists and its value inside
+//! its mask. The apply circuit takes the chained value as given, a value past the mask would reach the tree.
+//!
+//! Read after `program-libs/interface/src/accounts/state.rs`. Read before `program-libs/interface/src/instructions/transact.rs`,
+//! `programs/custom-ring/src/lib.rs`.
+
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use wincode::{containers, len::FixIntLen, SchemaRead, SchemaWrite};
@@ -179,7 +187,7 @@ pub struct SourceSpec {
     pub source: u8,
 }
 
-/// Policy parameters must reproduce the configured policy hash.
+/// The table a policy write stores, the program computes its hash.
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]
 pub struct PolicyTableIxData {
     #[wincode(with = "containers::Vec<SourceSpec, FixIntLen<u8>>")]

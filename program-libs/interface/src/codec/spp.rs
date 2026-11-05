@@ -1,4 +1,10 @@
 //! What the ring reads of the pinned SPP account lists and public legs, pinned by `tests/spp.rs`.
+//!
+//! SPP reads its lists by position and folds its legs in one order. A wrong index or stride here
+//! would verify the ring proof against accounts SPP does not settle.
+//!
+//! Read after `program-libs/interface/src/lib.rs`. Read before `program-libs/interface/src/instructions/withdrawals.rs`,
+//! `programs/custom-ring/src/instructions/verification/public_legs.rs`.
 
 use arrayvec::ArrayVec;
 use solana_address::Address;

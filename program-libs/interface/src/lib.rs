@@ -113,7 +113,7 @@ pub const STORAGE_PROGRAM_ID: solana_address::Address =
 /// One-byte `0x04` scheme tag followed by a canonical X25519 u-coordinate.
 pub use output::RECIPIENT_KEY_LEN as TAGGED_X25519_KEY_LEN;
 pub const VIEWING_PUBKEY_TAG: u8 = 4;
-/// AES-256-CTR ciphertext of `0x00 || nullifier_secret || list_salt`.
+/// AES-256-CTR ciphertext of `nullifier_secret || list_salt`, 32 bytes each with a zero lead.
 pub const REGISTER_KEY_CIPHERTEXT_LEN: usize = 64;
 
 pub fn tagged_x25519(u: &[u8; 32]) -> [u8; TAGGED_X25519_KEY_LEN] {

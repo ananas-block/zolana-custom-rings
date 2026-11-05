@@ -91,7 +91,7 @@ pub struct TransferStatement<'a> {
     /// `n`, the frame's nullifier count.
     pub input_count: usize,
     pub private_tx_hash: &'a [u8; 32],
-    /// Default on the in-proof and authority rails and on an empty run.
+    /// Default on the authority rails and on an empty run.
     pub signers: SignerSet,
     pub roots: &'a TransferRoots,
     pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
@@ -175,7 +175,7 @@ pub enum TransferFamily<'a> {
     Confidential { sender: ConfidentialSender<'a> },
     /// The anonymous rail, the head's layout picks the entry disclosure.
     Anonymous {
-        /// `solana_owner_identity` of the payer, each co-signer and the withdrawal destination, zero when absent.
+        /// `solana_owner_identity` of the payer, each co-signer, each funder and the withdrawal destination, zero when absent.
         party_identities: &'a [[u8; 32]; ANONYMOUS_PARTIES],
         /// No hidden sender exists, every live owner is a published signer.
         public_owners: bool,

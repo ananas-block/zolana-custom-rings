@@ -1,5 +1,9 @@
 //! Domain tags of the ring hashes, distinct ASCII tags absorbed as the first
 //! Poseidon input and mirrored by Go `prover/circuits/shared/derivation.go`.
+//!
+//! A tag reused across two hashes would let a preimage of one answer for the other.
+//!
+//! Read after `program-libs/interface/src/proof/statement.rs`. Read before `program-libs/interface/src/proof/audit_stream.rs`.
 
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 

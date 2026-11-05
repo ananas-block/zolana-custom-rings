@@ -4,8 +4,8 @@
 //! ring's auditor must compute each nullifier, so each owner enrolls once with a proof that seals the
 //! nullifier secret and the list salt to the auditor key. Every transfer, deposit and merge proof then
 //! holds a live ring slot's key, other than `ZERO_NULLIFIER_PUBKEY`, to its owner's row under the tracking
-//! root, and an output under that key to an absent row. Without the row a sender could pay a key the auditor cannot
-//! open, and a wallet could skip its salted lists.
+//! root, and a transfer or deposit output under that key to an absent row. Without the row a sender could
+//! pay a key the auditor cannot open, and a wallet could skip its salted lists.
 //!
 //! A ring pins its tracking registry's address, `ring_id` and the seeds authenticate nothing.
 //!
@@ -86,7 +86,7 @@ pub struct TrackingAuthorization {
     pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
     /// Little endian, moves by one at every enrollment.
     pub revision: [u8; 8],
-    /// Little endian, zero before the first apply, grants nothing while behind `revision`.
+    /// Little endian, zero before the first apply, a revision past it grants nothing.
     pub applied_revision: [u8; 8],
 }
 
@@ -377,7 +377,7 @@ impl TrackingEntry {
 }
 
 impl InitializeTrackingIxData {
-    /// A key no proof can seal to would lock enrollment for good.
+    /// An untagged, zero or non-canonical key would lock enrollment for good.
     pub fn check(&self) -> Result<(), StorageError> {
         if self.ring_id == [0; 32] || !is_canonical_bn254_scalar_be(&self.ring_id) {
             return Err(StorageError::InvalidTrackingRegistry);

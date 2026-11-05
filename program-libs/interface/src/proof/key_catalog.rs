@@ -1,4 +1,11 @@
 //! Every ring circuit and its proving key, no verifying keys.
+//!
+//! A frame names its key by shape, and a key's widths fix its statement chains, its stream and its
+//! record pools. A frame off the catalog has no key and `RingShapeUnkeyed` refuses it.
+//!
+//! Read after `program-libs/interface/src/codec/stream.rs`. Read before `program-libs/interface/src/proof/verification.rs`,
+//! `programs/custom-ring/src/instructions/verification/verifier.rs`.
+
 use spr_interface::{shape::MAX_TRANSACTION_ADDRESSES, N_PUBLIC_SLOTS};
 
 use crate::{audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail};
@@ -90,14 +97,14 @@ const NARROW_SHAPES: [TransferShape; 4] = [
 const WIDE_SHAPES: [TransferShape; 4] = [
     wide(8, 24, 32, 24),
     wide(16, 5, 8, 5),
-    // Sized by the 8x16 rows of `ring-frame-fit.md`, those frames settle buffered. Wide alone, a
-    // narrow row would leave a salted read of the same frame with no key.
+    // Sized by the 8x16 rows of `test-vectors/proof/ring-frame-fit.md`, those frames settle buffered.
+    // Wide alone, a narrow row would leave a salted read of the same frame with no key.
     wide(16, 8, 8, 8),
     wide(2, 49, 4, 12),
 ];
-/// A frame takes the first row holding its width, the last sized by the 4x8 rows of `ring-frame-fit.md`.
+/// A frame takes the first row holding its width, the last sized by the 4x8 rows of `test-vectors/proof/ring-frame-fit.md`.
 const ENTRY_SHAPES: [TransferShape; 3] = [entry(4, 8, 4, 8), entry(8, 2, 4, 2), entry(8, 4, 4, 4)];
-/// Sized by the entry table of `ring-frame-fit.md`.
+/// Sized by the entry table of `test-vectors/proof/ring-frame-fit.md`.
 const WIDE_ENTRY_SHAPE: TransferShape = entry(2, 24, 32, 12);
 
 pub const TRANSFER_SHAPES: [TransferShape; 12] = [

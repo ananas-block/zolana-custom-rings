@@ -1,4 +1,11 @@
 //! Gross public payments the policy screens.
+//!
+//! A rule reads a withdrawal's real owner and mint, so each comes from the live settlement account
+//! and the statement binds the result as `withdrawal_hash`. A frame's owner off its token account refuses.
+//!
+//! Read after `program-libs/interface/src/codec/spp.rs`. Read before `program-libs/interface/src/instructions/anonymous_exit.rs`,
+//! `prover/circuits/policy/withdrawals.go`.
+
 use crate::{CustomRingError, SettlementAccount};
 use spr_hasher::{
     hash_chain::create_hash_chain_4,

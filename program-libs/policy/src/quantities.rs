@@ -1,4 +1,9 @@
 //! Each owner's guard, debit and outflow per asset, mirror `prover/circuits/policy/outflow.go` and `rules.go`.
+//!
+//! The circuit computes these values. A wallet computes the same ones for its approval bits ahead of
+//! a proof, and the program derives no threshold.
+//!
+//! Read after `program-libs/policy/src/asset_limits.rs`. Read before `program-libs/policy/src/approval_totals.rs`, `prover/circuits/policy/outflow.go`.
 
 use crate::MintPolicy;
 
