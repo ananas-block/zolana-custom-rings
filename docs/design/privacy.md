@@ -32,7 +32,7 @@ The confidential mode and the anonymous mode differ at the sender and the recipi
 ## Every mode
 
 - Enrollment is public. An `Enroll` names the owner as a signer and stores its nullifier key, list tag and viewing key in an account. Anyone sees that a wallet enrolled on a ring.
-- A tracking row holds the owner's viewing key for one ring. A leaked viewing secret opens the bodies sealed to that key on every ring whose row holds it. A rotation on one ring moves that ring alone to a new key.
+- A tracking authorization holds the owner's viewing key for one ring. A leaked viewing secret opens the bodies sealed to that key on every ring whose authorization holds it. A rotation on one ring moves that ring alone to a new key.
 - A transfer, deposit or nonzero-key merge publishes the tracking revision it reads. The revision shows that each row the proof opens existed at that revision, and names no owner.
 - A private write raises the source's tracking floor to the revision its rows open under. The floor shows that the written owner was enrolled by that revision.
 - A public record write names its member. A rule table is public, so observers see which lists a ring screens and who is on the public ones.
