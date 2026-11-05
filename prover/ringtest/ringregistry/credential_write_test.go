@@ -31,24 +31,10 @@ func privateWriteFixture(t testing.TB) *credentialWriteCircuit {
 
 func privateWriteForSalt(t testing.TB, salt *big.Int) *credentialWriteCircuit {
 	t.Helper()
-	credentials := credentialFixtureWithSalt(t, salt)
-	member := big.NewInt(101)
-	address := ringregistry.CredentialAddress(t, credentials.Owner, credentials.RingID, member)
-	addresses := spptest.MustNewNullifierTree(t)
-	index := addresses.NextIndex()
-	proof, err := addresses.InsertWithWitness(address, protocol.NullifierTreeHeight)
-	if err != nil {
-		t.Fatal(err)
-	}
-	write := registry.CredentialWrite{
-		Member: member, ListSalt: salt, Leaf: credentials.Opening(t, member).Leaf,
-		Address: registry.AddressLeaf{Next: proof.NextValue, Index: index},
-	}
-	for i, sibling := range proof.NewElementProof {
-		write.Address.Path[i] = sibling
-	}
+	owner := ringregistry.NewOwnerWrite(t, salt)
+	credentials := owner.Credentials
 	return &credentialWriteCircuit{
-		Write: write, Active: 1, Member: ringregistry.ListKey(t, member, salt), AddressRoot: addresses.Root(),
+		Write: owner.Write, Active: 1, Member: owner.Key, AddressRoot: owner.AddressRoot,
 		Roots: registry.CredentialRoots{RingID: credentials.RingID, Owner: credentials.Owner, StateRoots: credentials.StateRoots(1)},
 	}
 }

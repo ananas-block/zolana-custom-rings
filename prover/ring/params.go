@@ -255,7 +255,12 @@ type ApplyRecordsParams struct {
 	ChainEnd     Field  `json:"chainEnd"`
 	Count        uint8  `json:"count"`
 	// A nil write past Count assigns zeros.
-	Writes           []*RecordWriteProofInput `json:"writes"`
+	Writes []*RecordWriteProofInput `json:"writes"`
+}
+
+// PrivateApplyRecordsParams refuses a public request, every credential field is required.
+type PrivateApplyRecordsParams struct {
+	ApplyRecordsParams
 	CredentialWrites uint64                   `json:"credentialWrites"`
 	PrivateRingID    Field                    `json:"privateRingId"`
 	CredentialOwner  Field                    `json:"credentialOwner"`

@@ -37,7 +37,6 @@ import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js"
 import { RingError } from "../error.js";
 import { ListId, recordBit } from "./policy.js";
 import type { ApplyRecordsStatement } from "../proof/statement.js";
-import { CredentialRoots } from "../codec/credential-read.js";
 import { applyKeyWidth } from "../proof/proving-keys.js";
 
 /** `q - 1`, the sentinel's next, every member sorts strictly below it. */
@@ -290,6 +289,8 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
     throw new RingError("RING_STORAGE_WRITE_INVALID", {
       details: { reason: "InvalidCredentialRead" },
     });
+  // A count no apply key holds has no statement.
+  applyKeyWidth(inputs.writes.length);
   return Object.freeze({
     oldRoot: inputs.oldRoot,
     newRoot: inputs.newRoot,
@@ -298,9 +299,6 @@ export function applyRecordsStatement(inputs: ApplyProofInputs): ApplyRecordsSta
     chainStart: inputs.chainStart,
     chainEnd: inputs.chainEnd,
     count: BigInt(inputs.writes.length),
-    credentialWrites: 0,
-    privateRingId: new Uint8Array(32) as Bytes32,
-    credentials: CredentialRoots.empty(applyKeyWidth(inputs.writes.length)),
   });
 }
 

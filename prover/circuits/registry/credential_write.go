@@ -49,21 +49,11 @@ func (w CredentialWrite) Assert(api frontend.API, active, member, addressRoot fr
 	}
 }
 
-func (c *ApplyRecordsCircuit) credentialBits(api frontend.API) []frontend.Variable {
-	bits := api.ToBinary(c.CredentialWrites, c.NumWrites)
-	present := api.Sub(1, api.IsZero(c.CredentialWrites))
-	// A usable checkpoint has a private ring, while an empty read has one zero encoding.
-	assertCredentialEqualWhen(api, present, api.IsZero(c.PrivateRingID), 0)
-	assertCredentialEqualWhen(api, present, api.IsZero(c.CredentialOwner), 0)
-	assertCredentialEqualWhen(api, present, api.IsZero(c.AddressRoot), 0)
-	inactive := api.Sub(1, present)
-	for _, value := range []frontend.Variable{c.PrivateRingID, c.CredentialOwner, c.AddressRoot} {
-		assertCredentialEqualWhen(api, inactive, value, 0)
+// credentialBits refuses a private key proof that covers no private owner write.
+// The program selects a private key only for a nonzero bitmap.
+func (c *PrivateApplyRecordsCircuit) credentialBits(api frontend.API) []frontend.Variable {
+	for _, value := range []frontend.Variable{c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot} {
+		api.AssertIsDifferent(value, 0)
 	}
-	for _, root := range c.StateRoots {
-		for _, value := range root {
-			assertCredentialEqualWhen(api, inactive, value, 0)
-		}
-	}
-	return bits
+	return api.ToBinary(c.CredentialWrites, c.NumWrites)
 }

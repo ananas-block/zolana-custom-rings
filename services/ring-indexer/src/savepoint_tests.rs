@@ -3,7 +3,7 @@
 //! savepoint must drop every row it wrote before that one.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit,
+    key_catalog::apply_width,
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
     storage_instruction::{tag, InitializeIxData, PrivateWriteCheckpoint, StorageUpdateIxData},
@@ -87,11 +87,7 @@ fn private_update(members: &[u8]) -> BlockInfo {
         )
         .unwrap()
         .proof;
-    let RingCircuit::ApplyRecords { writes: width } =
-        RingCircuit::apply_records(writes.len() as u64)
-    else {
-        unreachable!("one to sixteen writes have an apply key")
-    };
+    let width = apply_width(writes.len() as u64);
     let apply = ApplyRecordsIxData {
         proof: bytemuck::Zeroable::zeroed(),
         new_root: proof.new_root,

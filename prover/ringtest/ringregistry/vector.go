@@ -17,21 +17,20 @@ type Vector struct {
 
 // Update is one ordered batch of the storage program's Update instruction.
 type Update struct {
-	Name             string         `json:"name"`
-	Revision         uint64         `json:"revision"`
-	Writes           []BatchWrite   `json:"writes"`
-	OldRoot          ringtest.Hex   `json:"old_root"`
-	NewRoot          ringtest.Hex   `json:"new_root"`
-	OldNextIndex     uint64         `json:"old_next_index"`
-	NewNextIndex     uint64         `json:"new_next_index"`
-	ChainStart       ringtest.Hex   `json:"chain_start"`
-	ChainEnd         ringtest.Hex   `json:"chain_end"`
-	Count            int            `json:"count"`
-	StatementHash    ringtest.Hex   `json:"statement_hash"`
-	ProofInputs      []AppliedWrite `json:"proof_inputs"`
-	CredentialWrites uint16         `json:"credential_writes"`
-	PrivateRingID    ringtest.Hex   `json:"private_ring_id"`
-	CredentialFields []ringtest.Hex `json:"credential_fields"`
+	Name          string         `json:"name"`
+	Revision      uint64         `json:"revision"`
+	Writes        []BatchWrite   `json:"writes"`
+	OldRoot       ringtest.Hex   `json:"old_root"`
+	NewRoot       ringtest.Hex   `json:"new_root"`
+	OldNextIndex  uint64         `json:"old_next_index"`
+	NewNextIndex  uint64         `json:"new_next_index"`
+	ChainStart    ringtest.Hex   `json:"chain_start"`
+	ChainEnd      ringtest.Hex   `json:"chain_end"`
+	Count         int            `json:"count"`
+	StatementHash ringtest.Hex   `json:"statement_hash"`
+	ProofInputs   []AppliedWrite `json:"proof_inputs"`
+	// Width is the public apply key's write capacity.
+	Width int `json:"width"`
 }
 
 type VectorEntry struct {

@@ -18,7 +18,7 @@ export { transferPoolCapacity as policyPoolCapacity, type PolicyPoolCapacity };
 /** A ring circuit by the shape its key serves, Rust `RingCircuit`. */
 export type RingKeyCircuit =
   | TransferKeyCircuit
-  | Readonly<{ family: "applyRecords"; writes: number }>
+  | Readonly<{ family: "applyRecords"; writes: number; private: boolean }>
   | Readonly<{ family: "registerKey" }>
   | Readonly<{ family: "deposit"; capacity: number }>
   | Readonly<{ family: "merge" }>;
@@ -42,9 +42,14 @@ export const RING_KEYS: readonly Readonly<{
   (
     [
       ...transferKeys().map((circuit) => [circuit, transferCircuitType(circuit)] as const),
-      ...APPLY_WIDTHS.map(
-        (writes) =>
-          [{ family: "applyRecords", writes }, `custom-ring-apply-records-${writes}`] as const,
+      ...[false, true].flatMap((isPrivate) =>
+        APPLY_WIDTHS.map(
+          (writes) =>
+            [
+              { family: "applyRecords", writes, private: isPrivate },
+              `custom-ring-apply-records-${isPrivate ? "private-" : ""}${writes}`,
+            ] as const,
+        ),
       ),
       [{ family: "registerKey" }, "custom-ring-register-key"],
       ...[1, 2, 4, 8].map(
@@ -68,7 +73,7 @@ export function ringCredentialCapacity(circuit: RingKeyCircuit): number | undefi
     case "merge":
       return 1;
     case "applyRecords":
-      return circuit.writes;
+      return circuit.private ? circuit.writes : 0;
     case "registerKey":
       return undefined;
   }

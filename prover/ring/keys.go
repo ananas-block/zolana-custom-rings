@@ -31,6 +31,8 @@ type Key struct {
 	Owners      int
 	Entry       bool
 	Wide        bool
+	// Private names the apply key with one credential slot per write.
+	Private bool
 }
 
 // Keys takes each shape from the package that sizes it.
@@ -49,8 +51,10 @@ func keys() []Key {
 	for _, shape := range transfer.Shapes {
 		add(Key{Family: Transfer, Inputs: shape.Inputs, Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Owners: shape.Owners, Entry: shape.Entry, Wide: shape.Wide})
 	}
-	for _, writes := range registry.ApplyWidths {
-		add(Key{Family: ApplyRecords, Inputs: writes})
+	for _, private := range []bool{false, true} {
+		for _, writes := range registry.ApplyWidths {
+			add(Key{Family: ApplyRecords, Inputs: writes, Private: private})
+		}
 	}
 	add(Key{Family: RegisterKey})
 	for _, capacity := range circuits.DepositCapacities {
@@ -79,6 +83,9 @@ func (k Key) circuitType() common.CircuitType {
 		}
 		return named("%s-%d-in%d-w%d-s%d", family, k.Outputs, k.Inputs, k.Withdrawals, k.Owners)
 	case ApplyRecords:
+		if k.Private {
+			return named("apply-records-private-%d", k.Inputs)
+		}
 		return named("apply-records-%d", k.Inputs)
 	case RegisterKey:
 		return named("register-key")

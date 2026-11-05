@@ -196,6 +196,7 @@ export {
 } from "../protocol/codec/credential-read.js";
 export type {
   ApplyRecordsStatement,
+  PrivateWrites,
   AuditHead,
   SignerBinding,
   TransferBinding,

@@ -28,6 +28,7 @@ use crate::{
     disclosure::{pack_disclosure, AuditLayout},
     domain,
     error::CustomRingError,
+    key_catalog::{ApplyMode, RingCircuit},
     tagged_x25519,
     transact::RingOutput,
     TAGGED_X25519_KEY_LEN,
@@ -399,14 +400,36 @@ pub struct ApplyRecordsStatement {
     /// The chain past the last write.
     pub chain_end: [u8; 32],
     pub count: u64,
+    /// `None` selects the public key, its statement ends at the count.
+    pub private: Option<PrivateWrites>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateWrites {
+    /// The private key refuses zero, a batch without a private owner write is public.
     pub credential_writes: u16,
     pub private_ring_id: [u8; 32],
     pub credentials: CredentialRoots,
 }
 
 impl ApplyRecordsStatement {
+    pub const fn mode(&self) -> ApplyMode {
+        match self.private {
+            Some(_) => ApplyMode::Private,
+            None => ApplyMode::Public,
+        }
+    }
+
+    pub const fn circuit(&self) -> RingCircuit {
+        RingCircuit::apply_records(self.count, self.mode())
+    }
+
     pub fn elements(&self) -> Vec<[u8; 32]> {
-        let mut elements = Vec::with_capacity(12 + 2 * self.credentials.capacity());
+        let credential_fields = self
+            .private
+            .as_ref()
+            .map_or(0, |private| 2 + 2 * private.credentials.capacity());
+        let mut elements = Vec::with_capacity(8 + credential_fields);
         // 1. CRAP binds the record transition and the exact write chain under the selected write count.
         elements.extend([
             domain::field(domain::APPLY_RECORDS),
@@ -418,12 +441,15 @@ impl ApplyRecordsStatement {
             self.chain_end,
             right_align(&self.count.to_be_bytes()),
         ]);
-        // 2. Private writes bind the registry's ring and authenticated credential roots, public writes require an all zero credential run.
-        elements.extend([
-            right_align(&self.credential_writes.to_be_bytes()),
-            self.private_ring_id,
-        ]);
-        elements.extend(self.credentials.elements());
+        // 2. A private key also binds the registry's ring and the authenticated credential roots.
+        // The two families verify under distinct keys, so the shorter public statement needs no separate domain.
+        if let Some(private) = &self.private {
+            elements.extend([
+                right_align(&private.credential_writes.to_be_bytes()),
+                private.private_ring_id,
+            ]);
+            elements.extend(private.credentials.elements());
+        }
         elements
     }
 

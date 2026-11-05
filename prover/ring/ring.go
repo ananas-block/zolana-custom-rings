@@ -32,6 +32,9 @@ func (k Key) extension() common.ExtensionCircuit {
 	case Transfer:
 		return bindPolicy[TransferParams](k, transfer.NewTransferCircuit, k.transferShape())
 	case ApplyRecords:
+		if k.Private {
+			return bind[PrivateApplyRecordsParams](k, registry.NewPrivateApplyRecordsCircuit, k.Inputs)
+		}
 		return bind[ApplyRecordsParams](k, registry.NewApplyRecordsCircuit, k.Inputs)
 	case RegisterKey:
 		return bind[RegisterKeyParams](k, unsized[registry.RegisterKeyCircuit], struct{}{})

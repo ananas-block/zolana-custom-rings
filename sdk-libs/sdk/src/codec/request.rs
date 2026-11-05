@@ -628,6 +628,15 @@ pub(crate) struct ApplyRecords {
     pub count: u8,
     /// The key's batch, writes past `count` assign zeros.
     pub writes: Vec<Option<RecordWriteProofInputRequest>>,
+    /// Absent on a public key, the prover refuses credential fields there.
+    #[serde(flatten)]
+    pub private: Option<PrivateApplyRecords>,
+}
+
+/// Go `PrivateApplyRecordsParams` beside the shared apply fields.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PrivateApplyRecords {
     pub credential_writes: u64,
     #[serde(with = "fe")]
     pub private_ring_id: [u8; 32],

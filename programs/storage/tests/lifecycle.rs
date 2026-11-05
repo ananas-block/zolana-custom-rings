@@ -337,6 +337,11 @@ fn allow_write() -> RecordWriteData {
     }
 }
 
+/// Missing artifact, a private update passes every check and stops where no private apply key exists.
+fn private_key_lookup() -> Result<(), TransactionError> {
+    refusal(StorageError::UnsupportedBatch)
+}
+
 fn refusal(code: impl Into<pinocchio::error::ProgramError>) -> Result<(), TransactionError> {
     let pinocchio::error::ProgramError::Custom(code) = code.into() else {
         panic!("expected a custom error");
@@ -704,10 +709,7 @@ fn private_proof_failure_and_stale_revision_keep_the_root_and_floor() {
         data.credential_read = CredentialRead::new(root_index, &[0]).unwrap();
         data.private_write.as_mut().unwrap().sequence = 8 + u64::from(root_index);
         instruction.data = [vec![tag::UPDATE], data.encode().unwrap()].concat();
-        assert_eq!(
-            store.send_as_authority(instruction),
-            refusal(StorageError::ProofVerificationFailed)
-        );
+        assert_eq!(store.send_as_authority(instruction), private_key_lookup());
         assert_eq!(store.svm.get_account(&registry).unwrap(), before);
     }
     let mut stale = store.private_update(registry);
@@ -784,7 +786,91 @@ fn a_private_write_refuses_a_false_checkpoint_sequence_before_the_proof() {
     }
     assert_eq!(
         store.send_as_authority(store.private_update(registry)),
+        private_key_lookup()
+    );
+    assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+}
+
+/// Skips the checks `StorageUpdateIxData::encode` runs.
+fn set_first_write_lists(instruction: &mut Instruction, bits: u64) {
+    let write = 1 + 8 + 1;
+    let lists = write + core::mem::offset_of!(RecordWriteData, lists);
+    for field in [
+        core::mem::offset_of!(WriteRecordsIxData, mask),
+        core::mem::offset_of!(WriteRecordsIxData, value),
+    ] {
+        instruction.data[lists + field..lists + field + 8].copy_from_slice(&bits.to_le_bytes());
+    }
+}
+
+#[test]
+fn a_public_update_carrying_a_private_owner_write_is_refused_before_any_key() {
+    let mut store = Store::new();
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    store.seed_tree(0);
+    store.seed_tree(1);
+    let before = store.svm.get_account(&registry).unwrap();
+    for list in [ListId::PrivateBlock, ListId::PrivateAllow] {
+        let mut instruction = store.zero_proof_update_of(registry, 0, ListId::Block);
+        set_first_write_lists(&mut instruction, list.record_bit());
+        assert_eq!(
+            store.send_as_authority(instruction),
+            refusal(StorageError::InvalidCredentialRead)
+        );
+    }
+    assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+}
+
+#[test]
+fn a_private_update_without_its_checkpoint_is_refused_before_any_key() {
+    let mut store = Store::new();
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    store.seed_tree(0);
+    store.seed_tree(1);
+    let before = store.svm.get_account(&registry).unwrap();
+    // 1. The credential read names state roots, the checkpoint bytes are cut.
+    let mut cut = store.private_update(registry);
+    let apply = cut.data.len() - core::mem::size_of::<ApplyRecordsIxData>();
+    cut.data.drain(apply - 40..apply);
+    assert_eq!(
+        store.send_as_authority(cut),
+        refusal(StorageError::InvalidInstructionData)
+    );
+    // 2. The private write carries neither credential read nor checkpoint.
+    let mut bare = store.zero_proof_update_of(registry, 0, ListId::Block);
+    set_first_write_lists(&mut bare, ListId::PrivateBlock.record_bit());
+    bare.accounts
+        .extend(store.private_update(registry).accounts[2..].iter().cloned());
+    assert_eq!(
+        store.send_as_authority(bare),
+        refusal(StorageError::InvalidCredentialRead)
+    );
+    // 3. A checkpoint on a batch with no private owner write names no key either.
+    let mut declared = store.private_update(registry);
+    set_first_write_lists(&mut declared, ListId::Block.record_bit());
+    assert_eq!(
+        store.send_as_authority(declared),
+        refusal(StorageError::InvalidCredentialRead)
+    );
+    assert_eq!(store.svm.get_account(&registry).unwrap(), before);
+}
+
+#[test]
+fn each_mode_reaches_its_own_apply_key() {
+    let mut store = Store::new();
+    let registry = store.initialize_pinned(PRIVATE_ID, RING_ID);
+    store.seed_tree(0);
+    store.seed_tree(1);
+    let before = store.svm.get_account(&registry).unwrap();
+    // The public key has a verifying key, the zero proof fails its pairing.
+    assert_eq!(
+        store.send_as_authority(store.zero_proof_update_of(registry, 0, ListId::Block)),
         refusal(StorageError::ProofVerificationFailed)
+    );
+    // The same write count with a private owner write looks up the private key instead.
+    assert_eq!(
+        store.send_as_authority(store.private_update(registry)),
+        private_key_lookup()
     );
     assert_eq!(store.svm.get_account(&registry).unwrap(), before);
 }

@@ -8,10 +8,10 @@
 //! 2. A write that would leave a new member's record empty inserts nothing, the member stays absent and the root stays.
 
 use custom_ring_interface::{
-    key_catalog::RingCircuit,
+    key_catalog::apply_width,
     storage::{StorageError, StorageRegistry},
     storage_instruction::{AssetWrite, RecordWriteClassification},
-    write_chain, ApplyRecordsStatement, CredentialRootSelection, CredentialRoots, CustomRingError,
+    write_chain, ApplyRecordsStatement, CredentialRootSelection, CustomRingError, PrivateWrites,
     RecordWrite, FIELD_MAX, QUAD_HEIGHT,
 };
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
@@ -226,20 +226,16 @@ impl ApplyProofInputs<RecordWriteProofInput> {
         }
         .credential_writes()?;
         let count = self.writes.len() as u64;
-        let RingCircuit::ApplyRecords { writes } = RingCircuit::apply_records(count) else {
-            return Err(StorageError::UnsupportedBatch.into());
-        };
-        let capacity = usize::from(writes);
-        // 3. Public batches use the canonical empty statement, private batches require the pinned ring's supplied root selection.
-        let credentials = match context.credentials {
+        // 3. Public batches bind no credential section, private batches require the pinned ring's supplied root selection.
+        let private = match context.credentials {
             RecordCredentials::Public => {
                 if credential_writes != 0 {
                     return Err(StorageError::InvalidCredentialRead.into());
                 }
-                CredentialRoots::empty(capacity)?
+                None
             }
             RecordCredentials::Private(selection) => {
-                if credential_writes == 0 || selection.capacity != capacity {
+                if credential_writes == 0 || selection.capacity != usize::from(apply_width(count)) {
                     return Err(StorageError::InvalidCredentialRead.into());
                 }
                 if !context.registry.is_private() {
@@ -250,7 +246,11 @@ impl ApplyProofInputs<RecordWriteProofInput> {
                 if ring_id != context.registry.private_ring_id {
                     return Err(StorageError::InvalidPrivateRing.into());
                 }
-                selection.roots()?
+                Some(PrivateWrites {
+                    credential_writes,
+                    private_ring_id: context.registry.private_ring_id,
+                    credentials: selection.roots()?,
+                })
             }
         };
         let index = |value: u64| u32::try_from(value).map_err(|_| RecordTreeError::IndexOutOfRange);
@@ -262,13 +262,7 @@ impl ApplyProofInputs<RecordWriteProofInput> {
             chain_start: self.chain_start,
             chain_end: self.chain_end,
             count,
-            credential_writes,
-            private_ring_id: if credential_writes == 0 {
-                [0; 32]
-            } else {
-                context.registry.private_ring_id
-            },
-            credentials,
+            private,
         })
     }
 }

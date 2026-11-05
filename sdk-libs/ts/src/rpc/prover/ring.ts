@@ -231,14 +231,20 @@ export interface CredentialWriteProofInput {
   readonly addressPath: readonly Bytes32[];
 }
 
-/** Go `ApplyRecordsParams`, one write takes the 1-write key, more the batch key. */
+/** Go `ApplyRecordsParams`, the write count picks the width and `private` the family. */
 export interface ApplyRecordsProofRequest extends ApplyProofInputs {
   readonly kind: "applyRecords";
   readonly publicInputHash: Bytes32;
-  /** Bit `i` marks write `i` private, zero on a public update. */
+  /** Absent on a public update, the public apply key takes no credential field. */
+  readonly private?: PrivateApplyProofInput;
+}
+
+/** Go `PrivateApplyRecordsParams` beside the shared apply fields. */
+export interface PrivateApplyProofInput {
+  /** Bit `i` marks write `i` private, never zero. */
   readonly credentialWrites: number;
   readonly privateRingId: Bytes32;
-  /** At the apply key's width, `CredentialRoots.empty` on a public update. */
+  /** At the apply key's width. */
   readonly credentialRoots: CredentialRoots;
   /** One per marked write, `undefined` elsewhere. */
   readonly credentials: readonly (CredentialWriteProofInput | undefined)[];
@@ -319,7 +325,11 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
     case "transfer":
       return transferCircuit(request);
     case "applyRecords":
-      return { family: "applyRecords", writes: applyCapacity(listLength(request.writes)) };
+      return {
+        family: "applyRecords",
+        writes: applyCapacity(listLength(request.writes)),
+        private: request.private !== undefined,
+      };
     case "registerKey":
       return { family: "registerKey" };
     case "deposit":
@@ -362,28 +372,12 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       return { ...head, ...transferJson(request) };
     case "applyRecords": {
       const capacity = applyCapacity(request.writes.length);
-      const roots = sizedRoots(request.credentialRoots, capacity, "credentialRoots");
       return {
         ...head,
         ...applyHeadJson(request),
         count: request.writes.length,
         writes: paddedWrites(request.writes, capacity, writeJson),
-        credentialWrites: integer(
-          request.credentialWrites,
-          "credentialWrites",
-          0,
-          (1 << capacity) - 1,
-        ),
-        privateRingId: field(request.privateRingId, "privateRingId"),
-        credentialOwner: field(roots.ownerHash, "credentialOwner"),
-        addressRoot: field(roots.addressRoot, "addressRoot"),
-        stateRoots: stateRootsJson(roots.stateRoots, "stateRoots"),
-        credentials: paddedWrites(
-          request.credentials,
-          capacity,
-          (write, name) => credentialWriteJson(write, name, capacity),
-          "credentials",
-        ),
+        ...(request.private === undefined ? {} : privateApplyJson(request.private, capacity)),
       };
     }
     case "registerKey":
@@ -823,6 +817,23 @@ function mintPolicyJson(policy: MintPolicy, name: string, prefix: "" | "low" | "
       `${name}.${key("withdrawalThreshold")}`,
     ),
     [key("assetLimits")]: limitsJson(policy.limits, `${name}.${key("assetLimits")}`),
+  };
+}
+
+function privateApplyJson(input: PrivateApplyProofInput, capacity: number): Json {
+  const roots = sizedRoots(input.credentialRoots, capacity, "credentialRoots");
+  return {
+    credentialWrites: integer(input.credentialWrites, "credentialWrites", 1, (1 << capacity) - 1),
+    privateRingId: field(input.privateRingId, "privateRingId"),
+    credentialOwner: field(roots.ownerHash, "credentialOwner"),
+    addressRoot: field(roots.addressRoot, "addressRoot"),
+    stateRoots: stateRootsJson(roots.stateRoots, "stateRoots"),
+    credentials: paddedWrites(
+      input.credentials,
+      capacity,
+      (write, name) => credentialWriteJson(write, name, capacity),
+      "credentials",
+    ),
   };
 }
 

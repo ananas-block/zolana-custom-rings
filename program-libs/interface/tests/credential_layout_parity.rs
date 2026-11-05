@@ -7,8 +7,10 @@ use custom_ring_interface::{
     AuditCredential, CredentialRead, CredentialRootSelection, CredentialRoots, CredentialStateRoot,
     CustomRingProof, DepositPrefix, DepositPublicInput, DepositRegistry, DepositedAsset,
     EnrollIxData, EnrollRequest, InstructionTag, MergePublicInput, OPENING_RECORD_LEN,
-    ParsedTransact, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, SignerSet, TransferBinding, TransferRoots,
-    credential::credential_owner, domain, storage::Revision,
+    ParsedTransact, PrivateWrites, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN, SignerSet, TransferBinding,
+    TransferRoots, credential::credential_owner, domain,
+    key_catalog::{ApplyMode, RingCircuit},
+    storage::Revision,
 };
 use solana_address::Address;
 use spr_hasher::{
@@ -330,11 +332,13 @@ fn apply_records_appends_private_write_identity_and_credential_roots() {
         chain_start: [5; 32],
         chain_end: [6; 32],
         count: 2,
-        credential_writes: 1,
-        private_ring_id: [7; 32],
-        credentials: roots(2),
+        private: Some(PrivateWrites {
+            credential_writes: 1,
+            private_ring_id: [7; 32],
+            credentials: roots(2),
+        }),
     };
-    let mut expected = vec![
+    let public_prefix = vec![
         domain::field(domain::APPLY_RECORDS),
         [1; 32],
         [2; 32],
@@ -343,23 +347,35 @@ fn apply_records_appends_private_write_identity_and_credential_roots() {
         [5; 32],
         [6; 32],
         right_align(&[2]),
-        right_align(&[1]),
-        [7; 32],
     ];
-    expected.extend(statement.credentials.elements());
+    let mut expected = public_prefix.clone();
+    expected.extend([right_align(&[1]), [7; 32]]);
+    expected.extend(roots(2).elements());
     assert_eq!(expected.len(), 16);
     assert_eq!(statement.elements(), expected);
     assert_eq!(
         statement.hash().unwrap(),
         create_hash_chain_4_from_slice(&expected).unwrap()
     );
+    assert_eq!(
+        statement.circuit(),
+        RingCircuit::ApplyRecords {
+            writes: 2,
+            mode: ApplyMode::Private
+        }
+    );
     let public = ApplyRecordsStatement {
-        credential_writes: 0,
-        private_ring_id: [0; 32],
-        credentials: CredentialRoots::empty(2).unwrap(),
+        private: None,
         ..statement
     };
-    assert_eq!(&public.elements()[8..], &[[0; 32]; 8]);
+    assert_eq!(public.elements(), public_prefix);
+    assert_eq!(
+        public.circuit(),
+        RingCircuit::ApplyRecords {
+            writes: 2,
+            mode: ApplyMode::Public
+        }
+    );
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use bytemuck::Zeroable;
 use custom_ring_interface::{
+    key_catalog::ApplyMode,
     storage::{Revision, StorageError},
     storage_instruction::tag as storage_tag,
     CredentialRead, RecordWriteData,
@@ -381,13 +382,22 @@ mod private_write {
                 sequence: SEQUENCE,
             }
         );
-        assert_eq!(plan.statement.credential_writes, 1);
-        let opened = plan.body.credentials[0].as_ref().unwrap();
+        assert_eq!(
+            plan.statement
+                .private
+                .as_ref()
+                .map(|private| private.credential_writes),
+            Some(1)
+        );
+        assert_eq!(plan.circuit, plan.statement.circuit());
+        assert_eq!(plan.statement.mode(), ApplyMode::Private);
+        let credentials = &plan.body.private.as_ref().unwrap().credentials;
+        let opened = credentials[0].as_ref().unwrap();
         assert_eq!(
             (opened.list_salt, opened.address_index, opened.address_next),
             (list_salt(), ADDRESS_INDEX, ADDRESS_NEXT)
         );
-        assert!(plan.body.credentials[1..].iter().all(Option::is_none));
+        assert!(credentials[1..].iter().all(Option::is_none));
         let instruction = update_of(&batch, &plan, plan.private_write.sequence);
         assert_eq!(
             instruction

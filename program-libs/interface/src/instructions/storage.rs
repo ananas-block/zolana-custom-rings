@@ -15,7 +15,7 @@ use crate::{
     ApplyRecordsIxData, CredentialRead, ReaderKeyBytes, RecordWriteData,
     error::CustomRingError,
     instruction::{list_and_mint_entry, write_count},
-    key_catalog::RingCircuit,
+    key_catalog::apply_width,
     member_registry::RecordWrite,
     storage::{RegistryId, Revision, StorageError},
 };
@@ -226,6 +226,7 @@ impl<'a> StorageUpdateIxData<'a> {
         .credential_writes()
     }
 
+    /// The checkpoint declares the mode and the classified writes must agree, a private owner write never reaches a public key.
     pub fn check_credential_read(&self) -> Result<(), StorageError> {
         if self.credential_writes()? == 0 {
             self.credential_read
@@ -235,13 +236,8 @@ impl<'a> StorageUpdateIxData<'a> {
                 return Err(StorageError::InvalidCredentialRead);
             }
         } else {
-            let RingCircuit::ApplyRecords { writes } =
-                RingCircuit::apply_records(self.writes.len() as u64)
-            else {
-                return Err(StorageError::UnsupportedBatch);
-            };
             self.credential_read
-                .check_capacity(usize::from(writes))
+                .check_capacity(usize::from(apply_width(self.writes.len() as u64)))
                 .map_err(|_| StorageError::InvalidCredentialRead)?;
             if self.private_write.is_none() {
                 return Err(StorageError::InvalidCredentialRead);

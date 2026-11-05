@@ -312,12 +312,26 @@ describe("ring-statements.json", () => {
       chainStart: field(apply.chain_start),
       chainEnd: field(apply.chain_end),
       count: BigInt(apply.count),
-      credentialWrites: apply.credential_writes,
-      privateRingId: field(apply.private_ring_id),
-      credentials: vectorCredentialRoots(apply.credential_fields),
+      private: {
+        credentialWrites: apply.credential_writes,
+        privateRingId: field(apply.private_ring_id),
+        credentials: vectorCredentialRoots(apply.credential_fields),
+      },
     };
     expect(hexes(applyRecordsStatementElements(applyStatement))).toEqual(apply.elements);
     expect(hex(applyRecordsStatementHash(applyStatement))).toBe(apply.public_input_hash);
+    const pub = statements.apply_records_public;
+    const publicStatement = {
+      oldRoot: field(pub.old_root),
+      newRoot: field(pub.new_root),
+      oldNextIndex: pub.old_next_index,
+      newNextIndex: pub.new_next_index,
+      chainStart: field(pub.chain_start),
+      chainEnd: field(pub.chain_end),
+      count: BigInt(pub.count),
+    };
+    expect(hexes(applyRecordsStatementElements(publicStatement))).toEqual(pub.elements);
+    expect(hex(applyRecordsStatementHash(publicStatement))).toBe(pub.public_input_hash);
     const register = statements.register_key;
     const registerStatement: AuditCredential = {
       ringId: field(register.ring_id),
