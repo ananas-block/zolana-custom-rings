@@ -520,7 +520,7 @@ async function mergeCredential(
     },
     context,
   );
-  if (lookup.kind === "absent") throw new RingError("RING_ADDRESS_NOT_ENROLLED");
+  if (lookup.kind === "absent") throw new RingError("RING_RECIPIENT_NOT_ENROLLED");
   if (lookup.kind === "unknown")
     throw new RingError("RING_CREDENTIAL_UNKNOWN", { details: { reason: lookup.reason } });
   const { rootIndex, root } = lookup.root;
