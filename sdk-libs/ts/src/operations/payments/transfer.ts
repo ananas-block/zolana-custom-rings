@@ -136,7 +136,7 @@ export type RingAnonymousRail = Readonly<{
   spendPublic?: never;
 }>;
 
-/** `wallet` becomes public and may spend its zero-key notes, recipients stay hidden on an anonymous ring. */
+/** `wallet` becomes public, recipients stay hidden on an anonymous ring. */
 export interface RingPublicSpend {
   readonly wallet: Address;
   /** `null` sends no reply, named on every anonymous payment. */
@@ -349,8 +349,6 @@ export function selectRingInputs(
     amount: bigint;
     inputs: "ring" | "ring-or-default" | "default" | "entry";
     maxInputs: number;
-    /** A spend naming the wallet may take its zero-key notes. */
-    spendExposed?: boolean;
   }>,
 ): readonly WalletUtxo[] {
   const { wallet, ringProgramId, asset, amount, inputs } = input;
@@ -372,7 +370,7 @@ export function selectRingInputs(
             exposed(entry),
         )
         .reduce((sum, entry) => sum + entry.utxo.amount, 0n);
-      return exposedIfSpent === 0n || input.spendExposed === true
+      return exposedIfSpent === 0n
         ? ringSelectionErrors.insufficient(shortfall)
         : new RingError("RING_UNFUNDED_PAST_EXPOSURE", {
             details: {
@@ -385,7 +383,7 @@ export function selectRingInputs(
   };
   const eligible = (entry: WalletUtxo): boolean => {
     if (!unreserved(reserved)(entry)) return false;
-    if (input.spendExposed !== true && exposed(entry)) return false;
+    if (exposed(entry)) return false;
     if (entry.utxo.ringProgramId === ringProgramId)
       return inputs === "ring" || inputs === "ring-or-default";
     return (
@@ -825,23 +823,16 @@ async function stageRingSpend<R>(
   };
   const selected =
     retry.entries ??
-    (route === "public"
-      ? selectRingInputs({
+    (route !== "public" && anonymousRing
+      ? selectAnonymousInputs(pool, strategy.selection)
+      : selectRingInputs({
           ...pool,
-          inputs: strategy.selection,
+          inputs:
+            input.ownerInProof && strategy.selection === "ring-or-default"
+              ? "ring"
+              : strategy.selection,
           maxInputs: MAX_TRANSACT_INPUTS,
-          spendExposed: true,
-        })
-      : anonymousRing
-        ? selectAnonymousInputs(pool, strategy.selection)
-        : selectRingInputs({
-            ...pool,
-            inputs:
-              input.ownerInProof && strategy.selection === "ring-or-default"
-                ? "ring"
-                : strategy.selection,
-            maxInputs: MAX_TRANSACT_INPUTS,
-          }));
+        }));
   retry.reservation = retry.reservation ?? reserveEntries(params.wallet, selected, retry.lifetime);
   retry.entries = selected;
   const transfer = ringSpendTransfer({
