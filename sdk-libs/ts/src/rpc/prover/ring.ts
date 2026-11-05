@@ -33,7 +33,6 @@ import {
   TRACKING_CAPACITY,
   TRACKING_QUAD_HEIGHT,
   type TrackingEntry,
-  type ServedTrackingRecord,
   type TrackingOpening,
   type TrackingRecord,
 } from "../../protocol/membership/tracking.js";
@@ -224,8 +223,15 @@ export interface PrivateApplyProofInput {
   readonly privateWrites: number;
   /** The pinned tracking registry's root at the batch's tracking revision. */
   readonly trackingRoot: Bytes32;
-  /** The member's present row per marked write, `undefined` elsewhere. */
-  readonly rows: readonly (ServedTrackingRecord | undefined)[];
+  /** One per marked write, `undefined` elsewhere. */
+  readonly owners: readonly (PrivateOwnerProofInput | undefined)[];
+}
+
+/** Go `PrivateOwnerParams`, a marked write's owner row, present under a nonzero key. */
+export interface PrivateOwnerProofInput {
+  readonly listSalt: Bytes32;
+  readonly record: TrackingRecord;
+  readonly path: QuadPath;
 }
 
 /** Go `TrackingWrite`, the witness of one applied entry. */
@@ -811,14 +817,15 @@ function privateApplyJson(input: PrivateApplyProofInput, capacity: number): Json
   return {
     privateWrites: integer(input.privateWrites, "privateWrites", 1, (1 << capacity) - 1),
     trackingRoot: field(input.trackingRoot, "trackingRoot"),
-    trackingRows: paddedWrites(
-      input.rows,
+    owners: paddedWrites(
+      input.owners,
       capacity,
-      (row, name) => ({
-        record: trackingRecordJson(row.record, `${name}.record`),
-        path: sharedPathJson(row.path, TRACKING_QUAD_HEIGHT, MAX_TRACKING_INDEX, `${name}.path`),
+      (owner, name) => ({
+        listSalt: field(owner.listSalt, `${name}.listSalt`),
+        record: trackingRecordJson(owner.record, `${name}.record`),
+        ...trackingPathJson(owner.path, name, "index", "path"),
       }),
-      "trackingRows",
+      "owners",
     ),
   };
 }

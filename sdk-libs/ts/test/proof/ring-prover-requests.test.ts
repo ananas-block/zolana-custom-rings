@@ -489,16 +489,13 @@ function request(item: Json): RingProofRequest {
             private: {
               privateWrites: count(item["privateWrites"]),
               trackingRoot: field(item["trackingRoot"]),
-              rows: list(item["trackingRows"]).map((value) => {
+              owners: list(item["owners"]).map((value) => {
                 if (value === null) return undefined;
-                const row = record(value);
-                const path = record(row["path"]);
+                const owner = record(value);
                 return {
-                  record: trackingRecord(row["record"]),
-                  path: {
-                    index: count(path["index"]),
-                    siblings: list(path["siblings"]).map(fields),
-                  },
+                  listSalt: field(owner["listSalt"]),
+                  record: trackingRecord(owner["record"]),
+                  path: quadPath(owner["index"], owner["path"]),
                 };
               }),
             },
@@ -1140,33 +1137,39 @@ describe("tracking apply requests", () => {
     low: SENTINEL_RECORD,
     lowPath: ZERO_PATH(QUAD_HEIGHT),
   };
-  const ROW = { record: TRACKING_SENTINEL, path: ZERO_PATH(TRACKING_QUAD_HEIGHT) };
-  const privateApply = (privateWrites: number, rows: readonly (typeof ROW | undefined)[]) =>
+  const OWNER = {
+    listSalt: ZERO_32,
+    record: TRACKING_SENTINEL,
+    path: ZERO_PATH(TRACKING_QUAD_HEIGHT),
+  };
+  const privateApply = (privateWrites: number, owners: readonly (typeof OWNER | undefined)[]) =>
     ({
       kind: "applyRecords",
       ...head,
       oldNextIndex: 1,
       newNextIndex: 2,
       writes: [WRITE, WRITE],
-      private: { privateWrites, trackingRoot: TRACKING_EMPTY_ROOT, rows },
+      private: { privateWrites, trackingRoot: TRACKING_EMPTY_ROOT, owners },
     }) satisfies RingProofRequest;
 
-  it("proves a private write's row under the tracking root on the private key", () => {
-    const request = privateApply(0b10, [undefined, ROW]);
+  it("proves a private write's owner row under the tracking root on the private key", () => {
+    const request = privateApply(0b10, [undefined, OWNER]);
     expect(ringCircuitType(ringProofCircuit(request))).toBe("custom-ring-apply-records-private-2");
     const body = ringProofRequestBody(request);
     expect(body["privateWrites"]).toBe(2);
     expect(body["trackingRoot"]).toBe(hex(TRACKING_EMPTY_ROOT));
-    const rows = list(body["trackingRows"]);
-    expect(rows[0]).toBeNull();
-    expect(list(record(record(rows[1])["path"])["siblings"])).toHaveLength(TRACKING_QUAD_HEIGHT);
+    expect(Object.keys(body).slice(-3)).toEqual(["privateWrites", "trackingRoot", "owners"]);
+    const owners = list(body["owners"]);
+    expect(owners[0]).toBeNull();
+    expect(Object.keys(record(owners[1]))).toEqual(["listSalt", "record", "index", "path"]);
+    expect(list(record(owners[1])["path"])).toHaveLength(3 * TRACKING_QUAD_HEIGHT);
     expect(body).not.toHaveProperty("credentialWrites");
   });
 
-  it("refuses an empty private mask and more rows than the key's width", () => {
-    expect(() => ringProofRequestBody(privateApply(0, [undefined, ROW]))).toThrow();
-    expect(() => ringProofRequestBody(privateApply(0b10, [undefined, ROW, ROW]))).toThrow(
-      expect.objectContaining({ details: { field: "trackingRows", expected: 2, actual: 3 } }),
+  it("refuses an empty private mask and more owners than the key's width", () => {
+    expect(() => ringProofRequestBody(privateApply(0, [undefined, OWNER]))).toThrow();
+    expect(() => ringProofRequestBody(privateApply(0b10, [undefined, OWNER, OWNER]))).toThrow(
+      expect.objectContaining({ details: { field: "owners", expected: 2, actual: 3 } }),
     );
   });
 

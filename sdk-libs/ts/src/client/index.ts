@@ -19,6 +19,7 @@ export type {
   ApplyEnrollmentsProofRequest,
   ApplyRecordsProofRequest,
   PrivateApplyProofInput,
+  PrivateOwnerProofInput,
   AuditEnvelopeProofInputs,
   TransferProofRequest,
   DepositProofRequest,
