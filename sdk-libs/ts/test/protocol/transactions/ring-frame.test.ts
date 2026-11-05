@@ -244,7 +244,7 @@ describe("the ring frame", () => {
     // The extension byte follows the salt.
     const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 8 + 8 + 4 + 32 + 16;
     expect(bytes[extensions]).toBe(1 | 2 | 4 | 8);
-    bytes[extensions] = 1 | 2 | 4 | 8 | 32;
+    bytes[extensions] = 1 | 2 | 4 | 8 | 64;
     expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
     const { messages } = RingTransactData.expand(frame, { auditorPubkey: AUDITOR });
     expect(messages.map((message) => message.viewTag)).toEqual([field(83), AUDITOR.slice(1)]);

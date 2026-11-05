@@ -414,11 +414,13 @@ describe("relay message check", () => {
     const verdictWith = async (
       named: typeof terms,
       signerDataCounts: bigint | undefined,
+      published: readonly (typeof first)[] = [dataOpening],
     ): Promise<string> => {
       const frame = RingTransactData.parse(
         Uint8Array.from(instruction().data ?? []).subarray(1),
         "anonymous",
       );
+      const { signerDataCounts: _vectorCount, ...extensions } = frame.extensions;
       const { messageBytes } = compileUnsignedTransaction({
         feePayer: terms.feePayer,
         lifetime: SIZE_PROBE_LIFETIME,
@@ -428,14 +430,15 @@ describe("relay message check", () => {
             data: ringInstructionData({
               ...frame,
               extensions: {
-                ...frame.extensions,
+                ...extensions,
                 ...(signerDataCounts === undefined ? {} : { signerDataCounts }),
               },
-              outputs: frame.outputs.map((output, slot) =>
-                slot === dataOpening.slot
-                  ? { ...output, hash: openingHash(dataOpening, terms.ring) }
-                  : output,
-              ),
+              outputs: frame.outputs.map((output, slot) => {
+                const opening = published.find((open) => open.slot === slot);
+                return opening === undefined
+                  ? output
+                  : { ...output, hash: openingHash(opening, terms.ring) };
+              }),
             }),
           },
         ],
@@ -476,9 +479,10 @@ describe("relay message check", () => {
     });
 
     it("refuses an omitted data output", async () => {
-      expect(await verdictWith({ ...terms, slots: terms.slots.slice(1) }, count(1n))).toBe(
-        "DataOutputCount",
-      );
+      const payment = { ...first, slot: first.slot - 1, dataHash: new Uint8Array(32) as Bytes32 };
+      expect(
+        await verdictWith({ ...terms, slots: [payment] }, count(1n), [dataOpening, payment]),
+      ).toBe("DataOutputCount");
     });
 
     it("refuses a repeated opening that would pad a count", async () => {

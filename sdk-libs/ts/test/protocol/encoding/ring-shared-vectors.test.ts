@@ -403,9 +403,12 @@ describe("transfer key selection", () => {
   });
 
   it("names the wide key once a spend leaves the narrow pools", () => {
-    const pools = { own: 16, curator: 0, tracking: 0 };
-    expect(fittedSpend({ ...spend, pools: { own: 15, curator: 0, tracking: 0 } }).wide).toBe(false);
-    expect(ringTransferCircuit(fittedSpend({ ...spend, pools }))?.owners).toBe(24);
+    const narrow = ringTransferCircuit(spend);
+    if (narrow === undefined) throw new Error("no narrow key");
+    const width = transferPoolCapacity(narrow).own;
+    const own = (records: number) => ({ own: records, curator: 0, tracking: 0 });
+    expect(fittedSpend({ ...spend, pools: own(width) }).wide).toBe(false);
+    expect(ringTransferCircuit(fittedSpend({ ...spend, pools: own(width + 1) }))?.owners).toBe(24);
   });
 
   it("holds the pools of pool_capacity.json", () => {
