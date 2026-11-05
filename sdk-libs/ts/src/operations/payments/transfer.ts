@@ -6,7 +6,6 @@ import {
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
-  selectUtxos,
   resolveWithdrawalSettlement,
   withdrawalSetupInstructions,
   signerAddress,
@@ -64,7 +63,12 @@ import {
 import type { RelayQuote, TokenAccountSetup } from "../../protocol/ring-rpc/ring-rpc-types.js";
 import type { PreparedRelay } from "../../rpc/relay.js";
 import { isZeroKeyNote } from "../../state/exposed-notes.js";
-import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../workflow/selection.js";
+import {
+  ringIntentMismatch,
+  ringProofInputs,
+  ringSelectionErrors,
+  selectAcrossTrees,
+} from "../workflow/selection.js";
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
@@ -330,7 +334,7 @@ export function prepareRingWithdrawalRelay<R extends RingRelayRail>(
   );
 }
 
-/** UTXOs on `tree` the mode admits, largest first, at most `maxInputs`. */
+/** UTXOs the mode admits over the fewest input trees, largest first, at most `maxInputs`. */
 export function selectRingInputs(
   input: Readonly<{
     wallet: Wallet;
@@ -338,7 +342,6 @@ export function selectRingInputs(
     asset: Address;
     amount: bigint;
     inputs: "ring" | "ring-or-default" | "default" | "entry";
-    tree: Address;
     maxInputs: number;
     /** A spend naming the wallet may take its zero-key notes. */
     spendExposed?: boolean;
@@ -374,7 +377,7 @@ export function selectRingInputs(
           });
     },
   };
-  return selectUtxos({
+  return selectAcrossTrees({
     wallet,
     asset,
     target: { kind: "cover", amount },
@@ -394,10 +397,9 @@ export function selectRingInputs(
       ordering: "largestFirst",
       allowWideBalance: true,
       maxInputs: input.maxInputs,
-      tree: { kind: "fixed", tree: input.tree },
       errors,
     },
-  }).entries;
+  });
 }
 
 /** A plain build drops the viewing history and never takes the anonymous rail. */
@@ -812,7 +814,6 @@ async function stageRingSpend<R>(
     ringProgramId: params.ringProgramId,
     asset,
     amount: params.amount,
-    tree: params.client.tree,
   };
   const selected =
     retry.entries ??
@@ -837,7 +838,7 @@ async function stageRingSpend<R>(
   retry.entries = selected;
   const transfer = ringSpendTransfer({
     owner,
-    inputs: selected.map((entry) => ringProofInput(entry, owner, params.client)),
+    inputs: await ringProofInputs(selected, owner, params.client, context),
     feePayer: input.feePayer,
   }).withOutputTreeId(outputTree.treeId);
   let anonymousPayment: AnonymousPayment | undefined;

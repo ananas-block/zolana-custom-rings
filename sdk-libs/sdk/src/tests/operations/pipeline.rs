@@ -683,6 +683,52 @@ async fn an_anonymous_move_spends_ring_utxos_before_an_entry() {
     ));
 }
 
+/// Six on each of two trees pay ten together, a tree holding the amount alone wins over the pair.
+#[tokio::test]
+async fn an_anonymous_move_funds_from_two_trees_only_when_one_falls_short() {
+    use crate::tests::support::{keypair, payer, wallet};
+    let sender = keypair(1);
+    let paid = ring_address(&keypair(2));
+    let client = enrolled(&[&sender, &keypair(2)])
+        .with_tree(1)
+        .with_tree(2)
+        .client();
+    let on_tree = |tree: u16, amount: u64, leaf: u64| {
+        wallet(
+            ring_utxo(&sender, Mint::SOL, amount, leaf).utxo,
+            &sender.nullifier_key,
+            tree,
+            leaf,
+        )
+    };
+    let owner = MoveSender {
+        sender: &sender,
+        payer: payer(),
+    };
+    let split = vec![on_tree(1, 6, 0), on_tree(2, 6, 1)];
+    let one_suffices = vec![on_tree(1, 6, 0), on_tree(2, 6, 1), on_tree(2, 4, 2)];
+    for (utxos, expected) in [(&split, [1, 2]), (&one_suffices, [2, 2])] {
+        let assembled = owner
+            .anonymous_move(utxos, vec![RingPayment::new(paid.clone(), 10)])
+            .select(&client)
+            .await
+            .unwrap()
+            .assemble(&client)
+            .await
+            .unwrap();
+        let mut trees: Vec<u16> = assembled
+            .frame
+            .proof_inputs
+            .input_utxos
+            .iter()
+            .filter(|input| !input.is_dummy())
+            .map(|input| input.tree_id)
+            .collect();
+        trees.sort_unstable();
+        assert_eq!(trees, expected);
+    }
+}
+
 /// Only a mix of ring and default-ring UTXOs funds the move, the prover refuses one.
 #[tokio::test]
 async fn an_anonymous_move_never_mixes_ring_and_default_ring_utxos() {
