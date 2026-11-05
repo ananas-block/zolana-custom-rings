@@ -5,7 +5,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
 };
 
-use crate::{types::KnownUtxo, AuditedMergeOutput, ConfirmedMerge, MergeLedger};
+use crate::{types::KnownUtxo, ConfirmedMerge, MergeLedger};
 
 #[derive(Clone, Debug)]
 pub struct KnownUtxoIndex<T = KnownUtxo> {
@@ -39,10 +39,6 @@ impl<T: Borrow<KnownUtxo>> KnownUtxoIndex<T> {
 
     pub fn apply_merge(&mut self, merge: ConfirmedMerge) {
         self.merges.apply(merge);
-    }
-
-    pub(crate) fn merge_output(&self, commitment: &[u8; 32]) -> Option<&AuditedMergeOutput> {
-        self.merges.output(commitment)
     }
 
     pub fn get(&self, commitment: &[u8; 32]) -> Option<&T> {

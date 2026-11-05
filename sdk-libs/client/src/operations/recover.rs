@@ -1,4 +1,4 @@
-//! Rebuilds a source member's unspent ring notes from what the auditor sees.
+//! Rebuilds a source member's unspent ring notes from what the auditor sees, one history page at a time.
 
 use std::{
     collections::{BTreeSet, HashSet},
@@ -24,13 +24,15 @@ use crate::{
     confirmed_merge,
     created::{CreatedUtxos, DepositSlot},
     decrypt::TransactionAudit,
-    known::KnownUtxoIndex,
+    history::HistoryCursor,
     merge_audit::RingMergeBody,
     origin::{ConfirmedEventKind, RingOrigin, TransactionOrigin},
-    scan::{RingHistory, ScanPage, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
+    scan::{RingHistory, SkippedRow, RING_HISTORY_MAX_PAGES, RING_HISTORY_PAGE_SIZE},
     types::{InputOpening, OutputOpening},
-    AuditError, KnownUtxo, UtxoOwner,
+    AuditError, MergeLedger,
 };
+
+type HistoryRow = (ShieldedTransaction, RingOrigin);
 
 #[must_use = "run the recovery explicitly"]
 pub struct RingRecovery<'a> {
@@ -51,6 +53,20 @@ pub struct SourceMember<'a> {
 pub struct MemberRecovery<'a> {
     recovery: RingRecovery<'a>,
     source: SourceMember<'a>,
+    progress: Option<RecoveryProgress>,
+}
+
+#[must_use = "resume a paused recovery or read its notes"]
+pub enum RecoveryStep {
+    Complete(RecoveredNotes),
+    Paused(RecoveryProgress),
+}
+
+/// The recovery state of every page read, resumed after `cursor` and never before it.
+#[derive(Clone)]
+pub struct RecoveryProgress {
+    cursor: HistoryCursor,
+    state: Box<RecoveryState>,
 }
 
 /// Application commitments supplied by the note's protocol.
@@ -96,7 +112,7 @@ impl<'a> RingRecovery<'a> {
         self
     }
 
-    /// Bounds each history scan and all spentness queries together.
+    /// Pages one call reads before it pauses.
     pub fn with_max_pages(mut self, max_pages: NonZeroUsize) -> Self {
         self.max_pages = max_pages;
         self
@@ -112,7 +128,15 @@ impl<'a> RingRecovery<'a> {
         MemberRecovery {
             recovery: self,
             source,
+            progress: None,
         }
+    }
+}
+
+impl RecoveryProgress {
+    /// Prints as the TS `RingRecoveryProgress.cursor`.
+    pub fn cursor(&self) -> HistoryCursor {
+        self.cursor
     }
 }
 
@@ -192,17 +216,61 @@ impl SourceMember<'_> {
 }
 
 /// Notes found so far, by the commitments already claimed.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Found {
     candidates: Vec<WalletUtxo>,
     /// Commitments without a verified opening, with their nullifiers.
     unresolved: Vec<([u8; 32], [u8; 32])>,
     seen: HashSet<[u8; 32]>,
     unknown_mints: BTreeSet<Address>,
-    /// Openings a merge output resolves from, in history order.
-    known: KnownUtxoIndex,
-    /// In history order.
+    /// The batch's real inputs in history order.
     real_inputs: Vec<[u8; 32]>,
+}
+
+#[derive(Clone, Default)]
+struct RecoveryState {
+    found: Found,
+    unsupported_deposits: Vec<[u8; 32]>,
+    unseen_inputs: Vec<[u8; 32]>,
+    unopened_merges: Vec<[u8; 32]>,
+    /// The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends.
+    open_slot: Vec<HistoryRow>,
+}
+
+impl RecoveryState {
+    /// Rows of every slot below the last one read.
+    fn close_slots(&mut self) -> Vec<HistoryRow> {
+        let Some(last) = self.open_slot.iter().map(|(row, _)| row.slot).max() else {
+            return Vec::new();
+        };
+        let (closed, open) = std::mem::take(&mut self.open_slot)
+            .into_iter()
+            .partition(|(row, _)| row.slot < last);
+        self.open_slot = open;
+        closed
+    }
+
+    fn finish(self) -> RecoveredNotes {
+        let Self {
+            found,
+            unsupported_deposits,
+            unseen_inputs,
+            unopened_merges,
+            ..
+        } = self;
+        RecoveredNotes {
+            utxos: found.candidates,
+            unopened: found
+                .unresolved
+                .into_iter()
+                .map(|(commitment, _)| commitment)
+                .chain(unopened_merges)
+                .collect(),
+            unsupported_deposits,
+            unknown_mints: found.unknown_mints,
+            unseen_inputs,
+        }
+    }
 }
 
 impl Found {
@@ -216,32 +284,98 @@ impl Found {
 }
 
 impl<'a> MemberRecovery<'a> {
+    /// Continues after the last page `progress` covers.
+    pub fn with_progress(mut self, progress: RecoveryProgress) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    /// Applies each closed slot as its page lands and pauses at the page cap.
     pub async fn run<I: AsyncRpc, O: TransactionOrigin>(
-        self,
+        mut self,
         indexer: &I,
         origin: &O,
         assets: &RingAssets,
-    ) -> Result<RecoveredNotes, AuditError> {
+    ) -> Result<RecoveryStep, AuditError> {
         // The nullifier key must derive the requested address.
         if self.source.nullifier_key.pubkey()? != self.source.address.nullifier_pubkey {
             return Err(AuditError::NullifierKeyMismatch);
         }
+        let RingRecovery {
+            ring_program_id,
+            page_size,
+            max_pages,
+            indexer_config,
+            ..
+        } = self.recovery;
+        let (mut cursor, mut state) = match self.progress.take() {
+            Some(RecoveryProgress { cursor, state }) => (Some(cursor), state),
+            None => (None, Box::default()),
+        };
+        let mut pages_read = 0;
+        loop {
+            // 1. One page at a time, the cursor names the last row read and the next call starts after it.
+            let page = RingHistory {
+                ring: ring_program_id,
+                kinds: &[
+                    ConfirmedEventKind::Deposit,
+                    ConfirmedEventKind::Merge,
+                    ConfirmedEventKind::Transfer,
+                ],
+                cursor,
+                page_size,
+                max_pages: NonZeroUsize::MIN,
+                indexer_config,
+            }
+            .bound(indexer, origin)
+            .await?;
+            refuse_skipped(page.skipped)?;
+            state.open_slot.extend(page.transactions);
+            let rows = state.close_slots();
+            self.apply(&rows, assets, &mut state)?;
+            // 2. The terminal page closes the last slot, a page with more holds it back.
+            let Some(next) = page.next_cursor else {
+                let rows = std::mem::take(&mut state.open_slot);
+                self.apply(&rows, assets, &mut state)?;
+                return Ok(RecoveryStep::Complete(state.finish()));
+            };
+            pages_read += 1;
+            if pages_read == max_pages.get() {
+                return Ok(RecoveryStep::Paused(RecoveryProgress {
+                    cursor: next,
+                    state,
+                }));
+            }
+            cursor = Some(next);
+        }
+    }
+
+    /// Rows of closed slots, every note one of them spends opens in them or in an earlier batch.
+    fn apply(
+        &self,
+        rows: &[HistoryRow],
+        assets: &RingAssets,
+        state: &mut RecoveryState,
+    ) -> Result<(), AuditError> {
         let recovery = &self.recovery;
-        let history = self.ring_history(indexer, origin).await?;
-        let mut found = Found::default();
-        for (transaction, confirmed) in &history {
+        let RecoveryState {
+            found,
+            unsupported_deposits,
+            unseen_inputs,
+            unopened_merges,
+            ..
+        } = state;
+        // 1. A merge record opens its own row's output alone, a batch ledger loses no opening.
+        let mut ledger = MergeLedger::default();
+        for (transaction, confirmed) in rows {
             if recovery.mode == RingMode::Anonymous {
-                let created = CreatedUtxos {
+                // An anonymous deposit the auditor cannot open refuses the recovery.
+                CreatedUtxos {
                     transaction,
                     origin: confirmed,
                     ring: recovery.ring_program_id,
                 }
                 .open(recovery.auditor)?;
-                found.known.extend(
-                    created
-                        .into_iter()
-                        .map(|created| (created.commitment, created.utxo)),
-                );
             }
             if confirmed.event.kind() == ConfirmedEventKind::Merge {
                 let event_index = transaction
@@ -250,73 +384,60 @@ impl<'a> MemberRecovery<'a> {
                 if let Some(merge) =
                     confirmed_merge(transaction, event_index, confirmed, recovery.auditor)?
                 {
-                    found.known.apply_merge(merge);
+                    ledger.apply(merge);
                 }
             }
         }
-        let unsupported_deposits = self.deposited_utxos(&history, assets, &mut found)?;
-        for confirmed in &history {
-            if confirmed.1.requires_audit() {
-                self.audited_utxos(confirmed, assets, &mut found)?;
+        // 2. Outputs before spends, the batch's merges and inputs need the notes they consume.
+        unsupported_deposits.extend(self.deposited_utxos(rows, assets, found)?);
+        for row in rows {
+            if row.1.requires_audit() {
+                self.audited_utxos(row, assets, found)?;
             }
         }
-        let spent = history
-            .iter()
-            .flat_map(|(transaction, _)| transaction.nullifiers.iter().copied())
-            .collect::<HashSet<_>>();
         let merges = MergeRecovery {
             ring: recovery.ring_program_id,
-            history: &history,
+            history: rows,
+            ledger: &ledger,
             assets,
-            found: &mut found,
+            found,
         }
         .recover(&self.source)?;
         let opened_nullifiers = found.nullifiers();
-        let unseen_inputs = found
-            .real_inputs
-            .iter()
-            .filter(|nullifier| !opened_nullifiers.contains(*nullifier))
-            .copied()
-            .collect();
-        let mut unopened: Vec<_> = found
-            .unresolved
-            .into_iter()
-            .filter(|(_, nullifier)| !spent.contains(nullifier))
-            .map(|(commitment, _)| commitment)
-            .collect();
-        unopened.extend(
+        unseen_inputs.extend(
+            std::mem::take(&mut found.real_inputs)
+                .into_iter()
+                .filter(|nullifier| !opened_nullifiers.contains(nullifier)),
+        );
+        unopened_merges.extend(
             merges
                 .iter()
                 .map(|merge| merge.output_slots[0].output_context.hash)
                 .filter(|commitment| !found.seen.contains(commitment)),
         );
-        Ok(RecoveredNotes {
-            utxos: found
-                .candidates
-                .into_iter()
-                .filter(|candidate| !spent.contains(&candidate.nullifier))
-                .collect(),
-            unopened,
-            unsupported_deposits,
-            unknown_mints: found.unknown_mints,
-            unseen_inputs,
-        })
+        // 3. A later batch never creates a note this one spends, the spent notes leave the state.
+        let spent = rows
+            .iter()
+            .flat_map(|(transaction, _)| transaction.nullifiers.iter().copied())
+            .collect::<HashSet<_>>();
+        found
+            .candidates
+            .retain(|candidate| !spent.contains(&candidate.nullifier));
+        found
+            .unresolved
+            .retain(|(_, nullifier)| !spent.contains(nullifier));
+        Ok(())
     }
 
     /// The source's ring outputs in one audited transaction, every opening already proof-bound.
     fn audited_utxos(
         &self,
-        (transaction, origin): &(ShieldedTransaction, RingOrigin),
+        (transaction, origin): &HistoryRow,
         assets: &RingAssets,
         found: &mut Found,
     ) -> Result<(), AuditError> {
         let frame = origin.audit_frame(self.recovery.mode)?;
         let audited = TransactionAudit::new(transaction, frame).run(self.recovery.auditor)?;
-        found.known.extend(
-            audited
-                .utxos()
-                .map(|created| (created.commitment, created.utxo)),
-        );
         found.real_inputs.extend(
             audited
                 .inputs
@@ -385,40 +506,10 @@ impl<'a> MemberRecovery<'a> {
         Ok(())
     }
 
-    async fn ring_history<I: AsyncRpc, O: TransactionOrigin>(
-        &self,
-        indexer: &I,
-        origin: &O,
-    ) -> Result<Vec<(ShieldedTransaction, RingOrigin)>, AuditError> {
-        let RingRecovery {
-            ring_program_id,
-            page_size,
-            max_pages,
-            indexer_config,
-            ..
-        } = self.recovery;
-        let kinds = &[
-            ConfirmedEventKind::Deposit,
-            ConfirmedEventKind::Merge,
-            ConfirmedEventKind::Transfer,
-        ];
-        let page = RingHistory {
-            ring: ring_program_id,
-            kinds,
-            cursor: None,
-            page_size,
-            max_pages,
-            indexer_config,
-        }
-        .bound(indexer, origin)
-        .await?;
-        complete(page)
-    }
-
     /// Disclosed deposits are found without trusting their recipient view tags.
     fn deposited_utxos(
         &self,
-        history: &[(ShieldedTransaction, RingOrigin)],
+        history: &[HistoryRow],
         assets: &RingAssets,
         found: &mut Found,
     ) -> Result<Vec<[u8; 32]>, AuditError> {
@@ -480,20 +571,6 @@ impl<'a> MemberRecovery<'a> {
                 if !opens {
                     return Err(AuditError::DepositOpeningMismatch);
                 }
-                found.known.insert(
-                    context.hash,
-                    KnownUtxo {
-                        owner_key: opening.owner_key,
-                        owner: UtxoOwner::Keyed { nullifier_pk },
-                        asset: spr_hasher::primitives::hash_bytes(asset.as_array())?,
-                        mint: Some(asset),
-                        amount: output.amount,
-                        blinding: *opening.blinding,
-                        data_hash: hashes.data_hash.unwrap_or_default(),
-                        ring_data_hash: hashes.ring_data_hash.unwrap_or_default(),
-                        tree_id: context.tree_id,
-                    },
-                );
                 found.seen.insert(context.hash);
                 if mint.is_some() {
                     found.candidates.push(held);
@@ -507,33 +584,10 @@ impl<'a> MemberRecovery<'a> {
     }
 }
 
-struct RecoveredMerge {
-    note: WalletUtxo,
-    opening: KnownUtxo,
-}
-
-impl RecoveredMerge {
-    fn from_note(note: WalletUtxo) -> Result<Self, AuditError> {
-        let opening = KnownUtxo {
-            owner_key: note.utxo.owner.confidential_view_tag()?,
-            owner: UtxoOwner::Keyed {
-                nullifier_pk: note.nullifier_pubkey,
-            },
-            asset: spr_hasher::primitives::hash_bytes(note.utxo.asset.asset.as_array())?,
-            mint: Some(note.utxo.asset.asset),
-            amount: note.utxo.amount,
-            blinding: note.utxo.blinding,
-            data_hash: [0; 32],
-            ring_data_hash: note.ring_data_hash.unwrap_or_default(),
-            tree_id: note.tree_id,
-        };
-        Ok(Self { note, opening })
-    }
-}
-
 struct MergeRecovery<'a, 'h> {
     ring: Address,
-    history: &'h [(ShieldedTransaction, RingOrigin)],
+    history: &'h [HistoryRow],
+    ledger: &'a MergeLedger,
     assets: &'a RingAssets,
     found: &'a mut Found,
 }
@@ -546,6 +600,7 @@ impl<'h> MergeRecovery<'_, 'h> {
         let Self {
             ring,
             history,
+            ledger,
             assets,
             found,
         } = self;
@@ -566,7 +621,7 @@ impl<'h> MergeRecovery<'_, 'h> {
                 if found.seen.contains(&output.hash) {
                     continue;
                 }
-                let successor = match found.known.merge_output(&output.hash).cloned() {
+                let successor = match ledger.output(&output.hash) {
                     // 1. A sealed record opens its output without input history, the only path to a zero-key merge.
                     Some(merged) => {
                         let owner =
@@ -593,7 +648,7 @@ impl<'h> MergeRecovery<'_, 'h> {
                                     transaction,
                                     0,
                                 )?;
-                                Some(RecoveredMerge { note, opening })
+                                Some(note)
                             }
                             // 2. Another owner's record, the member's spends alone never claim its output.
                             None => None,
@@ -606,16 +661,13 @@ impl<'h> MergeRecovery<'_, 'h> {
                         .any(|nullifier| source_nullifiers.contains(nullifier)) =>
                     {
                         merge_successor(source, transaction, ring)?
-                            .map(RecoveredMerge::from_note)
-                            .transpose()?
                     }
                     None => None,
                 };
-                let Some(RecoveredMerge { mut note, opening }) = successor else {
+                let Some(mut note) = successor else {
                     continue;
                 };
                 found.seen.insert(output.hash);
-                found.known.insert(output.hash, opening);
                 match assets.registry().mint(&note.utxo.asset.asset) {
                     Ok(mint) => {
                         note.utxo.asset = mint;
@@ -646,14 +698,6 @@ impl<'h> MergeRecovery<'_, 'h> {
             })
             .collect())
     }
-}
-
-fn complete<T>(page: ScanPage<T>) -> Result<Vec<T>, AuditError> {
-    if page.next_cursor.is_some() {
-        return Err(AuditError::IncompleteScan);
-    }
-    refuse_skipped(page.skipped)?;
-    Ok(page.transactions)
 }
 
 /// A row left unread can hold a source note or its spend, the result would not be complete.

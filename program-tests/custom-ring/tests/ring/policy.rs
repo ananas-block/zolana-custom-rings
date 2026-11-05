@@ -249,9 +249,12 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         nullifier_key: &member.nullifier_key,
     });
     let client = env.client.as_async();
-    let deposited =
+    let RecoveryStep::Complete(deposited) =
         env.client
-            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?;
+            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?
+    else {
+        bail!("the recovery paused at the page cap");
+    };
     assert!(deposited.unopened.is_empty());
     assert!(deposited.unsupported_deposits.is_empty());
     assert_eq!(deposited.utxos.len(), 1);
@@ -300,9 +303,12 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         nullifier_key: &nullifier_key,
     });
     let client = env.client.as_async();
-    let recovered =
+    let RecoveryStep::Complete(recovered) =
         env.client
-            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?;
+            .block_on(recovery.run(client.indexer(), client.rpc(), &env.ring_assets()?))?
+    else {
+        bail!("the recovery paused at the page cap");
+    };
     assert!(recovered.unopened.is_empty(), "every audited note opens");
     let mut amounts: Vec<u64> = recovered
         .utxos

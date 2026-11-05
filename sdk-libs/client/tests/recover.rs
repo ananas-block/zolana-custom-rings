@@ -33,7 +33,7 @@ use spr_transaction::{
 };
 use zolana_ring_client::{
     seal_deposits, AuditError, ConfirmedMergeDisclosure, MemberRecovery, MergeRecordSeal,
-    RecoveredNotes, RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
+    RecoveredNotes, RecoveryStep, RingOrigin, RingRecovery, SourceMember, TransactionOrigin,
 };
 use zolana_ring_transaction::{RingAssets, RingDepositPlaintext};
 
@@ -101,6 +101,14 @@ impl Fixture {
         recovery: MemberRecovery<'_>,
         history: &History,
     ) -> Result<RecoveredNotes, AuditError> {
+        self.step(recovery, history).await.map(complete)
+    }
+
+    async fn step(
+        &self,
+        recovery: MemberRecovery<'_>,
+        history: &History,
+    ) -> Result<RecoveryStep, AuditError> {
         *history.confirmed.lock().unwrap() = self.confirmed.lock().unwrap().clone();
         *history.frames.lock().unwrap() = self.frames.lock().unwrap().clone();
         *history.merges.lock().unwrap() = self.merges.lock().unwrap().clone();
@@ -587,7 +595,25 @@ impl AsyncRpc for History {
         assert_eq!(options.ring_program_id, RING);
         let mut rows = self.transactions.clone();
         rows.extend(self.additional_history.clone());
-        Ok(self.page(rows))
+        rows.sort_by_key(history_page::position);
+        rows.retain(|row| {
+            options
+                .pagination_token
+                .is_none_or(|token| history_page::position(row) > token)
+        });
+        let limit = options.limit.map_or(usize::MAX, |limit| limit as usize);
+        let more = rows.len() > limit;
+        rows.truncate(limit);
+        Ok(EventsPage {
+            context: Context {
+                block_time: 0,
+                slot: INDEXED,
+            },
+            output_tree_id: None,
+            rows,
+            more,
+        }
+        .response())
     }
     async fn get_shielded_transactions_by_tags(
         &self,
@@ -1075,6 +1101,115 @@ async fn a_terminal_history_page_recovers_merge_successors_at_the_page_cap() {
     assert!(history.queried.lock().unwrap().is_empty());
 }
 
+/// A merge of two notes, and a spend that sorts ahead of its note inside one slot.
+fn paged_history(fixture: &Fixture) -> (WalletUtxo, Vec<ShieldedTransaction>) {
+    let (first, first_tx) = fixture.encrypt(fixture.output(4), 2);
+    let (second, second_tx) = fixture.encrypt(fixture.output(5), 2);
+    let (third, third_tx) = fixture.encrypt(fixture.output(6), 2);
+    let (merged, merge_tx) = fixture.merge(&[first, second], 7);
+    let mut spend = merge_tx.clone();
+    spend.tx_signature = Signature::from([0; 64]);
+    spend.slot = third_tx.slot;
+    spend.nullifiers = vec![third.nullifier];
+    spend.output_slots.clear();
+    (merged, vec![first_tx, second_tx, spend, third_tx, merge_tx])
+}
+
+fn paged(fixture: &Fixture, max_pages: usize) -> MemberRecovery<'_> {
+    RingRecovery::new(RING, &fixture.auditor)
+        .with_page_size(std::num::NonZeroU32::MIN)
+        .with_max_pages(std::num::NonZeroUsize::new(max_pages).unwrap())
+        .for_member(SourceMember {
+            address: &fixture.address,
+            nullifier_key: &fixture.member.nullifier_key,
+        })
+}
+
+fn complete(step: RecoveryStep) -> RecoveredNotes {
+    match step {
+        RecoveryStep::Complete(notes) => notes,
+        RecoveryStep::Paused(_) => panic!("the recovery paused"),
+    }
+}
+
+fn paused(step: RecoveryStep) -> zolana_ring_client::RecoveryProgress {
+    match step {
+        RecoveryStep::Paused(progress) => progress,
+        RecoveryStep::Complete(_) => panic!("the recovery completed"),
+    }
+}
+
+fn summary(mut notes: RecoveredNotes) -> RecoveredNotes {
+    notes.utxos.sort_by_key(|note| note.utxo_hash);
+    notes.unopened.sort_unstable();
+    notes
+}
+
+fn assert_same(left: RecoveredNotes, right: RecoveredNotes) {
+    let (left, right) = (summary(left), summary(right));
+    assert_eq!(left.utxos, right.utxos);
+    assert_eq!(left.unopened, right.unopened);
+    assert_eq!(left.unsupported_deposits, right.unsupported_deposits);
+    assert_eq!(left.unknown_mints, right.unknown_mints);
+    assert_eq!(left.unseen_inputs, right.unseen_inputs);
+}
+
+#[tokio::test]
+async fn a_recovery_split_over_three_calls_equals_one_full_recovery() {
+    let fixture = Fixture::new();
+    let (merged, transactions) = paged_history(&fixture);
+    let history = History {
+        transactions,
+        ..Default::default()
+    };
+    let full = fixture.run(fixture.recovery(), &history).await.unwrap();
+    assert_eq!(full.utxos, [merged]);
+
+    let first = paused(fixture.step(paged(&fixture, 2), &history).await.unwrap());
+    let second = paused(
+        fixture
+            .step(paged(&fixture, 2).with_progress(first), &history)
+            .await
+            .unwrap(),
+    );
+    let split = fixture
+        .run(paged(&fixture, 2).with_progress(second), &history)
+        .await
+        .unwrap();
+    assert_same(split, full);
+}
+
+#[tokio::test]
+async fn a_resumed_recovery_reads_no_row_before_its_cursor() {
+    let fixture = Fixture::new();
+    let (merged, transactions) = paged_history(&fixture);
+    let read = transactions[..2]
+        .iter()
+        .map(|row| row.tx_signature)
+        .collect::<Vec<_>>();
+    let history = History {
+        transactions: transactions.clone(),
+        ..Default::default()
+    };
+    let progress = paused(fixture.step(paged(&fixture, 2), &history).await.unwrap());
+    let cursor = progress.cursor().to_string();
+    assert!(cursor.starts_with(&format!("{RING}:ring:1:")), "{cursor}");
+
+    // Every row already read now fails its origin read, a second read of one refuses the recovery.
+    let refusing = History {
+        transactions,
+        undecodable: read,
+        ..Default::default()
+    };
+    assert!(fixture.run(paged(&fixture, 2), &refusing).await.is_err());
+    let resumed = fixture
+        .run(paged(&fixture, 8).with_progress(progress), &refusing)
+        .await
+        .unwrap();
+    assert_eq!(resumed.utxos, [merged]);
+    assert!(resumed.unopened.is_empty());
+}
+
 #[tokio::test]
 async fn audited_deposit_recovery_preserves_committed_data_hashes() {
     let fixture = Fixture::new();
@@ -1115,11 +1250,13 @@ async fn unknown_audited_deposit_mints_remain_unresolved_without_hiding_other_ut
     assert!(history.queried.lock().unwrap().is_empty());
 
     let assets = RingAssets::new([mint]).unwrap();
-    let recovered = fixture
-        .recovery()
-        .run(&history, &history, &assets)
-        .await
-        .unwrap();
+    let recovered = complete(
+        fixture
+            .recovery()
+            .run(&history, &history, &assets)
+            .await
+            .unwrap(),
+    );
     assert_eq!(recovered.utxos, vec![known.clone(), unknown.clone()]);
     assert!(recovered.unopened.is_empty());
     assert!(recovered.unknown_mints.is_empty());
@@ -1332,11 +1469,13 @@ async fn unknown_merge_mints_remain_unresolved_and_still_follow_spends() {
     assert_eq!(recovered.unknown_mints, [mint.asset].into_iter().collect());
     assert!(history.queried.lock().unwrap().is_empty());
     let assets = RingAssets::new([mint]).unwrap();
-    let recovered = fixture
-        .recovery()
-        .run(&history, &history, &assets)
-        .await
-        .unwrap();
+    let recovered = complete(
+        fixture
+            .recovery()
+            .run(&history, &history, &assets)
+            .await
+            .unwrap(),
+    );
     assert_eq!(recovered.utxos, vec![merged.clone()]);
     assert!(recovered.unopened.is_empty());
     assert!(recovered.unknown_mints.is_empty());
