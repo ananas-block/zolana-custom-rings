@@ -27,9 +27,6 @@ import { ViewingHistory } from "../../src/state/viewing-history.js";
 import { TREE, TREE_ID, randomAddress } from "../helpers/ring-pipeline.js";
 import {
   ASSETS,
-  depositRow,
-  depositTransaction,
-  field,
   found,
   hex,
   keypair,
@@ -210,20 +207,6 @@ describe("full scan recovery", () => {
       [SCAN_USDC, 15n],
       [SCAN_USDC, 25n],
     ]);
-  });
-
-  it("opens deposits by trial on proofless rows, whatever their tag", async () => {
-    const indexer = new ScanIndexer();
-    const bob = new ScanWallet(2);
-    const row = depositRow(bob.address, randomTag(), true, field(7, 1));
-    indexer.publish(depositTransaction(row, 5n));
-    const other = depositRow(new ScanWallet(3).address, randomTag(), true, field(7, 2));
-    indexer.publish(depositTransaction(other, 6n));
-    const recovered = await recover(bob, indexer);
-    expect(recovered.found.map((note) => [hex(note.utxoHash), note.stream])).toEqual([
-      [hex(row.outputSlot.outputContext.hash), { kind: "fullScan" }],
-    ]);
-    expect(recovered.utxos.map((note) => note.utxo.amount)).toEqual([25n]);
   });
 
   it("opens same-page merges and checks only recovered nullifiers", async () => {

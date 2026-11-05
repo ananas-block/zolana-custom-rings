@@ -2,7 +2,7 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { address as checkedRing, type Address } from "@solana/kit";
 import type { RequestContext } from "@heliuslabs/zolana";
-import { PAGE_LIMIT, U64_MAX } from "@heliuslabs/zolana/internal";
+import { U64_MAX } from "@heliuslabs/zolana/internal";
 import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
 
 import { isSmallOrder } from "../crypto/keys/x25519.js";
@@ -12,9 +12,6 @@ import type { RingKeys, ViewTagStream } from "./ring-keys.js";
 
 /** How far below its watermark a sync still reads an unobserved index. */
 export const PENDING_RETENTION = 256n;
-
-/** Indices a stream's first round reads past its next index, doubled up to `PAGE_LIMIT` after every round that finds one. */
-export const TAG_GAP = 20n;
 
 /** One tag stream's next index to use and the index its sync resumes from, never above `next`. */
 export class StreamCounter {
@@ -31,21 +28,6 @@ export class StreamCounter {
   }
 
   static readonly EMPTY: StreamCounter = new StreamCounter(0n, 0n, []);
-
-  /** A scan from `from` saw `observed`, an index it passed unseen stays pending. */
-  observe(from: bigint, observed: ReadonlySet<bigint>): StreamCounter {
-    const highest = [...observed].filter((index) => index >= from).reduce(max, -1n);
-    const reached = highest < 0n ? from : saturatingIncrement(highest);
-    const scanned = max(this.scanned, reached);
-    const floor = retentionFloor(scanned);
-    const pending = new Set(this.pending);
-    for (let index = max(from, floor); index < reached; index++) pending.add(index);
-    return new StreamCounter(
-      max(this.next, scanned),
-      scanned,
-      [...pending].filter((index) => index >= floor && !observed.has(index)).sort(ascending),
-    );
-  }
 
   /** The index a new tag takes and the counter past it. */
   takeNext(): Readonly<{ index: bigint; counter: StreamCounter }> {
@@ -72,94 +54,6 @@ export class StreamCounter {
     if (!ascendingOrder || pending.some((index) => index < floor || index >= scanned))
       throw invalid("a pending index repeats or lies outside its retention window");
     return new StreamCounter(next, scanned, pending);
-  }
-}
-
-export interface GapScanState {
-  readonly from: bigint;
-  readonly start: bigint;
-  readonly end: bigint;
-  readonly gap: bigint;
-  readonly requiredEnd: bigint;
-  readonly late: readonly bigint[];
-  readonly observed: readonly bigint[];
-}
-
-export class GapScan {
-  readonly #from: bigint;
-  #start: bigint;
-  #end: bigint;
-  #gap = TAG_GAP;
-  #requiredEnd: bigint;
-  #late: readonly bigint[];
-  readonly #observed = new Set<bigint>();
-
-  constructor(from: bigint, counter: StreamCounter) {
-    this.#from = from;
-    this.#start = from;
-    this.#requiredEnd = saturatingAdd(max(counter.next, from), TAG_GAP);
-    this.#end = min(this.#requiredEnd, saturatingAdd(from, PAGE_LIMIT));
-    this.#late = counter.pending;
-  }
-
-  round(): readonly bigint[] {
-    const late = this.#late;
-    this.#late = [];
-    const length = Number(this.#end - this.#start);
-    return [...late, ...Array.from({ length }, (_, offset) => this.#start + BigInt(offset))];
-  }
-
-  /** `false` once a round finds nothing in its range. */
-  advance(seen: Iterable<bigint>): boolean {
-    let found = false;
-    for (const at of seen) {
-      this.#observed.add(at);
-      found ||= at >= this.#start && at < this.#end;
-    }
-    if (!found && this.#end >= this.#requiredEnd) return false;
-    this.#gap = min(this.#gap * 2n, PAGE_LIMIT);
-    this.#start = this.#end;
-    this.#end = saturatingAdd(
-      this.#start,
-      this.#start < this.#requiredEnd ? PAGE_LIMIT : this.#gap,
-    );
-    return true;
-  }
-
-  state(): GapScanState {
-    return {
-      from: this.#from,
-      start: this.#start,
-      end: this.#end,
-      gap: this.#gap,
-      requiredEnd: this.#requiredEnd,
-      late: [...this.#late],
-      observed: [...this.#observed],
-    };
-  }
-
-  static restore(state: GapScanState): GapScan {
-    const scan = new GapScan(state.from, StreamCounter.EMPTY);
-    if (
-      state.start < state.from ||
-      state.end < state.start ||
-      state.end - state.start > PAGE_LIMIT ||
-      state.gap < TAG_GAP ||
-      state.gap > PAGE_LIMIT ||
-      state.requiredEnd < state.from
-    )
-      throw invalid("invalid gap scan state");
-    scan.#start = state.start;
-    scan.#end = state.end;
-    scan.#gap = state.gap;
-    scan.#requiredEnd = state.requiredEnd;
-    scan.#late = state.late;
-    for (const index of state.observed) scan.#observed.add(index);
-    return scan;
-  }
-
-  finish(counter: StreamCounter): StreamCounter {
-    return counter.observe(this.#from, this.#observed);
   }
 }
 
@@ -688,18 +582,6 @@ function max(left: bigint, right: bigint): bigint {
   return left > right ? left : right;
 }
 
-function min(left: bigint, right: bigint): bigint {
-  return left < right ? left : right;
-}
-
 function ascending(left: bigint, right: bigint): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function saturatingIncrement(value: bigint): bigint {
-  return saturatingAdd(value, 1n);
-}
-
-function saturatingAdd(value: bigint, added: bigint): bigint {
-  return value > U64_MAX - added ? U64_MAX : value + added;
 }

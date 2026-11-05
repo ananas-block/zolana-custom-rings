@@ -1,13 +1,4 @@
 export type { ErrorEnvelope } from "@heliuslabs/zolana";
-export {
-  decodeRingDepositOutput,
-  decodeRingDepositPlaintext,
-  encodeRingDepositPlaintext,
-} from "../protocol/codec/ring-deposit-plaintext.js";
-export type {
-  RingDepositOutput,
-  RingDepositPlaintext,
-} from "../protocol/codec/ring-deposit-plaintext.js";
 export { ringTransactAccounts } from "@heliuslabs/zolana/interface";
 export {
   RING_ERROR_CODES,
@@ -158,18 +149,6 @@ export type {
   RingDepositRecipient,
   RingDepositRelayParams,
 } from "../operations/payments/deposit.js";
-export { ringDepositInstruction } from "../protocol/transaction/deposit-instruction.js";
-export {
-  customRingDepositPayload,
-  decryptRingDepositUtxo,
-} from "../protocol/transaction/deposit-payload.js";
-export {
-  openRingDepositOpening,
-  ringDepositContextHash,
-  ringDepositPublicInputHash,
-  sealRingDepositOpenings,
-} from "../proof/deposit-audit.js";
-export type { RingDepositOpening } from "../proof/deposit-audit.js";
 
 export {
   messageSignerSpendSigner,
@@ -178,7 +157,6 @@ export {
 export {
   PENDING_RETENTION,
   StreamCounter,
-  TAG_GAP,
   ViewingHistory,
   ViewingKeyEntry,
 } from "../state/viewing-history.js";
@@ -446,12 +424,6 @@ export {
   classifyMergeNullifier,
   openRingMerge,
 } from "../operations/audit/audit-merge.js";
-export {
-  createdRingUtxos,
-  openConfirmedDeposit,
-  scanCreatedRingUtxos,
-} from "../operations/workflow/created-utxos.js";
-export type { CreatedRingUtxosPage, OpenedDeposit } from "../operations/workflow/created-utxos.js";
 export type {
   MergeNullifierClass,
   MergeNullifierRow,
@@ -483,7 +455,6 @@ export type {
   RingRecoveryStep,
 } from "../operations/workflow/recover.js";
 export {
-  ConfirmedDeposit,
   ORIGIN_TRANSACTION_CONFIG,
   RpcTransactionOrigin,
   confirmedInstructionGroups,

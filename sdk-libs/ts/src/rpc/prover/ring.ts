@@ -42,7 +42,6 @@ import {
   type RingKeyCircuit,
 } from "../../protocol/proof/proving-keys.js";
 import {
-  depositPoolWidth,
   transferKeys,
   transferPoolCapacity,
   type PolicyPoolCapacity,
@@ -275,27 +274,6 @@ export interface RegisterKeyProofRequest {
   readonly auditorPk: Bytes32;
 }
 
-/** Go `DepositParams`, every slot list at the capacity its prefix names. */
-export interface DepositProofRequest extends TrackingProofInputs, PolicyProofInputs {
-  readonly kind: "deposit";
-  readonly publicInputHash: Bytes32;
-  /** The key, `key_capacity` in the instruction. */
-  readonly capacity: number;
-  readonly contextHash: Bytes32;
-  readonly count: number;
-  readonly ownerPkHashes: readonly Bytes32[];
-  readonly ownerKeys: readonly Bytes32[];
-  readonly nullifierPks: readonly Bytes32[];
-  readonly blindingSecrets: readonly Bytes32[];
-  readonly ephSk: Bytes32;
-  readonly auditorPk: Bytes32;
-  /** SPP's asset field of each deposit's group. */
-  readonly assets: readonly Bytes32[];
-  readonly amounts: readonly Bytes32[];
-  /** Two chunks per slot, zero at a padding slot. */
-  readonly mintChunks: readonly (readonly Bytes32[])[];
-}
-
 /** Go `MergeParams`, seals a ring's SPP merge output to its auditor. */
 export interface MergeProofRequest {
   readonly kind: "merge";
@@ -325,7 +303,6 @@ export type RingProofRequest =
   | ApplyRecordsProofRequest
   | ApplyEnrollmentsProofRequest
   | RegisterKeyProofRequest
-  | DepositProofRequest
   | MergeProofRequest;
 
 /** The key a request proves under, its list widths pick the shape. */
@@ -343,8 +320,6 @@ export function ringProofCircuit(request: RingProofRequest): RingKeyCircuit {
       return { family: "applyEnrollments", writes: applyCapacity(listLength(request.writes)) };
     case "registerKey":
       return { family: "registerKey" };
-    case "deposit":
-      return { family: "deposit", capacity: request.capacity };
     case "merge":
       return { family: "merge" };
     default:
@@ -428,41 +403,6 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
         ephSk: hexBytes(request.ephSk, 32, "ephSk"),
         auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
       };
-    case "deposit": {
-      const { capacity } = request;
-      const shape: PolicySectionShape = {
-        rows: 0,
-        spent: 0,
-        outputs: capacity,
-        withdrawals: 0,
-        publicAssets: 0,
-        pools: {
-          own: depositPoolWidth(capacity),
-          curator: depositPoolWidth(capacity),
-          tracking: capacity,
-        },
-      };
-      return {
-        ...head,
-        contextHash: field(request.contextHash, "contextHash"),
-        count: integer(request.count, "count", 1, capacity),
-        ownerPkHashes: fields(request.ownerPkHashes, capacity, "ownerPkHashes"),
-        ownerKeys: sized(request.ownerKeys, capacity, "ownerKeys").map((key, i) =>
-          hexBytes(key, 32, `ownerKeys[${i}]`),
-        ),
-        nullifierPks: fields(request.nullifierPks, capacity, "nullifierPks"),
-        blindingSecrets: fields(request.blindingSecrets, capacity, "blindingSecrets"),
-        ephSk: hexBytes(request.ephSk, 32, "ephSk"),
-        auditorPk: hexBytes(request.auditorPk, 32, "auditorPk"),
-        assets: fields(request.assets, capacity, "assets"),
-        amounts: fields(request.amounts, capacity, "amounts"),
-        mintChunks: sized(request.mintChunks, capacity, "mintChunks").map((chunks, i) =>
-          fields(chunks, MINT_CHUNKS, `mintChunks[${i}]`),
-        ),
-        ...trackingJson(request, shape),
-        ...policyJson(request, shape),
-      };
-    }
     case "merge":
       return {
         ...head,

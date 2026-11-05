@@ -1,5 +1,5 @@
 /**
- * Ring notes and ring deposits opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`.
+ * Ring notes opened into a wallet, the pinned zolana sync drops them, Rust `zolana_ring_client::confidential`.
  *
  * Read `syncRingWallet` first. Each held key's `tagPosition` resumes the ring tag reads beside the core sync's checkpoints, `AnonymousWallet._absorbConfidential` stores both with the notes.
  */
@@ -30,13 +30,11 @@ import {
 import { ringBodyOutput, readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { openRecipientBody } from "../protocol/codec/anonymous-delivery.js";
-import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { spendingTransactions } from "../operations/workflow/recover.js";
 import { outputTreeId } from "../protocol/membership/trees.js";
 import { isRingKeys, type RingKeys, type RingTagFrame } from "./ring-keys.js";
 import { isSmallOrder } from "../crypto/keys/x25519.js";
-import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
-import { answered, exactlyOne, unseen } from "./batch.js";
+import { answered, decoded, exactlyOne, unseen } from "./batch.js";
 import { zeroKeyNullifier } from "./exposed-notes.js";
 import { openZeroKeyMerges } from "./zero-key-merge.js";
 import { HalvingPageLimit, nextHistoryToken } from "../rpc/history.js";
@@ -51,7 +49,7 @@ export interface RingNotes {
   readonly pendingOpenings: readonly WalletUtxo[];
 }
 
-/** Every note is unspent, a ring body opens only under keys that are also `RingKeys`, a malformed audit capsule skips its deposit. */
+/** Every note is unspent, a ring body opens only under keys that are also `RingKeys`. */
 export async function openRingNotes(
   input: Readonly<{
     keys: ShieldedKeys;
@@ -60,7 +58,7 @@ export async function openRingNotes(
   }>,
   context?: RequestContext,
 ): Promise<RingNotes> {
-  const notes = await ringDeposits(input, context);
+  const notes: Note[] = [];
   for (const tx of input.transactions) {
     const { ringProgramId: ring, txViewingPublicKey, salt } = tx;
     if (ring === undefined || txViewingPublicKey === undefined || salt === undefined) continue;
@@ -243,10 +241,18 @@ interface Site {
   readonly slot: IndexedShieldedTransaction["outputSlots"][number];
 }
 
-type Note = RingDepositNote & Readonly<{ utxoHash: Bytes32 }> & Readonly<{ slot: Site["slot"] }>;
+type Note = Readonly<{
+  utxo: WalletUtxo["utxo"];
+  /** The registered key or the zero key, whichever rebuilt. */
+  nullifierPublicKey: Bytes32;
+  dataHash?: Bytes32;
+  ringDataHash?: Bytes32;
+  utxoHash: Bytes32;
+  slot: Site["slot"];
+}>;
 
 /** The ring merges among `spends` and the notes they open to `owner`, Rust `RingMerges`. */
-/** A merge publishes no transaction key or salt, a deposit no proof. */
+/** A merge publishes no transaction key or salt. */
 export function isRingMergeRow(tx: IndexedShieldedTransaction): boolean {
   return (
     tx.ringProgramId !== undefined &&
@@ -280,40 +286,6 @@ export async function openRingMerges(
     context,
   });
   return { merges, utxos: opened._state().utxos };
-}
-
-/** Deposits of any ring, Rust `DepositOpener::open_held`. */
-async function ringDeposits(
-  input: Readonly<{
-    keys: ShieldedKeys;
-    assets: AssetRegistry;
-    transactions: readonly IndexedShieldedTransaction[];
-  }>,
-  context: RequestContext | undefined,
-): Promise<Note[]> {
-  const owner = input.keys.address();
-  const held = input.keys.viewingPublicKeys();
-  const notes: Note[] = [];
-  const seen = new Set<string>();
-  for (const tx of input.transactions)
-    for (const slot of tx.outputSlots) {
-      const viewingPublicKey = held.find((key) => equalBytes(key.u(), slot.viewTag));
-      if (viewingPublicKey === undefined || seen.has(bytesKey(slot.outputContext.hash))) continue;
-      const opened = await openRingDeposit(
-        {
-          keys: input.keys,
-          owner,
-          viewingPublicKey,
-          outputSlot: slot,
-          depositPayload: customRingDepositPayload,
-        },
-        context,
-      );
-      if (opened === undefined) continue;
-      seen.add(bytesKey(slot.outputContext.hash));
-      notes.push({ ...opened, utxoHash: slot.outputContext.hash, slot });
-    }
-  return notes;
 }
 
 /** `undefined` for a slot sent to no held key. */

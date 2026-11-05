@@ -8,7 +8,6 @@ export const RingInstructionTag = Object.freeze({
   clearCoSigner: 62,
   setDelegate: 64,
   authorityTransfer: 56,
-  deposit: 58,
   initialize: 53,
   updatePolicy: 54,
 } as const);

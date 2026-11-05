@@ -69,7 +69,7 @@ export type RelayIntent =
       delegateSignature: Signature;
       tokenAccountSetup?: readonly TokenAccountSetup[];
     }>
-  /** `proofInputs` is a Rust `RelayDepositInputs`, the depositor signs its digest here and the returned message later. */
+  /** `proofInputs` is a Rust `RelayProofInputs` on the deposit rail, the depositor signs its digest here and its legs later. */
   | Readonly<{ operation: "deposit"; proofInputs: Base64String; depositorSignature: Signature }>
   /** `proofInputs` is a Rust `RelayMergeInputs`, the owner signs its digest here. */
   | Readonly<{ operation: "merge"; proofInputs: Base64String; ownerSignature: Signature }>

@@ -18,13 +18,11 @@ import { SOL_MINT, Utxo, Wallet } from "@heliuslabs/zolana/transaction";
 
 import {
   AnonymousSync,
-  TAGS_PER_REQUEST,
   type AnonymousScan,
   type AnonymousStream,
 } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";
 import {
-  GapScan,
   PENDING_RETENTION,
   StreamCounter,
   ViewingHistory,
@@ -49,7 +47,6 @@ import {
 import { TREE, TREE_ID } from "../helpers/ring-pipeline.js";
 import {
   ASSETS,
-  depositRow,
   field,
   found,
   hex,
@@ -124,40 +121,6 @@ describe("anonymous sync", () => {
     expect(scan.sent.map((row) => [hex(row.utxoHash), row.amount])).toEqual([
       [hex(output(paid, 1)), 40n],
     ]);
-  });
-
-  it("resumes each deposit stream from its watermark and a full rescan reads from index 0", async () => {
-    const indexer = new ScanIndexer();
-    const alice = new ScanWallet(1);
-    let history = alice.fresh();
-    const first = await history.senderTag(alice.keys);
-    history = first.history;
-    indexer.deposits.push(depositRow(alice.address, first.tag, true, field(7, 1)));
-    const once = await alice.sync(indexer, history);
-    expect(once.found.map((utxo) => utxo.stream)).toEqual([{ kind: "sender", index: 0n }]);
-    const resumed = await alice.sync(indexer, once.history);
-    expect(resumed.found).toEqual([]);
-    const rescan = await AnonymousSync.create(alice.keys, ASSETS)
-      .withFullRescan()
-      .fetch(indexer.client(), once.history);
-    expect(rescan.found.map((utxo) => utxo.stream)).toEqual([{ kind: "sender", index: 0n }]);
-  });
-
-  it("finds a bootstrap and a request tag deposit, a burned request index stays pending", async () => {
-    const indexer = new ScanIndexer();
-    const bob = new ScanWallet(2);
-    let history = bob.fresh();
-    const burned = await history.requestTag(bob.keys);
-    const used = await burned.history.requestTag(bob.keys);
-    history = used.history;
-    indexer.deposits.push(depositRow(bob.address, bob.viewingKey.u(), true, field(7, 3)));
-    indexer.deposits.push(depositRow(bob.address, used.tag, true, field(7, 4)));
-    const scan = await bob.sync(indexer, history);
-    expect(scan.found.map((utxo) => utxo.stream)).toEqual([
-      { kind: "bootstrap" },
-      { kind: "request", index: 1n },
-    ]);
-    expect(scan.history.current().request.pending).toEqual([0n]);
   });
 
   it("lists every payment in the change and verifies a row only under a held address", async () => {
@@ -553,22 +516,6 @@ describe("anonymous sync", () => {
       .fetch(indexer.client(), alice.fresh());
     expect([...found(scan)].sort()).toEqual([hex(output(own, 0)), hex(output(paid, 1))].sort());
   });
-
-  it("finds an own deposit on the sender tag and moves tx_count, a malformed capsule opens to nothing", async () => {
-    const indexer = new ScanIndexer();
-    const alice = new ScanWallet(1);
-    const truncated = await alice.fresh().senderTag(alice.keys);
-    const kept = await truncated.history.senderTag(alice.keys);
-    for (const [tag, capsule, blinding] of [
-      [truncated.tag, false, field(7, 1)],
-      [kept.tag, true, field(7, 2)],
-    ] as const)
-      indexer.deposits.push(depositRow(alice.address, tag, capsule, blinding));
-    const scanned = await alice.sync(indexer, alice.fresh());
-    expect(scanned.found.map((utxo) => utxo.stream)).toEqual([{ kind: "sender", index: 1n }]);
-    expect(scanned.history.current().txCount).toBe(2n);
-    expect(scanned.utxos.map((utxo) => utxo.utxo.amount)).toEqual([25n]);
-  });
 });
 
 function hex2(key: Readonly<{ toBytes(): Uint8Array }>): string {
@@ -577,37 +524,6 @@ function hex2(key: Readonly<{ toBytes(): Uint8Array }>): string {
 
 describe("viewing history", () => {
   const key = () => X25519Keypair.generate().publicKey();
-
-  it("reads at most one request after a round that finds its last index", () => {
-    const scan = new GapScan(0n, StreamCounter.EMPTY);
-    for (let round = 0; round < 64; round++) {
-      const indices = scan.round();
-      expect(indices.length).toBeLessThanOrEqual(TAGS_PER_REQUEST);
-      expect(scan.advance(indices.slice(-1))).toBe(true);
-    }
-  });
-
-  it("keeps an unseen index pending until it trails past the retention", () => {
-    let counter = StreamCounter.EMPTY.observe(0n, new Set([1n, 3n]));
-    expect([counter.scanned, counter.next]).toEqual([4n, 4n]);
-    expect(counter.pending).toEqual([0n, 2n]);
-    counter = counter.observe(4n, new Set([2n]));
-    expect(counter.pending).toEqual([0n]);
-    counter = counter.observe(4n, new Set([PENDING_RETENTION]));
-    expect(counter.scanned).toBe(PENDING_RETENTION + 1n);
-    expect(counter.pending).toEqual(
-      Array.from({ length: Number(PENDING_RETENTION) - 4 }, (_, at) => BigInt(at) + 4n),
-    );
-  });
-
-  it("keeps the watermark and the pending index a full rescan passes unseen", () => {
-    const counter = StreamCounter.EMPTY.observe(0n, new Set([1n, 3n])).observe(
-      0n,
-      new Set([0n, 1n]),
-    );
-    expect(counter.scanned).toBe(4n);
-    expect(counter.pending).toEqual([2n]);
-  });
 
   it("writes the form sorted by key text", () => {
     const ringB = "So11111111111111111111111111111111111111112" as typeof RING;
@@ -636,7 +552,11 @@ describe("viewing history", () => {
     );
     const rotated = history.withRotatedKey(key(), 5n);
     expect(() => rotated.withRotatedKey(key(), 5n)).toThrow("RING_ROTATED_KEY_NOT_NEWER");
-    const counter = StreamCounter.EMPTY.observe(0n, new Set([PENDING_RETENTION + 1n]));
+    const counter = StreamCounter.restore({
+      next: PENDING_RETENTION + 2n,
+      scanned: PENDING_RETENTION + 2n,
+      pending: [2n, 3n],
+    });
     const withCounter = history.withEntry(0, history.current().withCounter("tx", counter));
     expect(ViewingHistory.fromJson(withCounter.toJson()).toJson()).toBe(withCounter.toJson());
     const parsed = JSON.parse(withCounter.toJson()) as {

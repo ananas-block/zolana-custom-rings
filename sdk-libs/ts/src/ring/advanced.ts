@@ -1,7 +1,6 @@
 /** Circuit-facing codecs, registry proofs, and policy primitives. */
 export {
   AUDIT_ENC_INFO,
-  DEPOSIT_ENC_INFO,
   auditSharedSecret,
   auditorMessageData,
   auditorViewTag,
@@ -214,8 +213,6 @@ export type {
   TransferRoots,
   TransferStatement,
 } from "../protocol/proof/statement.js";
-export { depositStatementElements } from "../proof/deposit-audit.js";
-export type { DepositedAsset, DepositRegistry, DepositStatement } from "../proof/deposit-audit.js";
 export type { EncodedRuleTable } from "../protocol/codec/ring-codecs.js";
 
 export {
@@ -234,22 +231,10 @@ export {
 export { historyCursor, historyCursorToken, type HistoryStream } from "../rpc/history.js";
 
 export {
-  RING_DEPOSIT_AUDIT_SLOTS,
-  RING_DEPOSIT_OPENING_BLOCKS,
-  RING_DEPOSIT_OPENING_LENGTH,
-  encodeRingDepositCapsule,
-  readRingDepositCapsule,
-  type RingDepositCapsule,
-} from "../protocol/codec/deposit-capsule.js";
-export {
   decodeStorageWrites,
   encodeStorageWrites,
   type StorageWrite,
 } from "../protocol/codec/storage-writes.js";
-export {
-  ringDepositSpp,
-  type RingDepositSpp,
-} from "../protocol/transaction/deposit-instruction.js";
 
 export {
   LIST_IDS,

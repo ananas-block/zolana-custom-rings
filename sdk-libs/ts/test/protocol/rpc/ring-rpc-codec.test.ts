@@ -34,8 +34,10 @@ import {
   encodeRefuseListApprovalRequest,
   encodeSetReaderGrantRequest,
 } from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
-import { depositRequestDigest } from "../../../src/protocol/ring-rpc/relay-deposit-inputs.js";
-import { mergeRequestDigest } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
+import {
+  depositRequestDigest,
+  mergeRequestDigest,
+} from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { P256ReaderKey } from "../../../src/operations/management/reader-access.js";
 import {
   RingAuthorityTransferRequest,

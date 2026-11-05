@@ -1,4 +1,4 @@
-import { rightAlign, checkedBytes, u32be } from "@heliuslabs/zolana/internal";
+import { rightAlign, u32be } from "@heliuslabs/zolana/internal";
 import { type Bytes32, poseidon } from "@heliuslabs/zolana/keypair";
 
 /** Distinct ASCII tags, the first Poseidon input, mirroring Rust `custom_ring_interface::domain`. */
@@ -12,8 +12,6 @@ export const RingDomain = Object.freeze({
   recordWrite: 0x4352_5157, // "CRQW"
   applyRecords: 0x4352_4150, // "CRAP"
   registerKey: 0x4352_5247, // "CRRG"
-  depositBlinding: 0x4352_4442, // "CRDB"
-  depositStatement: 0x4352_4450, // "CRDP"
   mergeStatement: 0x4352_4d47, // "CRMG"
   withdrawals: 0x4352_5057, // "CRPW"
   recordUpdate: 0x4352_5255, // "CRRU"
@@ -37,11 +35,4 @@ export function domainHash(domain: RingDomain, fields: readonly Uint8Array[]): B
   } finally {
     fields.forEach((field) => field.fill(0));
   }
-}
-
-/** `Poseidon(CRDB, blinding_secret)`. */
-export function depositBlinding(blindingSecret: Bytes32): Bytes32 {
-  return domainHash(RingDomain.depositBlinding, [
-    checkedBytes<Bytes32>(blindingSecret, 32, "deposit blinding secret"),
-  ]);
 }

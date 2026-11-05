@@ -519,27 +519,6 @@ function request(item: Json): RingProofRequest {
       ephSk: bytes<Bytes32>(item["ephSk"], 32),
       auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
     };
-  if (circuitType.startsWith("custom-ring-deposit-")) {
-    const ownerPkHashes = fields(item["ownerPkHashes"]);
-    return {
-      kind: "deposit",
-      publicInputHash,
-      capacity: ownerPkHashes.length,
-      contextHash: field(item["contextHash"]),
-      count: count(item["count"]),
-      ownerPkHashes,
-      ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
-      nullifierPks: fields(item["nullifierPks"]),
-      blindingSecrets: fields(item["blindingSecrets"]),
-      ephSk: bytes<Bytes32>(item["ephSk"], 32),
-      auditorPk: bytes<Bytes32>(item["auditorPk"], 32),
-      assets: fields(item["assets"]),
-      amounts: fields(item["amounts"]),
-      mintChunks: list(item["mintChunks"]).map(fields),
-      ...trackingSection(item),
-      ...policy(item),
-    };
-  }
   if (circuitType === "custom-ring-merge")
     return {
       kind: "merge",
@@ -624,10 +603,10 @@ describe.runIf(HAS_GOLDENS)("ring prover request encoding against the Go goldens
     expect(JSON.stringify(ringProofRequestBody(request(item)))).toBe(JSON.stringify(item));
   });
 
-  it("names the deposit key the prover loads and refuses a shape no ring key serves", () => {
-    expect(ringProvingKey({ family: "deposit", capacity: 8 })).toEqual({
-      name: "custom_ring_deposit_8.key",
-      sha256: RING_PROVING_KEY_SHA256S["custom_ring_deposit_8.key"],
+  it("names the merge key the prover loads and refuses a shape no ring key serves", () => {
+    expect(ringProvingKey({ family: "merge" })).toEqual({
+      name: "custom_ring_merge.key",
+      sha256: RING_PROVING_KEY_SHA256S["custom_ring_merge.key"],
     });
     expect(() =>
       ringProvingKey({

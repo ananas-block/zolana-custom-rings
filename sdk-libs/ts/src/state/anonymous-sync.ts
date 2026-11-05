@@ -1,4 +1,4 @@
-/** Transfers found by scanning each ring's history and deposits by tag, Rust `zolana_ring_client::anonymous`. */
+/** Transfers found by scanning each ring's history, Rust `zolana_ring_client::anonymous`. */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { getBase58Encoder, type ReadonlyUint8Array } from "@solana/kit";
 
@@ -23,14 +23,12 @@ import {
   type ShieldedAddress,
   type ShieldedPublicKey,
   type ViewingKey,
-  type ViewTag,
 } from "@heliuslabs/zolana/keypair";
 import {
   transactOutputBlinding,
   SOL_ASSET_ID,
   SOL_MINT,
   type AssetRegistry,
-  type DepositPayloadDecoder,
   type IndexedShieldedTransaction,
   type OutputSlot,
   type ShieldedKeys,
@@ -38,7 +36,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { confidentialSlotTag, txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
+import { txKeySlotSecret } from "../crypto/derivation/ring-stream.js";
 import { isSmallOrder, x25519FromU } from "../crypto/keys/x25519.js";
 import {
   openRecipientBody,
@@ -53,7 +51,6 @@ import {
 } from "../protocol/codec/anonymous-delivery.js";
 import { CompactAssetResolver } from "../rpc/compact-assets.js";
 import { DisclosureFormat } from "../protocol/codec/ring-disclosure-layout.js";
-import { customRingDepositPayload } from "../protocol/transaction/deposit-payload.js";
 import { ringBodyOutput, senderBundleOutputBody } from "../protocol/transaction/output.js";
 import { openRecipientNote } from "../crypto/derivation/blinding.js";
 import { HalvingPageLimit, readRingPages, scanLimits, type ScanLimits } from "../rpc/history.js";
@@ -62,35 +59,22 @@ import {
   RECOVERY_DIAGNOSTIC_SAMPLES,
   type RecoverySession,
   type RecoveryTask,
-  type RecoveryDeposits,
   type RecoveryPage,
 } from "./recovery-session.js";
-import { answered, unseen } from "./batch.js";
+import { answered, decoded, unseen } from "./batch.js";
 import { isZeroKeyNote as isExposedNote, zeroKeyNullifier } from "./exposed-notes.js";
 import { openZeroKeyMerges, type OpenedZeroKeyMerge } from "./zero-key-merge.js";
-import { decoded, openRingDeposit, type RingDepositNote } from "./ring-deposit.js";
 import { registeredMint } from "../operations/workflow/recover.js";
 import { openRingMerges } from "./ring-sync.js";
 import type { RingKeys, RingTagFrame } from "./ring-keys.js";
 import { RingError } from "../protocol/error.js";
-import {
-  GapScan,
-  type EntryStream,
-  ViewingHistory,
-  type ViewingKeyEntry,
-  viewTagStream,
-} from "./viewing-history.js";
+import { ViewingHistory, type ViewingKeyEntry } from "./viewing-history.js";
 
 /** The indexer's cap on the tags or nullifiers one request names. */
 export const TAGS_PER_REQUEST = Number(PAGE_LIMIT);
 
 /** How a sync found a note. */
 export type AnonymousStream =
-  /** A deposit to the wallet's own note under `senderViewTag(index)`. */
-  | Readonly<{ kind: "sender"; index: bigint }>
-  /** A deposit under a tag the wallet minted for a request. */
-  | Readonly<{ kind: "request"; index: bigint }>
-  | Readonly<{ kind: "bootstrap" }>
   /** A transfer's slot or bundle whose tag matched. */
   | Readonly<{ kind: "tagHint" }>
   | Readonly<{ kind: "merge"; firstNullifier: Bytes32 }>
@@ -218,7 +202,6 @@ interface BodyReads {
 interface SyncFields extends BodyReads {
   readonly config: IndexerRpcConfig | undefined;
   readonly minimumSlot?: bigint;
-  readonly depositPayload: DepositPayloadDecoder;
   readonly fullRescan: boolean;
   readonly held: readonly WalletUtxo[];
   readonly limits: ScanLimits;
@@ -227,7 +210,7 @@ interface SyncFields extends BodyReads {
   readonly compactAssetClient?: Pick<KitRpcAccess, "solanaRpc">;
 }
 
-/** Scans each ring of the history and reads each held key's deposit streams. */
+/** Scans each ring of the history. */
 export class AnonymousSync {
   readonly #fields: SyncFields;
 
@@ -241,7 +224,6 @@ export class AnonymousSync {
       keys,
       assets,
       config: undefined,
-      depositPayload: customRingDepositPayload,
       fullRescan: false,
       held: [],
       recipients: [],
@@ -257,11 +239,6 @@ export class AnonymousSync {
 
   withIndexerConfig(config: IndexerRpcConfig): AnonymousSync {
     return new AnonymousSync({ ...this.#fields, config });
-  }
-
-  /** A framing of the deposit ciphertexts other than the audit capsule. */
-  withDepositPayload(depositPayload: DepositPayloadDecoder): AnonymousSync {
-    return new AnonymousSync({ ...this.#fields, depositPayload });
   }
 
   /** Every stream from index 0 and every ring from its start, for a wallet that keeps no notes between syncs. */
@@ -307,7 +284,6 @@ export class AnonymousSync {
   ): Promise<AnonymousScan> {
     const scan = this.#scan(client, history, context);
     try {
-      await scan.entries();
       await scan.rings();
       await scan.merges();
     } catch (error) {
@@ -366,7 +342,7 @@ export class AnonymousSync {
     return result;
   }
 
-  /** Tries every slot, bundle and deposit of `ring` from its start with no use of a tag, spends resolve from the same pages. */
+  /** Tries every slot and bundle of `ring` from its start with no use of a tag, spends resolve from the same pages. */
   async fullScan(
     client: AnonymousSyncClient,
     history: ViewingHistory,
@@ -450,39 +426,6 @@ export async function ringFullScan(
   });
 }
 
-/** One round's tags, every read of a published tag goes through `match`. */
-class TagWindow<T> {
-  readonly #byTag = new Map<string, T>();
-  readonly tags: readonly ViewTag[];
-
-  constructor(tags: readonly (readonly [T, ViewTag])[]) {
-    for (const [index, tag] of tags) this.#byTag.set(bytesKey(tag), index);
-    this.tags = tags.map(([, tag]) => tag);
-  }
-
-  match(published: Readonly<{ viewTag: Bytes32 }>): T | undefined {
-    return this.#byTag.get(bytesKey(published.viewTag));
-  }
-}
-
-type ActiveStream = Readonly<{ stream: EntryStream; scan: GapScan }>;
-
-type RoundTag = Readonly<{ kind: "bootstrap" }> | Readonly<{ stream: EntryStream; index: bigint }>;
-
-async function streamTags(
-  keys: RingKeys,
-  viewingPublicKey: X25519PublicKey,
-  stream: EntryStream,
-  counters: readonly bigint[],
-  context: RequestContext | undefined,
-): Promise<readonly ViewTag[]> {
-  const requests = counters.map((at) => ({
-    viewingPublicKey,
-    stream: viewTagStream(stream, at),
-  }));
-  return answered(requests, await keys.viewTags(requests, context)).map(([, tag]) => tag);
-}
-
 /** Rust `RingDeliveryContext`. */
 interface SlotContext {
   readonly ring: Address;
@@ -508,7 +451,10 @@ interface Body {
 }
 
 /** A note whose rebuilt hash matched, before its nullifier. */
-interface Found extends RingDepositNote {
+interface Found {
+  readonly utxo: Utxo;
+  readonly dataHash?: Bytes32;
+  readonly ringDataHash?: Bytes32;
   readonly outputContext: WalletUtxo["outputContext"];
   readonly nullifierPublicKey: Bytes32;
   readonly order: Publication;
@@ -522,12 +468,6 @@ interface Publication {
   readonly signature: ReadonlyUint8Array;
   readonly position: number;
 }
-
-type Deposit = Readonly<{
-  slot: bigint;
-  txSignature: IndexedShieldedTransaction["txSignature"];
-  outputSlot: OutputSlot;
-}>;
 
 interface Decrypted {
   readonly utxo: WalletUtxo;
@@ -711,41 +651,6 @@ class Scan {
       input.keys.includes(keyHex(candidate.viewingPublicKey)),
     )) {
       const key = keyHex(entry.viewingPublicKey);
-      if (input.mode === "tagHints") {
-        tasks.push({
-          kind: "deposits",
-          key,
-          stream: "bootstrap",
-          gap: null,
-          indices: [0n, 1n],
-          tags: [
-            bytesToHex(entry.viewingPublicKey.u()),
-            bytesToHex(confidentialSlotTag(entry.viewingPublicKey.u())),
-          ],
-          observed: [],
-          chunk: 0,
-          limit: this.#sync.limits.pageSize,
-          token: null,
-          workOffset: 0,
-        });
-        for (const stream of ["tx", "request"] as const)
-          tasks.push({
-            kind: "deposits",
-            key,
-            stream,
-            gap: new GapScan(
-              this.#sync.fullRescan ? 0n : entry[stream].scanned,
-              entry[stream],
-            ).state(),
-            indices: [],
-            tags: [],
-            observed: [],
-            chunk: 0,
-            limit: this.#sync.limits.pageSize,
-            token: null,
-            workOffset: 0,
-          });
-      }
       const rings =
         input.ring === undefined ? entry.ringPositions() : [{ ring: input.ring, afterSlot: null }];
       for (const position of rings)
@@ -877,10 +782,6 @@ class Scan {
   async #discoveryPage(task: RecoveryTask): Promise<void> {
     const session = this.#session;
     if (session === undefined) throw new RingError("RING_HISTORY_PAGE_INVALID");
-    if (task.kind === "deposits") {
-      await this.#depositPage(task);
-      return;
-    }
     const response = await this.#client.getShieldedTransactionsByTags(
       { ...this.#query(task, task.afterSlot), tags: [], ringProgramId: task.ring as Address },
       this.#queryConfig(),
@@ -917,75 +818,6 @@ class Scan {
     }
   }
 
-  async #depositPage(task: RecoveryDeposits): Promise<void> {
-    const session = this.#session;
-    if (session === undefined) throw new RingError("RING_HISTORY_PAGE_INVALID");
-    const viewingPublicKey = X25519PublicKey.fromBytes(hexToBytes(task.key));
-    if (task.tags.length === 0 && task.gap !== null && task.stream !== "bootstrap") {
-      const gap = GapScan.restore(task.gap);
-      task.indices = [...gap.round()];
-      task.gap = gap.state();
-      task.tags = (
-        await streamTags(
-          this.#sync.keys,
-          viewingPublicKey,
-          task.stream,
-          task.indices,
-          this.#context,
-        )
-      ).map(bytesToHex);
-    }
-    const tags = task.tags.slice(task.chunk, task.chunk + TAGS_PER_REQUEST);
-    const response = await this.#client.getEncryptedUtxosByTags(
-      { ...this.#query(task), tags: tags.map((tag) => hexToBytes(tag) as Bytes32) },
-      this.#queryConfig(),
-      this.#context,
-    );
-    this.#validatePage(response, task);
-    const matches = new Map(tags.map((tag, index) => [tag, task.indices[task.chunk + index]]));
-    const observed = new Set(task.observed);
-    for (const deposit of response.data.flatMap((row) => row.outputs)) {
-      const index = matches.get(bytesToHex(deposit.outputSlot.viewTag));
-      if (index === undefined) throw new RingError("RING_HISTORY_PAGE_INVALID");
-      observed.add(index);
-      await openDepositNote(
-        {
-          keys: this.#sync.keys,
-          assets: this.#sync.assets,
-          owner: this.#address,
-          ledger: this.#ledger,
-          depositPayload: this.#sync.depositPayload,
-          viewingPublicKey,
-          deposit,
-          found: task.stream === "bootstrap" ? BOOTSTRAP : foundIn(task.stream, index),
-        },
-        this.#context,
-      );
-    }
-    task.observed = [...observed];
-    task.token = response.paginationToken;
-    if (task.token !== null) return;
-    task.chunk += tags.length;
-    if (task.chunk < task.tags.length) return;
-    if (task.gap !== null && task.stream !== "bootstrap") {
-      const gap = GapScan.restore(task.gap);
-      if (gap.advance(task.observed)) {
-        task.gap = gap.state();
-        task.indices = [];
-        task.tags = [];
-        task.observed = [];
-        task.chunk = 0;
-        return;
-      }
-      const index = this.#history.entries.findIndex((entry) =>
-        entry.viewingPublicKey.equals(viewingPublicKey),
-      );
-      const entry = this.#entry(index);
-      this.#withEntry(index, entry.withCounter(task.stream, gap.finish(entry[task.stream])));
-    }
-    session.task++;
-  }
-
   #diagnostics(rows: readonly IndexedShieldedTransaction[]): void {
     for (const slot of rows.flatMap((row) => row.outputSlots)) {
       if (
@@ -1003,51 +835,6 @@ class Scan {
     this.#status = "Paused";
     this.#pauseReason = "assetLookup";
     this.#history = this.#originalHistory;
-  }
-
-  async entries(): Promise<void> {
-    for (const [index, entry] of this.#history.entries.entries())
-      if (this.#holds(entry)) await this.entry(index);
-  }
-
-  /** One key's deposit streams, every round's tags in one read. */
-  async entry(index: number): Promise<void> {
-    const entry = this.#entry(index);
-    const { viewingPublicKey } = entry;
-    const streams: readonly EntryStream[] = ["tx", "request"];
-    let active = streams.map((stream): ActiveStream => ({
-      stream,
-      scan: new GapScan(this.#sync.fullRescan ? 0n : entry[stream].scanned, entry[stream]),
-    }));
-    let bootstrap: readonly ViewTag[] = [
-      viewingPublicKey.u(),
-      confidentialSlotTag(viewingPublicKey.u()),
-    ];
-    while (active.length > 0) {
-      const tagged: (readonly [RoundTag, ViewTag])[] = bootstrap.map((tag) => [BOOTSTRAP, tag]);
-      bootstrap = [];
-      for (const { stream, scan } of active) {
-        const indices = scan.round();
-        const tags = await streamTags(
-          this.#sync.keys,
-          viewingPublicKey,
-          stream,
-          indices,
-          this.#context,
-        );
-        for (const [at, tag] of answered(indices, tags)) tagged.push([{ stream, index: at }, tag]);
-      }
-      const seen = await this.#window(index, new TagWindow(tagged));
-      active = active.filter(({ stream, scan }) => {
-        const found = [...seen].flatMap((tag) =>
-          "stream" in tag && tag.stream === stream ? [tag.index] : [],
-        );
-        if (scan.advance(found)) return true;
-        const current = this.#entry(index);
-        this.#withEntry(index, current.withCounter(stream, scan.finish(current[stream])));
-        return false;
-      });
-    }
   }
 
   /** Entries at one position of one ring share a read, a key added later is its own query. */
@@ -1252,20 +1039,6 @@ class Scan {
       viewingPublicKey,
       await bodySecrets(this.#sync.keys, viewingPublicKey, bodies, this.#context),
     );
-    for (const deposit of rows.filter((tx) => tx.proofless).flatMap(depositsOf))
-      await openDepositNote(
-        {
-          keys: this.#sync.keys,
-          assets: this.#sync.assets,
-          owner: this.#address,
-          ledger: this.#ledger,
-          depositPayload: this.#sync.depositPayload,
-          viewingPublicKey,
-          deposit,
-          found: FULL_SCAN,
-        },
-        this.#context,
-      );
   }
 
   async #read(
@@ -1318,43 +1091,6 @@ class Scan {
     }
   }
 
-  /** Opens every deposit under a tag of `window`, the tags any deposit holds. */
-  async #window(index: number, window: TagWindow<RoundTag>): Promise<ReadonlySet<RoundTag>> {
-    const deposits = await this.#deposits(window.tags);
-    const observed = new Set<RoundTag>();
-    for (const deposit of deposits) {
-      const at = window.match(deposit.outputSlot);
-      if (at === undefined) continue;
-      observed.add(at);
-      await openDepositNote(
-        {
-          keys: this.#sync.keys,
-          assets: this.#sync.assets,
-          owner: this.#address,
-          ledger: this.#ledger,
-          depositPayload: this.#sync.depositPayload,
-          viewingPublicKey: this.#entry(index).viewingPublicKey,
-          deposit,
-          found: "stream" in at ? foundIn(at.stream, at.index) : BOOTSTRAP,
-        },
-        this.#context,
-      );
-    }
-    return observed;
-  }
-
-  /** The deposits published under one of `tags`, one per deposited output. */
-  #deposits(tags: readonly ViewTag[]): Promise<readonly Deposit[]> {
-    return this.#paged(tags, (chunk, token, limit) =>
-      this.#client
-        .getEncryptedUtxosByTags({ tags: chunk, ...token, limit }, this.#sync.config, this.#context)
-        .then((page) => ({
-          ...page,
-          items: page.data.flatMap((item) => item.outputs),
-        })),
-    );
-  }
-
   /** Every page of every chunk, a null token ends a chunk's read. */
   async #paged<T>(
     queried: readonly Bytes32[],
@@ -1383,19 +1119,6 @@ class Scan {
       }
     }
     return items;
-  }
-
-  #entry(index: number): ViewingKeyEntry {
-    const entry = this.#history.entries[index];
-    if (entry === undefined)
-      throw new RingError("RING_VIEWING_HISTORY_INVALID", {
-        details: { reason: "names no viewing key at the index" },
-      });
-    return entry;
-  }
-
-  #withEntry(index: number, entry: ViewingKeyEntry): void {
-    this.#history = this.#history.withEntry(index, entry);
   }
 }
 
@@ -1465,52 +1188,6 @@ async function keepRingMerges(
       );
     }
   }
-}
-
-/** One deposit under one key, its published hash proves it the owner's. */
-async function openDepositNote(
-  input: Readonly<{
-    keys: ShieldedKeys;
-    assets: AssetRegistry;
-    owner: ShieldedAddress;
-    ledger: NoteLedger;
-    depositPayload: DepositPayloadDecoder;
-    viewingPublicKey: X25519PublicKey;
-    deposit: Deposit;
-    found: AnonymousStream;
-  }>,
-  context: RequestContext | undefined,
-): Promise<void> {
-  const { deposit, ledger, owner, viewingPublicKey } = input;
-  const slot = deposit.outputSlot;
-  if (ledger.isFound(slot.outputContext.hash)) return;
-  const opened = await openRingDeposit(
-    {
-      keys: input.keys,
-      owner,
-      viewingPublicKey,
-      outputSlot: slot,
-      depositPayload: input.depositPayload,
-    },
-    context,
-  );
-  if (opened === undefined) return;
-  const pending = registeredMint(input.assets, opened.utxo.asset) === undefined;
-  if (pending) ledger.unknownMint(opened.utxo.asset);
-  ledger.keep(
-    {
-      ...opened,
-      pending,
-      outputContext: walletContext(slot),
-      order: {
-        slot: deposit.slot,
-        signature: base58.encode(deposit.txSignature),
-        position: 0,
-      },
-    },
-    viewingPublicKey,
-    input.found,
-  );
 }
 
 /** @internal The notes one sync or recovery keeps, each once, under the stream that found it. */
@@ -2030,17 +1707,12 @@ function outputIndex(body: Body): number {
   return body.site.kind === "output" ? body.site.position : body.tx.outputSlots.length;
 }
 
-const BOOTSTRAP = Object.freeze({ kind: "bootstrap" });
 const FULL_SCAN: AnonymousStream = Object.freeze({ kind: "fullScan" });
 const TAG_HINT: AnonymousStream = Object.freeze({ kind: "tagHint" });
 const base58 = getBase58Encoder();
 
 function isZeroKeyNote(note: Found): boolean {
   return equalBytes(note.nullifierPublicKey, ZERO_NULLIFIER_PK);
-}
-
-function foundIn(stream: EntryStream, index: bigint): AnonymousStream {
-  return Object.freeze({ kind: stream === "tx" ? "sender" : "request", index });
 }
 
 /** `undefined` without a ring, a contributory key, a salt or a canonical first nullifier. */
@@ -2079,14 +1751,6 @@ function bodyProbe(body: Body): RingTagFrame["probes"][number] {
     outputIndex: outputIndex(body),
     tag: published.viewTag,
   };
-}
-
-function depositsOf(tx: IndexedShieldedTransaction): readonly Deposit[] {
-  return tx.outputSlots.map((outputSlot) => ({
-    slot: tx.slot,
-    txSignature: tx.txSignature,
-    outputSlot,
-  }));
 }
 
 function publication(tx: IndexedShieldedTransaction, position: number): Publication {

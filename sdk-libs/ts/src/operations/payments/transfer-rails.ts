@@ -21,9 +21,10 @@ import type {
   Address,
   Bytes32,
   RequestContext,
+  TransactDeposit,
   TransactWithdrawal,
 } from "@heliuslabs/zolana/interface";
-import { associatedTokenAddress } from "@heliuslabs/zolana/internal";
+import { associatedTokenAddress, signerAddress } from "@heliuslabs/zolana/internal";
 import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import type {
   ExpectedSealed,
@@ -46,7 +47,10 @@ import {
   type PreparedTransfer,
   type WithdrawalTarget,
 } from "@heliuslabs/zolana/transaction";
-import { encodeRelayProofInputs } from "../../protocol/ring-rpc/relay-proof-inputs.js";
+import {
+  encodeRelayProofInputs,
+  type RelayLegAccounts,
+} from "../../protocol/ring-rpc/relay-proof-inputs.js";
 import type {
   RelayIntent,
   RelayQuote,
@@ -145,6 +149,8 @@ export interface CustomRingTransferInput {
   readonly extensions?: Omit<FrameExtensions, "approvalTotals" | "signerDataCounts" | "cache">;
   /** The frame carries a digest of its totals, Rust `with_exact_approval`. */
   readonly exactApproval?: boolean;
+  /** The settlement accounts of each deposit leg `transfer` names, in leg order. */
+  readonly deposits?: readonly TransactDeposit[];
 }
 
 /** The confidential rail, the owner signs its spends in public or inside the proof, Rust `RingTransfer<Owner>`. */
@@ -251,6 +257,27 @@ export class CustomRingTransfer {
     context?: RequestContext,
   ): Promise<UnsignedRelay> {
     return this.#prepareRelay(client, input, approval, context);
+  }
+
+  /** @internal Rust `deposit_relay`, the wallet reads no record. */
+  async depositRelay(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: DepositRelayInput,
+    context?: RequestContext,
+  ): Promise<DepositRelayFrame> {
+    const { config, staged, prepared } = await this.#stage(client, context);
+    try {
+      return depositRelayFrame({
+        owner: this.#input,
+        config,
+        prepared,
+        staged,
+        spend: { rail: "confidential" },
+        input,
+      });
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
   }
 
   async #prepareRelay(
@@ -427,6 +454,7 @@ export class CustomRingTransfer {
     const owner = inProofOwnerKey(this.#inProofOwner, sender);
     const prepared = this.#input.transfer.prepare();
     checkWithdrawalAccounts(prepared, this.#withdrawal);
+    checkDepositAccounts(prepared, this.#input.deposits);
     const rail = new RingOutputRail(
       await transactionKey(keys, sender, prepared, context),
       prepared.firstNullifier,
@@ -456,6 +484,7 @@ export class CustomRingTransfer {
           rail,
           sender,
           ownerSigners,
+          ...stagedDeposits(this.#input),
           ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
           extensions: stagedExtensions(this.#input, proofInputs, ownerSigners),
         },
@@ -971,6 +1000,65 @@ export class PublicOwnerTransfer {
     context: RequestContext | undefined,
   ): Promise<ProvenRingTransfer> {
     const { ringProgramId, keys } = this.#owner;
+    const { config, prepared, staged, spend } = await this.#stage(client, context);
+    const prove: RailSpend["prove"] = (inputs, proveContext) =>
+      client.proveRingTransact(
+        inputs,
+        ringProgramId,
+        ringSpendAuthority({
+          keys,
+          coOwners: this.#coOwners,
+          proofInputs: inputs,
+          sender: staged.sender,
+        }),
+        { outputTree: client },
+        proveContext,
+      );
+    try {
+      return await proveStagedTransfer(
+        {
+          client,
+          ringProgramId,
+          config,
+          staged: { ...staged, spend: { ...spend, prove } },
+          ...suppliedCoSigners(this.#owner.coSigners),
+          listSalts: this.#owner.listSalts ?? [],
+          ...approvedStage(approval, prepared),
+        },
+        context,
+      );
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
+  }
+
+  /** @internal Rust `deposit_relay`, the wallet reads no record. */
+  async depositRelay(
+    client: Pick<RingProvingClient, "getAccount">,
+    input: DepositRelayInput,
+    context?: RequestContext,
+  ): Promise<DepositRelayFrame> {
+    const { config, prepared, staged, spend } = await this.#stage(client, context);
+    try {
+      return depositRelayFrame({ owner: this.#owner, config, prepared, staged, spend, input });
+    } finally {
+      staged.rail.txViewingKey.destroy();
+    }
+  }
+
+  /** The caller destroys `staged.rail.txViewingKey`. */
+  async #stage(
+    client: Pick<RingProvingClient, "getAccount">,
+    context: RequestContext | undefined,
+  ): Promise<
+    Readonly<{
+      config: RingPolicy;
+      prepared: PreparedTransfer;
+      staged: Omit<StagedTransfer, "spend">;
+      spend: Omit<RailSpend, "prove">;
+    }>
+  > {
+    const { ringProgramId, keys } = this.#owner;
     const sender = keys.address();
     if (encodeBase58(sender.signingPublicKey.ed25519()) !== this.#wallet)
       throw new RingError("RING_PUBLIC_SPEND_WALLET_MISMATCH", {
@@ -981,6 +1069,7 @@ export class PublicOwnerTransfer {
     const anonymous = config.mode === "anonymous";
     const prepared = this.#owner.transfer.prepare();
     checkWithdrawalAccounts(prepared, this.#withdrawal);
+    checkDepositAccounts(prepared, this.#owner.deposits);
     if (
       anonymous &&
       this.#payments.some((payment) => isSmallOrder(payment.to.recipient.viewingPublicKey))
@@ -1003,54 +1092,38 @@ export class PublicOwnerTransfer {
       });
       checkCoOwnerKeys(proofInputs, sender, this.#coOwners);
       const ownerSigners = ownerSignerAddresses(proofInputs.inputUtxos, proofInputs.outputs);
-      const approvalBlinder = attemptBlinder(this.#owner);
-      const prove: RailSpend["prove"] = (inputs, proveContext) =>
-        client.proveRingTransact(
-          inputs,
-          ringProgramId,
-          ringSpendAuthority({
-            keys,
-            coOwners: this.#coOwners,
-            proofInputs: inputs,
-            sender,
-          }),
-          { outputTree: client },
-          proveContext,
-        );
-      const spend: RailSpend = anonymous
+      const spend: Omit<RailSpend, "prove"> = anonymous
         ? {
             rail: "anonymous",
             publicOwners: true,
-            prove,
             anonymous: {
               partyIdentities: (coSigners) =>
-                anonymousPartyIdentities({ payer: prepared.payer, coSigners }),
+                anonymousPartyIdentities({
+                  payer: prepared.payer,
+                  coSigners,
+                  funders: (this.#owner.deposits ?? []).map(({ funder }) => signerAddress(funder)),
+                }),
             },
           }
-        : { rail: "confidential", prove };
-      return await proveStagedTransfer(
-        {
-          client,
-          ringProgramId,
-          config,
-          staged: {
-            proofInputs,
-            rail,
-            sender,
-            ownerSigners,
-            ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
-            extensions: stagedExtensions(this.#owner, proofInputs, ownerSigners),
-            ...stagedBlinder(approvalBlinder),
-            spend,
-          },
-          ...suppliedCoSigners(this.#owner.coSigners),
-          listSalts: this.#owner.listSalts ?? [],
-          ...approvedStage(approval, prepared),
+        : { rail: "confidential" };
+      return {
+        config,
+        prepared,
+        spend,
+        staged: {
+          proofInputs,
+          rail,
+          sender,
+          ownerSigners,
+          ...stagedDeposits(this.#owner),
+          ...(this.#withdrawal === undefined ? {} : { withdrawal: this.#withdrawal }),
+          extensions: stagedExtensions(this.#owner, proofInputs, ownerSigners),
+          ...stagedBlinder(attemptBlinder(this.#owner)),
         },
-        context,
-      );
-    } finally {
+      };
+    } catch (cause) {
       rail.txViewingKey.destroy();
+      throw cause;
     }
   }
 }
@@ -1487,6 +1560,32 @@ function checkWithdrawalAccounts(
   if (!matches) throw new RingError("RING_SETTLEMENT_ACCOUNTS_INVALID");
 }
 
+/** Each deposit leg names its funder's accounts in leg order, Rust `funder_account_position`. */
+function checkDepositAccounts(
+  prepared: PreparedTransfer,
+  deposits: readonly TransactDeposit[] | undefined,
+): void {
+  const legs = prepared.interfaceTransfers.filter((transfer) => transfer.isDeposit);
+  const accounts = deposits ?? [];
+  const matches =
+    legs.length === accounts.length &&
+    legs.every((leg, index) => {
+      const named = accounts[index];
+      return leg.kind === "sol"
+        ? named?.kind === "sol" && signerAddress(named.funder) === leg.userSolAccount
+        : named?.kind === "spl" &&
+            named.mint === leg.mint &&
+            named.sourceTokenAccount === leg.tokenAccount;
+    });
+  if (!matches) throw new RingError("RING_SETTLEMENT_ACCOUNTS_INVALID");
+}
+
+function stagedDeposits(
+  input: CustomRingTransferInput,
+): Readonly<{ deposits?: readonly TransactDeposit[] }> {
+  return input.deposits === undefined ? {} : { deposits: input.deposits };
+}
+
 export interface RingRelayInput {
   /** Names the fee payer the transfer pays from. */
   readonly quote: RelayQuote;
@@ -1498,6 +1597,112 @@ export interface RingRelayInput {
   readonly tokenAccountSetup?: readonly TokenAccountSetup[];
   /** The row a Ring RPC reseal refusal names, unset seals under the public counts' row. */
   readonly sealRow?: SealRow;
+}
+
+/** Rust `deposit_relay`'s inputs, the frame's sender proves nothing. */
+export interface DepositRelayInput {
+  readonly quote: RelayQuote;
+  readonly nullifierKey: NullifierKey;
+}
+
+/** A sealed deposit frame, the caller wipes `payload`. */
+export interface DepositRelayFrame {
+  readonly payload: Uint8Array;
+  readonly expected: ExpectedSealed;
+}
+
+/** One funder term per funding key, Ring RPC builds the frame and the funder signs its legs. */
+function depositRelayFrame(
+  input: Readonly<{
+    owner: CustomRingTransferInput;
+    config: RingPolicy;
+    prepared: PreparedTransfer;
+    staged: Omit<StagedTransfer, "spend">;
+    spend: Pick<RailSpend, "rail" | "publicOwners">;
+    input: DepositRelayInput;
+  }>,
+): DepositRelayFrame {
+  const { owner, config, prepared, staged, spend } = input;
+  const { quote, nullifierKey } = input.input;
+  if (prepared.payer !== quote.feePayer)
+    throw new RingError("RING_RELAY_PAYER_MISMATCH", {
+      details: { payer: prepared.payer, feePayer: quote.feePayer },
+    });
+  const deposits = owner.deposits ?? [];
+  const funders = [...new Set(deposits.map(({ funder }) => signerAddress(funder)))];
+  // The fee payer signs whatever the relay sends, a leg naming it would fund the note from the relay.
+  if (funders.includes(quote.feePayer)) throw new RingError("RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT");
+  const sealed = sealRelayedTransfer({
+    ringProgramId: owner.ringProgramId,
+    config,
+    staged: { ...staged, spend },
+  });
+  try {
+    const { proofInputs } = sealed;
+    const plan = staged.rail.delivery;
+    const legs = proofInputs.externalData.interfaceTransfers;
+    return Object.freeze({
+      payload: encodeRelayProofInputs({
+        rail: { kind: "deposit", ...(plan.kind === "anonymous" ? { plan: plan.plan } : {}) },
+        ringProgramId: owner.ringProgramId,
+        sender: staged.sender,
+        nullifierKey,
+        txViewingKey: staged.rail.txViewingKey,
+        inputs: proofInputs.inputUtxos,
+        leafIndexes: proofInputs.inputUtxos.map(() => 0n),
+        outputs: proofInputs.outputs,
+        externalData: proofInputs.externalData,
+        interfaceTransferAccounts: deposits.map(relayLegAccounts),
+        blindingSeed: proofInputs.blindingSeed,
+        outputTreeId: proofInputs.outputTreeId,
+        wideOwners: sealed.plan.wideOwners,
+        assets: owner.assets,
+        listSalts: relayListSalts(config, owner.listSalts ?? []),
+        coOwners: [],
+      }),
+      expected: Object.freeze({
+        kind: "sealed",
+        terms: [],
+        funders: funders.map((signer) =>
+          Object.freeze({
+            ring: owner.ringProgramId,
+            feePayer: quote.feePayer,
+            signer,
+            legs: Object.freeze(
+              legs.flatMap((leg, index) => {
+                const named = deposits[index];
+                if (!leg.isDeposit || named === undefined || signerAddress(named.funder) !== signer)
+                  return [];
+                return [
+                  leg.kind === "sol"
+                    ? { amount: leg.amount }
+                    : { mint: leg.mint, amount: leg.amount },
+                ];
+              }),
+            ),
+            setup: [],
+          }),
+        ),
+        chargedOutflows: chargedOutflowsOf(proofInputs),
+      }),
+    });
+  } finally {
+    sealed.sealed.ephemeralSecret.fill(0);
+  }
+}
+
+/** The relay wire's account group of one deposit leg, a SOL leg names its funder. */
+function relayLegAccounts(deposit: TransactDeposit): RelayLegAccounts {
+  return deposit.kind === "sol"
+    ? { kind: "sol", recipient: signerAddress(deposit.funder) }
+    : {
+        kind: "splDeposit",
+        mint: deposit.mint,
+        splTokenInterface: deposit.splTokenInterface,
+        tokenAuthority: signerAddress(deposit.funder),
+        userTokenAccount: deposit.sourceTokenAccount,
+        tokenProgram: deposit.tokenProgram,
+      };
 }
 
 export interface PreparedRingRelay {

@@ -54,7 +54,9 @@ import { RingError } from "../error.js";
 export type RelayRail =
   | Readonly<{ kind: "anonymous"; plan: AnonymousPlan; exitTokenOwner?: Address }>
   | Readonly<{ kind: "confidential" }>
-  | Readonly<{ kind: "delegate"; delegate: Address; plan?: AnonymousPlan }>;
+  | Readonly<{ kind: "delegate"; delegate: Address; plan?: AnonymousPlan }>
+  /** Spends no note, `plan` exactly on an anonymous ring. */
+  | Readonly<{ kind: "deposit"; plan?: AnonymousPlan }>;
 
 /** One interface transfer's accounts, Rust `TransactInterfaceTransferAccounts`, a SOL deposit's `recipient` is its funder. */
 export type RelayLegAccounts =
@@ -163,6 +165,13 @@ export interface RelayMergeInputs {
   /** One per input. */
   readonly leafIndexes: readonly bigint[];
   readonly assets: AssetRegistry;
+}
+
+const DEPOSIT_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-deposit");
+
+/** Rust `ProofInputBytes::deposit_request_digest`, the funder signs it over a deposit rail's bytes. */
+export function depositRequestDigest(encoded: Uint8Array): Bytes32 {
+  return sha256(concatBytes(DEPOSIT_REQUEST_DOMAIN, encoded)) as Bytes32;
 }
 
 const MERGE_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-merge");
@@ -289,6 +298,9 @@ function writeRail(writer: Writer, rail: RelayRail): void {
     case "delegate":
       writer.u8(2, "rail").bytes(addressBytes(rail.delegate), 32, "delegate");
       writer.option(rail.plan, writePlan);
+      return;
+    case "deposit":
+      writer.u8(3, "rail").option(rail.plan, writePlan);
       return;
   }
 }
@@ -539,6 +551,10 @@ function readRail(reader: WireReader): RelayRail {
       const delegate = reader.address("delegate");
       const plan = reader.option("plan", () => readPlan(reader));
       return Object.freeze({ kind: "delegate", delegate, ...(plan === undefined ? {} : { plan }) });
+    }
+    case 3: {
+      const plan = reader.option("plan", () => readPlan(reader));
+      return Object.freeze({ kind: "deposit", ...(plan === undefined ? {} : { plan }) });
     }
     default:
       throw refused("rail", tag);

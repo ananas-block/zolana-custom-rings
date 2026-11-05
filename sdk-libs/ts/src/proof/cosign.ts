@@ -55,7 +55,6 @@ export interface RingCoSignerAccounts {
 }
 
 export const NO_DEMAND: CoSignDemand = Object.freeze({ classes: 0 });
-export const DEPOSIT_DEMAND: CoSignDemand = Object.freeze({ classes: RING_COSIGN_DEPOSITS });
 
 /** Rust `ApprovalMask::classes`. */
 export function approvalClasses(approval: number): number {

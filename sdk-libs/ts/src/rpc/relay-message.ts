@@ -29,7 +29,6 @@ import type {
   Bytes32,
   RequestContext,
   InterfaceTransfer,
-  RingAssetDeposit,
   Signature,
 } from "@heliuslabs/zolana/interface";
 import { confidentialSlotTag } from "../crypto/derivation/ring-stream.js";
@@ -73,11 +72,6 @@ import type {
   PrepareAuthorityTransferRequest,
   RelayQuote,
 } from "../protocol/ring-rpc/ring-rpc-types.js";
-import {
-  AUDITED_DEPOSIT_PREFIX_LENGTH,
-  ringDepositSpp,
-  type RingDepositSpp,
-} from "../protocol/transaction/deposit-instruction.js";
 import { RingInstructionTag } from "../protocol/transaction/instruction-tag.js";
 import {
   isAnonymousFrame,
@@ -129,17 +123,6 @@ export type RelayMessageMismatch =
   | "SpendsUnrequestedNote"
   | "Unrequested"
   | "Signer";
-
-/** Rust `ExpectedDeposit`, built from the depositor's own request. */
-export interface ExpectedDeposit {
-  readonly kind: "deposit";
-  readonly ring: Address;
-  readonly policy: Address;
-  readonly feePayer: Address;
-  readonly depositor: Address;
-  /** The SPP deposit the ring forwards unchanged. */
-  readonly spp: RingDepositSpp;
-}
 
 export type DelegateRingConfig = Pick<RingPolicy, "mode" | "auditorPublicKey">;
 
@@ -362,7 +345,6 @@ export interface ExpectedEnroll {
 }
 
 export type ExpectedRelayMessage =
-  | ExpectedDeposit
   | ExpectedDelegate
   | ExpectedSealed
   | ExpectedPublicOwner
@@ -400,34 +382,6 @@ export class VerifiedRelayMessage {
     if (signature === undefined) throw mismatch("Signer");
     return base58.decode(signature) as Signature;
   }
-}
-
-export async function expectedDeposit(
-  input: Readonly<{
-    ringProgramId: Address;
-    feePayer: Address;
-    tree: Address;
-    depositor: Address;
-    deposit: RingAssetDeposit;
-  }>,
-): Promise<ExpectedDeposit> {
-  const [policy, spp] = await Promise.all([
-    ringPolicyAddress(input.ringProgramId),
-    ringDepositSpp({
-      ringProgramId: input.ringProgramId,
-      tree: input.tree,
-      depositor: input.depositor,
-      deposits: [input.deposit],
-    }),
-  ]);
-  return Object.freeze({
-    kind: "deposit",
-    ring: input.ringProgramId,
-    policy,
-    feePayer: input.feePayer,
-    depositor: input.depositor,
-    spp,
-  });
 }
 
 /** Rust `RequestedAuthorityTransfer`, the delegate's ask and the notes its own openings allow. */
@@ -782,50 +736,12 @@ export function checkRelayMessage(
   signer: Address,
 ): VerifiedRelayMessage {
   const snapshot = message.slice();
-  if (expected.kind === "deposit") return checkDepositSnapshot(expected, snapshot);
   if (expected.kind === "enroll") return checkEnrollSnapshot(expected, snapshot);
   if (expected.kind === "sealed") throw mismatch("Unrequested");
   const envelope = frameEnvelope(expected, signer, frameTag(expected));
   const { data, accounts } = open(envelope, snapshot);
   checkFrame(expected, signer, data, accounts);
   return new VerifiedRelayMessage(VERIFIED, envelope.signer, snapshot);
-}
-
-/** Rust `ExpectedDeposit::check`, every SPP byte and account is the depositor's. */
-export function checkDepositMessage(
-  expected: ExpectedDeposit,
-  message: Uint8Array,
-): VerifiedRelayMessage {
-  return checkDepositSnapshot(expected, message.slice());
-}
-
-function checkDepositSnapshot(
-  expected: ExpectedDeposit,
-  message: Uint8Array,
-): VerifiedRelayMessage {
-  const envelope: Envelope = {
-    program: expected.ring,
-    policy: expected.policy,
-    units: ringComputeUnitLimit(RingInstructionTag.deposit),
-    feePayer: expected.feePayer,
-    signer: expected.depositor,
-    setup: [],
-  };
-  const instruction = open(envelope, message);
-  const { data, accounts } = instruction;
-  if (
-    data[0] !== RingInstructionTag.deposit ||
-    !equalBytes(data.subarray(AUDITED_DEPOSIT_PREFIX_LENGTH), expected.spp.data)
-  )
-    throw mismatch("Data");
-  const split = accounts.length - expected.spp.accounts.length;
-  if (
-    split < 0 ||
-    !sameAccounts(accounts.slice(split), expected.spp.accounts) ||
-    !readsOnly(envelope, accounts.slice(0, split), accounts.slice(split))
-  )
-    throw mismatch("Accounts");
-  return new VerifiedRelayMessage(VERIFIED, envelope.signer, message);
 }
 
 export async function expectedEnroll(

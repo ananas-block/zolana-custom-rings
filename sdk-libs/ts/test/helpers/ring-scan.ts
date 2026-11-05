@@ -5,47 +5,28 @@ import {
   type GetByNullifiersRequest,
   type GetByTagsRequest,
 } from "@heliuslabs/zolana/client";
-import { addressBytes, concatBytes, encodeOutputData } from "@heliuslabs/zolana/internal";
-import { InstructionTag, type Bytes32, type Bytes33 } from "@heliuslabs/zolana/interface";
-import {
-  randomSalt,
-  ShieldedKeypair,
-  SigningKey,
-  ViewingKey,
-  type ShieldedAddress,
-  type ViewTag,
-} from "@heliuslabs/zolana/keypair";
+import { InstructionTag, type Bytes32 } from "@heliuslabs/zolana/interface";
+import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
 import {
   AssetRegistry,
   ConfidentialTransfer,
   Data,
-  EncryptedScheme,
-  ownerUtxoHash,
   ProofInputUtxo,
   SOL_MINT,
   Utxo,
   type IndexedShieldedTransaction,
-  type OutputSlot,
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
 import { AnonymousPlan, RingOutputRail } from "../../src/operations/payments/output-rail.js";
 import type { ReplyMetadata } from "../../src/protocol/codec/anonymous-delivery.js";
 import {
-  encodeRingDepositCapsule,
-  RING_DEPOSIT_OPENING_LENGTH,
-} from "../../src/protocol/codec/ring-deposit-capsule.js";
-import { encodeRingDepositPlaintext } from "../../src/protocol/codec/ring-deposit-plaintext.js";
-import {
   AnonymousSync,
   type AnonymousScan,
   type AnonymousSyncClient,
 } from "../../src/state/anonymous-sync.js";
 import { ViewingHistory } from "../../src/state/viewing-history.js";
-import {
-  outputItems,
-  transactionItems,
-} from "../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
+import { transactionItems } from "../../../../zolana/sdk-libs/ts/test/helpers/pages.js";
 import { TREE, TREE_ID, randomAddress, walletKeys } from "./ring-pipeline.js";
 
 export const RING = randomAddress();
@@ -80,12 +61,9 @@ export function hex(value: Uint8Array): string {
   return Buffer.from(value).toString("hex");
 }
 
-type DepositRow = Readonly<{ slot: bigint; txSignature: Signature; outputSlot: OutputSlot }>;
-
 /** Serves the by-ring read as Photon does, ordered by `(slot, signature)`, `limit` counting transactions. */
 export class ScanIndexer {
   readonly transactions: IndexedShieldedTransaction[] = [];
-  readonly deposits: DepositRow[] = [];
   readonly ringReads: GetByTagsRequest[] = [];
   /** Tags named on the by-tags read, zero for a wallet that scans. */
   transactionTagReads = 0;
@@ -107,10 +85,6 @@ export class ScanIndexer {
   }
 
   client(): AnonymousSyncClient {
-    const tagged = (request: GetByTagsRequest) => {
-      const tags = new Set(request.tags.map(hex));
-      return (slot: Readonly<{ viewTag: Bytes32 }>) => tags.has(hex(slot.viewTag));
-    };
     const context = { slot: CONTEXT_FLOOR, blockTime: 0n };
     return {
       getShieldedTransactionsByTags: async (request: GetByTagsRequest) => {
@@ -126,11 +100,7 @@ export class ScanIndexer {
           });
         return this.#ringPage(request);
       },
-      getEncryptedUtxosByTags: async (request: GetByTagsRequest) => ({
-        context,
-        paginationToken: null,
-        data: outputItems(this.deposits.filter((deposit) => tagged(request)(deposit.outputSlot))),
-      }),
+      getEncryptedUtxosByTags: async () => ({ context, paginationToken: null, data: [] }),
       getShieldedTransactionsByNullifiers: async (request: GetByNullifiersRequest) => {
         const wanted = new Set(request.nullifiers.map(hex));
         return {
@@ -342,80 +312,4 @@ export function output(tx: IndexedShieldedTransaction, position: number): Bytes3
 
 export function found(scan: Pick<AnonymousScan, "found">): readonly string[] {
   return scan.found.map((utxo) => hex(utxo.utxoHash));
-}
-
-/** `ownerUtxoHash ‖ asset ‖ u64le(amount) ‖ no data hash ‖ ring ‖ ring data hash ‖ envelope`. */
-export function depositRow(
-  owner: ShieldedAddress,
-  tag: ViewTag,
-  capsule: boolean,
-  blinding: Bytes32,
-): DepositRow {
-  const envelope = ViewingKey.generate();
-  const salt = randomSalt();
-  const recipientCiphertext = envelope.encryptRingDeposit(
-    owner.viewingPublicKey,
-    encodeRingDepositPlaintext({ blinding, ringData: new Uint8Array() }),
-    salt,
-  );
-  const ciphertext = capsule
-    ? encodeRingDepositCapsule({
-        slotIndex: 0,
-        ephemeralPublicKey: new Uint8Array(33).fill(2) as Bytes33,
-        ciphertext: new Uint8Array(RING_DEPOSIT_OPENING_LENGTH),
-        recipientCiphertext,
-      })
-    : new TextEncoder().encode("NOTACAPS");
-  const amount = new Uint8Array(8);
-  new DataView(amount.buffer).setBigUint64(0, 25n, true);
-  const length = new Uint8Array(4);
-  new DataView(length.buffer).setUint32(0, ciphertext.length, true);
-  const body = concatBytes(
-    ownerUtxoHash(owner.ownerHash(), blinding),
-    new Uint8Array(32),
-    amount,
-    Uint8Array.of(0),
-    addressBytes(RING),
-    new Uint8Array(32),
-    envelope.publicKey().toBytes(),
-    salt,
-    length,
-    ciphertext,
-  );
-  envelope.destroy();
-  const hash = new Utxo({
-    owner: owner.signingPublicKey,
-    asset: SOL_MINT,
-    amount: 25n,
-    blinding,
-    ringProgramId: RING,
-  }).hash(owner.nullifierPublicKey, TREE_ID);
-  return {
-    slot: 1n,
-    txSignature: getBase58Decoder().decode(new Uint8Array(64).fill(blinding[31] ?? 0)) as Signature,
-    outputSlot: {
-      viewTag: tag,
-      outputContext: {
-        hash,
-        tree: TREE,
-        treeId: TREE_ID,
-        leafIndex: 500n + BigInt(blinding[31] ?? 0),
-      },
-      payload: encodeOutputData(EncryptedScheme.ringDeposit, body),
-    },
-  };
-}
-
-/** One proofless row of a by-ring page, as a deposit lands. */
-export function depositTransaction(row: DepositRow, slot: bigint): IndexedShieldedTransaction {
-  return {
-    slot,
-    txSignature: row.txSignature,
-    eventIndex: 0,
-    outputSlots: [row.outputSlot],
-    messages: [],
-    nullifiers: [],
-    proofless: true,
-    ringProgramId: RING,
-  };
 }

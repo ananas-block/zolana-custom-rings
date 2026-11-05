@@ -1,22 +1,18 @@
 import { DisclosureFormat } from "../../../src/protocol/codec/ring-disclosure-layout.js";
-import { getBase58Decoder, type Address, type Signature } from "@solana/kit";
+import { getBase58Decoder, type Signature } from "@solana/kit";
 import { hexToBytes } from "@noble/hashes/utils.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import auditVector from "../../../../../test-vectors/audit/audit-stream.json" with { type: "json" };
-import depositVector from "../../../../../test-vectors/deposit/deposit.json" with { type: "json" };
 import mergeVector from "../../../../../test-vectors/merge/merge.json" with { type: "json" };
 import { initializePoseidon, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana";
 import {
-  EncryptedScheme,
   Writer,
   ZERO_32,
   ZERO_NULLIFIER_PK,
   addressBytes,
   encodeBase58,
   encodeMergeOutputData,
-  encodeOutputData,
-  encodeRingDepositInstructionData,
   equalBytes,
   hashBytes,
   poseidon,
@@ -27,7 +23,7 @@ import {
 import { InstructionTag } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { ViewingKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { ownerUtxoHash, type IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
 
 import { readFileSync } from "node:fs";
 
@@ -53,33 +49,21 @@ import {
   type TransactionAuditInput,
 } from "../../../src/operations/audit/audit.js";
 import {
-  createdDepositUtxo,
-  openConfirmedDeposit,
-} from "../../../src/operations/workflow/created-utxos.js";
-import {
   decodeAuditEnvelope,
   decodeAuditRecord,
   decodeCompactAuditRecord,
   RecordKind,
 } from "../../../src/protocol/codec/audit-stream.js";
-import { encodeRingDepositCapsule } from "../../../src/protocol/codec/deposit-capsule.js";
-import {
-  decodeRingDepositOutput,
-  type RingDepositOutput,
-} from "../../../src/protocol/codec/ring-deposit-plaintext.js";
 import {
   recordRegion,
   type AuditStreamLayout,
 } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
-  ConfirmedDeposit,
   RpcTransactionOrigin,
   ringWithdrawalsOf,
 } from "../../../src/protocol/transaction/origin.js";
 import { encodeRingTransactInstructionData } from "../../../src/protocol/proof/circuit.js";
-import { AUDITED_DEPOSIT_PREFIX_LENGTH } from "../../../src/protocol/transaction/deposit-instruction.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
-import { readRingOutput } from "../../../src/protocol/transaction/output.js";
 
 const hex = (value: string): Uint8Array => hexToBytes(value.replace(/^0x/u, ""));
 const field = (value: string): Bytes32 => hex(value) as Bytes32;
@@ -479,158 +463,6 @@ describe("the merge reader", () => {
       classifyMergeNullifier({ seed, firstNullifier, nullifier: SECOND_NULLIFIER, position: 2 })
         .kind,
     ).toBe("unresolvedReal");
-  });
-});
-
-describe("the deposit reader", () => {
-  const deposit = depositVector.cases[0];
-  if (deposit === undefined) throw new Error("deposit vector");
-
-  function confirmedOver(
-    tag: number,
-    prefix: number,
-    capsule: Uint8Array,
-    owner: Bytes32,
-    ephemeral: Bytes33,
-  ): readonly ConfirmedDeposit[] {
-    const wire = Uint8Array.of(
-      InstructionTag.ringDeposit,
-      ...encodeRingDepositInstructionData({
-        assets: [{ kind: "sol" }],
-        deposits: [
-          {
-            assetIndex: 0,
-            viewTag: new Uint8Array(32) as Bytes32,
-            ownerUtxoHash: owner,
-            amount: 100n,
-            ringDataHash: ZERO_32,
-            encrypted: {
-              txViewingPublicKey: ephemeral,
-              salt: new Uint8Array(16) as Bytes16,
-              ciphertext: capsule,
-            },
-          },
-        ],
-      }),
-    );
-    const encode = getBase58Decoder();
-    const wrapper = Uint8Array.of(tag, ...new Uint8Array(prefix - 1), ...wire);
-    return ConfirmedDeposit.fromTransaction(
-      {
-        transaction: {
-          signatures: [SIGNATURE],
-          message: {
-            accountKeys: [ring, SHIELDED_POOL_PROGRAM_ID],
-            instructions: [{ programIdIndex: 0, accounts: [], data: encode.decode(wrapper) }],
-          },
-        },
-        meta: {
-          err: null,
-          innerInstructions: [
-            {
-              index: 0,
-              instructions: [
-                { programIdIndex: 1, accounts: [], data: encode.decode(wire), stackHeight: 2 },
-                {
-                  programIdIndex: 1,
-                  accounts: [],
-                  data: encode.decode(Uint8Array.of(InstructionTag.emitEvent, 0)),
-                  stackHeight: 3,
-                },
-              ],
-            },
-          ],
-        },
-      },
-      SIGNATURE,
-      0,
-      ring as Address,
-    );
-  }
-
-  const output = (
-    capsule: Uint8Array,
-    owner: Bytes32,
-    asset: Address,
-    amount: bigint,
-  ): RingDepositOutput => {
-    const body = new Writer()
-      .bytes(owner)
-      .bytes(addressBytes(asset))
-      .u64(amount, "amount")
-      .u8(0, "dataHash")
-      .bytes(addressBytes(ring))
-      .bytes(ZERO_32)
-      .bytes(hex(deposit.eph_pk))
-      .bytes(new Uint8Array(16))
-      .u32(capsule.length, "ciphertext.length")
-      .bytes(capsule)
-      .finish();
-    return decodeRingDepositOutput(
-      readRingOutput(encodeOutputData(EncryptedScheme.ringDeposit, body, "encrypted")).body,
-    );
-  };
-
-  it("opens a tag 58 record, its secret the blinding, against the owner hash and commitment", () => {
-    const owner = field(deposit.owner_utxo_hashes[0] as string);
-    const record = hex(deposit.records[0] as string);
-    const mint = encodeBase58(record.subarray(41, 73));
-    const capsule = encodeRingDepositCapsule({
-      slotIndex: 0,
-      ephemeralPublicKey: hex(deposit.eph_pk) as Bytes33,
-      ciphertext: hex(deposit.ciphertexts[0] as string),
-      recipientCiphertext: new Uint8Array(3),
-    });
-    const [binding] = confirmedOver(
-      RingInstructionTag.deposit,
-      AUDITED_DEPOSIT_PREFIX_LENGTH,
-      capsule,
-      owner,
-      hex(deposit.eph_pk) as Bytes33,
-    );
-    if (binding === undefined) throw new Error("binding");
-    const published = output(capsule, owner, mint, BigInt(deposit.amounts[0] as number));
-    const opening = openConfirmedDeposit({ output: published, auditor: auditor(), binding });
-    expect(opening.blinding).toEqual(record.slice(112));
-    expect(ownerUtxoHash(opening.ownerHash, opening.blinding)).toEqual(owner);
-    const expected = knownUtxoHash(
-      {
-        ownerKey: opening.ownerKey,
-        owner: { kind: "keyed", nullifierPk: opening.record.nullifierPk },
-        asset: hashBytes(addressBytes(mint)) as Bytes32,
-        amount: published.amount,
-        blinding: opening.blinding,
-        dataHash: ZERO_32,
-        ringDataHash: ZERO_32,
-        treeId: TREE_ID,
-      },
-      ringIdField(ring),
-    );
-    const created = createdDepositUtxo({
-      ringProgramId: ring,
-      slotIndex: 0,
-      slot: {
-        viewTag: new Uint8Array(32) as Bytes32,
-        payload: new Uint8Array(),
-        outputContext: {
-          hash: expected,
-          tree: treeAddress(TREE_ID),
-          treeId: TREE_ID,
-          leafIndex: 0n,
-        },
-      },
-      output: published,
-      opening,
-    });
-    expect(created.utxo.owner.kind).toBe("keyed");
-    const wrongOwner = field(`${"00".repeat(31)}01`);
-    expect(() =>
-      openConfirmedDeposit({
-        output: { ...published, ownerUtxoHash: wrongOwner },
-        auditor: auditor(),
-        binding,
-      }),
-    ).toThrow(expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }));
   });
 });
 

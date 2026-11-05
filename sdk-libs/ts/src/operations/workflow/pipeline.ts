@@ -29,6 +29,7 @@ import type {
   Address,
   Bytes32,
   RequestContext,
+  TransactDeposit,
   TransactWithdrawal,
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
@@ -164,6 +165,8 @@ export interface StagedTransfer {
   readonly sender: ShieldedAddress;
   /** SPP's owner signer run, empty on the authority rails. */
   readonly ownerSigners: readonly Address[];
+  /** One per deposit leg in leg order, each funder signs. */
+  readonly deposits?: readonly TransactDeposit[];
   readonly withdrawal?: TransactWithdrawal;
   /** Empty unless the caller sets them. */
   readonly extensions?: FrameExtensions;
@@ -180,6 +183,7 @@ export interface RingTransactAccounts {
   readonly inputTrees: readonly Address[];
   readonly outputTree: Address;
   readonly ownerSigners: readonly Address[];
+  readonly deposits?: readonly TransactDeposit[];
   readonly withdrawal?: TransactWithdrawal;
   /** Read only, right after the ring account, tracking last. */
   readonly registries: readonly Address[];
@@ -579,6 +583,7 @@ async function assembleStagedTransfer<T>(
       inputTrees: Object.freeze(proofInputs.inputTreeIds().map(treeAddress)),
       outputTree: treeAddress(proofInputs.outputTreeId),
       ownerSigners: staged.ownerSigners,
+      ...(staged.deposits === undefined ? {} : { deposits: staged.deposits }),
       ...(staged.withdrawal === undefined ? {} : { withdrawal: staged.withdrawal }),
       registries: ringRegistrySlots(config, transferRootRead(config, delegate)),
       coSigners,
@@ -760,6 +765,7 @@ export async function ringTransactInstruction(
     ...(!isDelegateRail(data.rail) && accounts.ownerSigners.length > 0
       ? { ownerSigners: accounts.ownerSigners }
       : {}),
+    ...(accounts.deposits === undefined ? {} : { deposits: accounts.deposits }),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
     ...(accounts.cache === undefined ? {} : { cache: accounts.cache }),
   });

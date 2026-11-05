@@ -580,6 +580,6 @@ describe("policy writes", () => {
   it("budgets each instruction like Rust `compute_unit_limit`", () => {
     expect(ringComputeUnitLimit(RingInstructionTag.initialize)).toBe(300_000);
     expect(ringComputeUnitLimit(RingInstructionTag.updatePolicy)).toBe(150_000);
-    expect(ringComputeUnitLimit(RingInstructionTag.deposit)).toBe(1_400_000);
+    expect(ringComputeUnitLimit(RingInstructionTag.transfer)).toBe(1_400_000);
   });
 });

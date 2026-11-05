@@ -23,15 +23,12 @@ import {
   type KnownUtxo,
   type RingAuditReader,
 } from "../audit/audit.js";
-import { createdDepositUtxo, openConfirmedDeposit } from "./created-utxos.js";
-import { ringDepositOutput } from "../../proof/deposit-audit.js";
 import { RingError } from "../../protocol/error.js";
-import { rowDisposition, RowOrigins } from "../audit/row-origins.js";
+import { RowOrigins } from "../audit/row-origins.js";
 import { readRingPages, scanLimits } from "../../rpc/history.js";
 import type { SkippedRingTransaction } from "../../rpc/ring-rpc.js";
 import {
   RpcTransactionOrigin,
-  type ConfirmedDeposit,
   type ConfirmedRingTransaction,
   type TransactionOrigin,
 } from "../../protocol/transaction/origin.js";
@@ -98,8 +95,6 @@ export interface RecoveredRingNotes {
   readonly notes: readonly WalletUtxo[];
   /** Commitments that cannot yet become spendable notes, unknown mints among them. */
   readonly unopened: readonly Bytes32[];
-  /** Tagged deposits whose ownership and spentness are unknown. */
-  readonly unsupportedDeposits: readonly Bytes32[];
   /** Verified mints missing from the asset registry, their notes stay in `unopened`. */
   readonly unknownMints: readonly Address[];
   /** First unmatched nullifiers, limited by `RECOVERY_INPUT_SAMPLE_LIMIT`. */
@@ -152,7 +147,6 @@ export async function recoverRingMemberNotes(
     notes: Object.freeze({
       notes: Object.freeze([...state.candidates]),
       unopened: Object.freeze(state.unresolved.map(({ commitment }) => commitment)),
-      unsupportedDeposits: Object.freeze([...state.unsupportedDeposits]),
       unknownMints: Object.freeze([...state.unknownMints]),
       unseenInputs: Object.freeze([...state.unseenInputs]),
       unseenInputCount: state.unseenInputCount,
@@ -184,7 +178,6 @@ interface RecoveryState {
   /** Every source commitment claimed, spent ones too, a row served again adds no note. */
   readonly claimed: ReadonlySet<string>;
   readonly unknownMints: ReadonlySet<Address>;
-  readonly unsupportedDeposits: readonly Bytes32[];
   readonly unseenInputs: readonly Bytes32[];
   readonly unseenInputCount: bigint;
   /** The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends. */
@@ -196,7 +189,6 @@ const EMPTY_STATE: RecoveryState = Object.freeze({
   unresolved: Object.freeze([]),
   claimed: new Set<string>(),
   unknownMints: new Set<Address>(),
-  unsupportedDeposits: Object.freeze([]),
   unseenInputs: Object.freeze([]),
   unseenInputCount: 0n,
   openSlot: Object.freeze([]),
@@ -240,20 +232,11 @@ function applyRows(
   rows: RowOrigins,
 ): BatchNotes {
   const found = new BatchNotes(before);
-  // 1. Deposits are found by ring, never by their recipient view tags.
-  const history: ConfirmedRingTransaction[] = [];
-  const processed = new Set<string>();
-  for (const confirmed of batch) {
-    if (confirmed.kind !== "deposit") history.push(confirmed);
-    else
-      rows.attempt(confirmed.transaction, () =>
-        recoverDeposit(input, { confirmed, found, processed }),
-      );
-  }
+  // 1. Every row is a transfer or a merge, a deposit lands as a transfer output.
   const audited = auditConfirmedRingHistory({
     auditor: input.auditor,
     ringProgramId: input.ringProgramId,
-    history,
+    history: batch,
     rows,
     known: found.openings,
   });
@@ -283,14 +266,14 @@ function applyRows(
         );
   }
   // The audit opened every merge from its sealed record, a skipped one refused above.
-  for (const confirmed of history) {
+  for (const confirmed of batch) {
     const slot = confirmed.kind === "merge" ? confirmed.transaction.outputSlots[0] : undefined;
     const opening = slot === undefined ? undefined : found.openings.utxo(slot.outputContext.hash);
     if (slot !== undefined && opening !== undefined)
       keepSourceNote(input, found, opening, slot.outputContext);
   }
   // 3. A later batch never creates a note an earlier batch spends, the spent notes leave the state.
-  found.spend(history.flatMap(({ transaction }) => transaction.nullifiers));
+  found.spend(batch.flatMap(({ transaction }) => transaction.nullifiers));
   return found;
 }
 
@@ -299,7 +282,6 @@ class BatchNotes {
   readonly candidates: WalletUtxo[] = [];
   readonly unresolved: Unresolved[] = [];
   readonly unknownMints = new Set<Address>();
-  readonly unsupportedDeposits: Bytes32[] = [];
   readonly realInputs: Bytes32[] = [];
   readonly openings = new KnownUtxoIndex();
   readonly #claimed = new Set<string>();
@@ -346,7 +328,6 @@ class BatchNotes {
       unresolved: carried(before.unresolved, this.unresolved, live),
       claimed: united(before.claimed, this.#claimed),
       unknownMints: united(before.unknownMints, this.unknownMints),
-      unsupportedDeposits: carried(before.unsupportedDeposits, this.unsupportedDeposits),
       unseenInputs: carried(
         before.unseenInputs,
         unseen.slice(0, RECOVERY_INPUT_SAMPLE_LIMIT - before.unseenInputs.length),
@@ -449,83 +430,6 @@ function sourceWalletUtxo(
     utxo: walletUtxo,
     opens: equalBytes(commitment, outputContext.hash),
   });
-}
-
-/** Mirrors Rust `deposited_utxos` for one deposit row. */
-function recoverDeposit(
-  input: RingRecoveryParams,
-  row: Readonly<{
-    confirmed: Extract<ConfirmedRingTransaction, { kind: "deposit" }>;
-    found: BatchNotes;
-    processed: Set<string>;
-  }>,
-): void {
-  const { confirmed, found, processed } = row;
-  const unsupported = found.unsupportedDeposits;
-  for (const [slotIndex, slot] of confirmed.transaction.outputSlots.entries()) {
-    const deposit = ringDepositOutput(slot.payload, input.ringProgramId);
-    const commitment = slot.outputContext.hash;
-    const key = bytesKey(commitment);
-    if (deposit === undefined || processed.has(key) || found.seen(commitment)) continue;
-    processed.add(key);
-    const binding = confirmed.deposits.find(
-      (candidate: ConfirmedDeposit) => candidate.slotIndex === slotIndex,
-    );
-    if (binding === undefined) {
-      unsupported.push(commitment);
-      continue;
-    }
-    let opening;
-    try {
-      opening = openConfirmedDeposit({ output: deposit, auditor: input.auditor, binding });
-    } catch (error) {
-      if (rowDisposition(error) === "retry") throw error;
-      unsupported.push(commitment);
-      continue;
-    }
-    try {
-      const created = createdDepositUtxo({
-        ringProgramId: input.ringProgramId,
-        slotIndex,
-        slot,
-        output: deposit,
-        opening,
-      });
-      found.openings.insert(commitment, created.utxo);
-      const nullifierPk = sourceNullifierPk(input.source, opening.ownerHash);
-      if (nullifierPk === undefined) continue;
-      // The deposit proof binds the raw mint, its commitment opens without the registry.
-      const opened = sourceWalletUtxo(input, {
-        utxo: new Utxo({
-          owner: input.source.signingPublicKey,
-          asset: deposit.asset,
-          amount: deposit.amount,
-          blinding: opening.blinding,
-          ringProgramId: input.ringProgramId,
-        }),
-        nullifierPk,
-        outputContext: slot.outputContext,
-        hashes: {
-          ...(deposit.dataHash === undefined ? {} : { dataHash: deposit.dataHash }),
-          ringDataHash: deposit.ringDataHash,
-        },
-      });
-      if (!opened.opens)
-        throw new RingError("RING_AUDIT_MESSAGE", {
-          details: { reason: "deposit opening" },
-        });
-      found.claim(commitment);
-      if (registeredMint(input.assets, deposit.asset) !== undefined)
-        found.candidates.push(opened.utxo);
-      else {
-        found.unknownMints.add(deposit.asset);
-        found.unresolve(commitment, opened.utxo.nullifier);
-      }
-    } finally {
-      opening.ownerHash.fill(0);
-      opening.blinding.fill(0);
-    }
-  }
 }
 
 /** Every transaction spending one of `nullifiers`, `budget` bounds the queries. */

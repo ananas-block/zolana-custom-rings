@@ -225,26 +225,6 @@ export function transferKeys(): readonly TransferKeyCircuit[] {
   return TRANSFER_SHAPES.map(shapeCircuit);
 }
 
-/** Rust `MAX_DEPOSIT_ASSETS`. */
-const MAX_DEPOSIT_ASSETS = 5;
-const DEPOSIT_CAPACITIES: readonly number[] = Object.freeze([1, 2, 4, 8]);
-
-/** One record per recipient and asset, and per salted key on the widest key, Rust `DepositSubjects::pool_width`. */
-export function depositPoolWidth(capacity: number): number {
-  const salted = capacity === DEPOSIT_CAPACITIES.at(-1) ? capacity : 0;
-  return capacity + Math.min(capacity, MAX_DEPOSIT_ASSETS) + salted;
-}
-
-/** The narrowest key holding the deposit, Rust `DepositSubjects::key_capacity`. */
-export function depositKeyCapacity(
-  subjects: Readonly<{ slots: number; recipients: number; assets: number; saltedKeys: number }>,
-): number | undefined {
-  const records = subjects.recipients + subjects.assets + subjects.saltedKeys;
-  return DEPOSIT_CAPACITIES.find(
-    (capacity) => subjects.slots <= capacity && records <= depositPoolWidth(capacity),
-  );
-}
-
 /** Rust `SPP_ADDRESSES`, the addresses SPP takes beside its nullifier PDAs. */
 const SPP_ADDRESSES = 4;
 /** Rust `RING_ADDRESSES`, ring program, policy, config, own, curator and tracking registries. */

@@ -95,24 +95,18 @@ async function depositor(ring: AnonymousRing): Promise<Member> {
     client: ring.client,
     ringProgramId: ring.ringProgramId,
     feePayer: ring.funder.address,
-    recipient: { kind: "anonymous", keys: sender.keys, history: sender.history },
+    recipient: {
+      kind: "anonymous",
+      keys: sender.keys,
+      listSalt: new Uint8Array(32).fill(1) as Bytes32,
+    },
     amount: DEPOSIT,
   });
-  try {
-    sender.history = returnedHistory(prepared.viewingHistory);
-    const { instruction } = await prepared.prove(ring.client);
-    await sendInstruction(ring.client, instruction, ring.funder, RING_DEPOSIT_COMPUTE_UNIT_LIMIT);
-  } finally {
-    prepared.destroy();
-  }
+  const { instruction } = await prepared.prove(ring.client);
+  await sendInstruction(ring.client, instruction, ring.funder, RING_DEPOSIT_COMPUTE_UNIT_LIMIT);
   await syncRing(ring, sender);
   expect(ringHoldings(sender, ring.ringProgramId)).toBe(DEPOSIT);
   return sender;
-}
-
-function returnedHistory(history: ViewingHistory | undefined): ViewingHistory {
-  if (history === undefined) throw new Error("anonymous submission returned no viewing history");
-  return history;
 }
 
 function spendRequest(ring: AnonymousRing, sender: Member, to: RingAddress) {

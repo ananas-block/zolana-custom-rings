@@ -21,7 +21,6 @@ export type RingKeyCircuit =
   | Readonly<{ family: "applyRecords"; writes: number; private: boolean }>
   | Readonly<{ family: "applyEnrollments"; writes: number }>
   | Readonly<{ family: "registerKey" }>
-  | Readonly<{ family: "deposit"; capacity: number }>
   | Readonly<{ family: "merge" }>;
 
 /** Go `registry.ApplyWidths`. */
@@ -60,9 +59,6 @@ export const RING_KEYS: readonly Readonly<{
           ] as const,
       ),
       [{ family: "registerKey" }, "custom-ring-register-key"],
-      ...[1, 2, 4, 8].map(
-        (capacity) => [{ family: "deposit", capacity }, `custom-ring-deposit-${capacity}`] as const,
-      ),
       [{ family: "merge" }, "custom-ring-merge"],
     ] as const
   ).map(([circuit, name]) =>
