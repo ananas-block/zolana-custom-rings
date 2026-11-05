@@ -489,7 +489,7 @@ impl<'a> RingSubmission<'a> {
         Ok(Attempt { proved, sent: None })
     }
 
-    /// `None` continues the loop, a stale failure below the attempt limit released to a new proof.
+    /// `None` continues the loop and releases a stale failure below the attempt limit to a new proof.
     fn settle(&mut self, signature: Signature, outcome: Outcome) -> Option<SubmissionStatus> {
         let settled = match outcome {
             Outcome::Unknown => return Some(SubmissionStatus::Pending { signature }),

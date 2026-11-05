@@ -369,7 +369,6 @@ impl ExpectedMessage {
     }
 }
 
-/// A transfer frame a named signer reads from the message it signs.
 trait ExpectedFrame {
     const TAG: InstructionTag;
 

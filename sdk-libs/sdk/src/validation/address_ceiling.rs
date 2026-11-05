@@ -144,7 +144,7 @@ impl CredentialTrees {
 }
 
 impl<'a> TransactionFit<'a> {
-    /// Every operation lands as one transaction, past a ceiling it refuses before any proof.
+    /// Refuses an operation past any ceiling of one v1 transaction.
     pub fn of(
         instruction: &'a Instruction,
         signers: FitSigners<'a>,

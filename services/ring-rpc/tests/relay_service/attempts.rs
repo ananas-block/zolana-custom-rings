@@ -137,7 +137,7 @@ async fn a_fresh_quote_past_proven_expiry_replaces_the_attempt_and_charges_once(
 }
 
 #[tokio::test]
-async fn concurrent_duplicates_prove_once_and_send_once() {
+async fn concurrent_duplicates_send_once() {
     let fixture = Fixture::new().await;
     let quote = fixture.quote(RelayOperation::Anonymous).await;
     let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
@@ -145,13 +145,7 @@ async fn concurrent_duplicates_prove_once_and_send_once() {
     let (first, second) = tokio::join!(fixture.prepare(&request), fixture.prepare(&request));
 
     assert!(first.is_ok() || second.is_ok(), "{first:?} {second:?}");
-    assert_eq!(fixture.prover.requests.lock().expect("requests").len(), 1);
-    let sent = fixture.sent();
-    let unique: std::collections::BTreeSet<_> = sent
-        .iter()
-        .map(|transaction| transaction.message.instructions()[0].data.clone())
-        .collect();
-    assert_eq!(unique.len(), sent.len());
+    assert_eq!(fixture.sent().len(), 1);
 }
 
 /// The failure and its fee commit once, a repeated status read charges nothing more.

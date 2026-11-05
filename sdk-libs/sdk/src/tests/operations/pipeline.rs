@@ -2549,7 +2549,7 @@ async fn every_transfer_shape_takes_its_pinned_transaction_size() {
     assert_eq!(measured, SIZE_PINS, "measured:\n{table}");
 }
 
-/// Each confidential input class settles inline on both rails without a policy.
+/// Each confidential input class fits one transaction on both rails without a policy.
 #[tokio::test]
 async fn every_confidential_class_fits_the_signer_and_in_proof_rails_owner_paid_or_relayed() {
     let narrow = custom_ring_interface::key_catalog::TRANSFER_SHAPES

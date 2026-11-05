@@ -762,8 +762,7 @@ impl Relay {
         Ok(staged)
     }
 
-    /// Nothing is paid before its reservation commits. The fit reads the final message with its setup,
-    /// a message past one transaction refuses here ahead of any charge.
+    /// A message past one transaction with its setup refuses ahead of any charge.
     async fn reserve(&self, spend: RelaySpend<'_>) -> Result<(), RingRpcError> {
         let RelaySpend {
             proven,

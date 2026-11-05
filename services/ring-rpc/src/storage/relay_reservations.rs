@@ -91,7 +91,7 @@ pub(crate) enum Admission {
 pub(crate) struct Fund {
     pub lease: Lease,
     pub lamports: u64,
-    /// Every fee the attempt may pay. `lamports` less rent, a spend inside it leaves rent whole.
+    /// `lamports` less rent, a spend inside it leaves the rent whole.
     pub fee_allowance: u64,
     /// Rent the relay never recovers once its transaction lands.
     pub landing_rent: u64,
@@ -678,7 +678,6 @@ mod tests {
             .expect("fund")
     }
 
-    /// A funded row with an allowance of 30.
     async fn funded(store: &Store0<'_>) -> Claim {
         let claim = claim(store, 1, signer(1), 10).await;
         let funded = store

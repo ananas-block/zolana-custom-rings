@@ -331,7 +331,6 @@ impl FullLoad {
         Registry::new(&owners)
     }
 
-    /// The in-proof owner's transfer, settled from a buffer since the widest frames pass one transaction.
     fn transfer(&self) -> CustomRingTransfer<'_> {
         let utxos = (0..self.notes)
             .map(|leaf| ring_utxo(&self.sender, Mint::SOL, 100, leaf))
