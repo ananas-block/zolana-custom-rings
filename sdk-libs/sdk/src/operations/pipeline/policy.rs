@@ -2,7 +2,7 @@
 
 use custom_ring_interface::{
     cosign::ApprovalMask,
-    key_catalog::{RecordPools as PoolWidths, RingCircuit, TransferSpend},
+    key_catalog::{RecordPools as PoolWidths, RingCircuit},
     CustomRingError, PolicyWithdrawal, PublicSlots, RingRail, RootRead, TransferRoots,
 };
 use solana_address::Address;
@@ -19,8 +19,8 @@ use zolana_ring_transaction::ClassifiedInput;
 
 use super::{
     audit::is_default_ring,
+    plan::{PlannedTransfer, TransferPlanner},
     pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, PoolSubjects, RecordPlan, SourceGates},
-    transfer_key, TransferKey,
 };
 use crate::{
     limits::Outflows,
@@ -36,13 +36,12 @@ use crate::{
 };
 
 pub(super) struct PolicyInputs {
-    circuit: RingCircuit,
+    /// Read once, every later stage takes its key and stream from here.
+    pub plan: PlannedTransfer,
     widths: PoolWidths,
     /// The key's `N`, a frame on a wider key leaves the rest empty.
     slots: usize,
     pub read: RootRead,
-    /// The key opens its full owner rows.
-    pub wide_owners: bool,
     pub rows: Vec<[u8; 32]>,
     pub spl_withdrawal_owners: Vec<[u8; 32]>,
     withdrawals: Vec<PolicyWithdrawal>,
@@ -73,16 +72,12 @@ pub(super) struct PolicyInputs {
 pub(super) struct PolicyRead<'a> {
     pub token_owner_hint: Option<Address>,
     pub config: &'a CustomRingConfig,
-    pub rail: RingRail,
     pub inputs: &'a SppProofInputs,
-    /// The spent notes, every input but the compact ones.
-    pub published_inputs: usize,
-    pub spends_default_ring: bool,
-    pub n_out: u8,
     pub public: &'a PublicSlots,
     pub salts: &'a KnownSalts,
-    /// The owner sealed under the wide key.
-    pub wide_floor: bool,
+    pub planner: TransferPlanner<'a>,
+    /// The plan a relayed owner sealed under, `None` on a frame sealed after its read.
+    pub sealed: Option<PlannedTransfer>,
 }
 
 #[derive(Default)]
@@ -113,9 +108,8 @@ impl PolicyRead<'_> {
         self,
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
-        let n_out = usize::from(self.n_out);
         let policy = self.config.account();
-        let read = RootRead::transfer(policy, self.rail.is_delegate());
+        let read = RootRead::transfer(policy, self.rail().is_delegate());
         let (withdrawals, spl_withdrawal_owners) = match read {
             RootRead::None => (Vec::new(), Vec::new()),
             RootRead::Own | RootRead::Policy => {
@@ -184,30 +178,14 @@ impl PolicyRead<'_> {
             salts: self.salts,
         }
         .plan(&mut plan)?;
-        let unkeyed = || RingError::ShapeUnkeyed { rail: self.rail };
-        let spend = TransferSpend {
-            rail: self.rail,
-            inputs: self.published_inputs,
-            outputs: n_out,
-            spends_default_ring: self.spends_default_ring,
-            legs: withdrawals.len(),
-            owners: live_rows.len(),
-            pools: plan.pools(&tracked),
-            wide: false,
+        // A direct frame and a relayed one select the same key from the same read. A relayed seal
+        // carries over only where that key opens its stream, else the owner seals again.
+        let read_plan = self.planner.plan(plan.pools(&tracked))?;
+        let transfer_plan = match self.sealed {
+            Some(sealed) => sealed.rekeyed(read_plan)?,
+            None => read_plan,
         };
-        let key = transfer_key(spend).ok_or_else(unkeyed)?;
-        let key = match self.wide_floor && !key.wide {
-            true => TransferKey {
-                circuit: RingCircuit::transfer(TransferSpend {
-                    wide: true,
-                    ..spend
-                })
-                .ok_or_else(unkeyed)?,
-                wide: true,
-            },
-            false => key,
-        };
-        let circuit = key.circuit;
+        let circuit = transfer_plan.key.circuit;
         let RingCircuit::Transfer {
             outputs,
             inputs: input_slots,
@@ -241,11 +219,10 @@ impl PolicyRead<'_> {
         input_asset_entries.resize(usize::from(input_slots), PoolEntry::default());
         let (owner_entries, asset_entries) = planned.slotted(slots);
         let mut inputs = PolicyInputs {
-            circuit,
+            plan: transfer_plan,
             widths,
             slots,
             read,
-            wide_owners: key.wide,
             rows,
             spl_withdrawal_owners,
             withdrawals,
@@ -283,20 +260,12 @@ impl PolicyRead<'_> {
         Ok(inputs)
     }
 
-    /// The distinct live input owners ascending, the delegate moves a zero-key note with no row.
-    pub(super) fn owner_rows(&self) -> Result<Vec<[u8; 32]>, RingError> {
-        let delegate = self.rail.is_delegate();
-        let mut rows = self
-            .inputs
-            .input_utxos
-            .iter()
-            .filter(|input| input.is_note())
-            .filter(|input| !(delegate && input.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY))
-            .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
-            .collect::<Result<Vec<_>, RingError>>()?;
-        rows.sort_unstable();
-        rows.dedup();
-        Ok(rows)
+    fn rail(&self) -> RingRail {
+        self.planner.subjects.rail
+    }
+
+    fn owner_rows(&self) -> Result<Vec<[u8; 32]>, RingError> {
+        owner_rows(self.rail(), self.inputs)
     }
 
     fn ring_owners(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
@@ -314,7 +283,7 @@ impl PolicyRead<'_> {
             .collect()
     }
 
-    pub(super) fn output_owners(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
+    fn output_owners(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
         self.inputs
             .output_utxos
             .iter()
@@ -329,7 +298,7 @@ impl PolicyRead<'_> {
             .collect()
     }
 
-    pub(super) fn output_assets(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
+    fn output_assets(&self) -> Result<Vec<Option<[u8; 32]>>, RingError> {
         self.inputs
             .output_utxos
             .iter()
@@ -397,6 +366,24 @@ impl PolicyRead<'_> {
         }
         Ok(())
     }
+}
+
+/// The distinct live input owners ascending, the delegate moves a zero-key note with no row.
+pub(super) fn owner_rows(
+    rail: RingRail,
+    inputs: &SppProofInputs,
+) -> Result<Vec<[u8; 32]>, RingError> {
+    let delegate = rail.is_delegate();
+    let mut rows = inputs
+        .input_utxos
+        .iter()
+        .filter(|input| input.is_note())
+        .filter(|input| !(delegate && input.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY))
+        .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
+        .collect::<Result<Vec<_>, RingError>>()?;
+    rows.sort_unstable();
+    rows.dedup();
+    Ok(rows)
 }
 
 struct EntryPlan<'a> {
@@ -660,7 +647,7 @@ pub(super) struct PolicyProving<'a> {
 
 impl PolicyInputs {
     pub fn circuit(&self) -> RingCircuit {
-        self.circuit
+        self.plan.key.circuit
     }
 
     pub fn screened(&self) -> bool {
@@ -697,9 +684,9 @@ impl PolicyInputs {
 
     pub fn params(&self, proving: &PolicyProving<'_>) -> Result<PolicyParams<'_>, RingError> {
         let capacity = usize::from(
-            self.circuit
+            self.circuit()
                 .withdrawals()
-                .ok_or(RingError::UncataloguedCircuit(self.circuit))?,
+                .ok_or(RingError::UncataloguedCircuit(self.circuit()))?,
         );
         let outputs = self.slots;
         let roots = self.roots();

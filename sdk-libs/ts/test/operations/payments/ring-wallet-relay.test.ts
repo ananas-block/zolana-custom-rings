@@ -1,4 +1,9 @@
-import { generateKeyPairSigner, getBase64Decoder, type Address } from "@solana/kit";
+import {
+  generateKeyPairSigner,
+  getBase64Decoder,
+  getBase64Encoder,
+  type Address,
+} from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
 import { initializePoseidon } from "@heliuslabs/zolana";
@@ -22,6 +27,7 @@ import {
   prepareRingWithdrawalRelay,
 } from "../../../src/operations/payments/transfer.js";
 import { buildRuleTable } from "../../../src/protocol/membership/policy.js";
+import { decodeRelayProofInputs } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { CustomRingClient } from "../../../src/rpc/client.js";
 import type { PreparedRelay } from "../../../src/rpc/relay.js";
 import { RingRpc } from "../../../src/rpc/ring-rpc.js";
@@ -43,6 +49,7 @@ const base64 = getBase64Decoder();
 function walletNetwork(fixture: Fixture) {
   const methods: string[] = [];
   let relayAnswer: string | undefined;
+  let relayRefusal: number | undefined;
   const account = (address: Address): string => {
     const served = fixture.accounts.get(address);
     if (served === undefined) return "null";
@@ -69,8 +76,13 @@ function walletNetwork(fixture: Fixture) {
         : body.method === "prepareRelay"
           ? relayAnswer
           : undefined;
+    const refusal = body.method === "prepareRelay" ? relayRefusal : undefined;
     const reply =
-      result === undefined ? `"error":{"code":-32601,"message":"unserved"}` : `"result":${result}`;
+      refusal !== undefined
+        ? `"error":{"code":${refusal},"message":"refused"}`
+        : result === undefined
+          ? `"error":{"code":-32601,"message":"unserved"}`
+          : `"result":${result}`;
     return new Response(`{"jsonrpc":"2.0","id":${JSON.stringify(body.id)},${reply}}`, {
       headers: { "content-type": "application/json" },
     });
@@ -86,6 +98,11 @@ function walletNetwork(fixture: Fixture) {
   return {
     client,
     methods,
+    /** Ring RPC answers every `prepareRelay` with `code`. */
+    refuse: (code: number) => {
+      relayRefusal = code;
+    },
+    ringRpc,
     /** Every request but the chain reads, once Ring RPC accepts the relay. */
     send: async (relay: PreparedRelay) => {
       relayAnswer = JSON.stringify({ step: "submitted", relayId: relay.relayId() });
@@ -126,6 +143,52 @@ function owner(fixture: Fixture, count: number, asset: Address = SOL_MINT) {
 }
 
 describe("wallet relay", () => {
+  it("reseals under the row a Ring RPC reseal refusal names and under the public counts' row unset", async () => {
+    const fixture = await ringFixture({ table: buildRuleTable({ rules: [] }) });
+    const network = walletNetwork(fixture);
+    // Each preparation reserves its wallet's notes, so each takes its own sender.
+    const prepare = (sender: ReturnType<typeof owner>, sealRow?: "wide") =>
+      prepareRingTransferRelay({
+        client: network.client,
+        ringProgramId: fixture.ringProgramId,
+        wallet: sender.wallet,
+        keys: walletKeys(sender.keypair),
+        amount: 15n,
+        recipient: ShieldedKeypair.generate().shieldedAddress(),
+        confidential: {
+          quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+          nullifierKey: sender.keypair.nullifierKey(),
+          signer: signingKeySpendSigner(sender.signing),
+          ...(sealRow === undefined ? {} : { sealRow }),
+        },
+      });
+    const sealedWide = async (sealRow?: "wide") => {
+      const sender = owner(fixture, 2);
+      const prepared = await prepare(sender, sealRow);
+      const { intent } = prepared.relay.request;
+      if (intent.operation !== "confidential") throw new Error("a confidential relay");
+      const inputs = await decodeRelayProofInputs(
+        new Uint8Array(getBase64Encoder().encode(intent.proofInputs)),
+        sender.wallet.registry,
+      );
+      return inputs.wideOwners;
+    };
+    // Ring RPC names the row in its code.
+    network.refuse(-32212);
+    const unread = await prepare(owner(fixture, 2));
+    const refusal = await unread.relay.send(network.ringRpc).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+    expect(refusal).toMatchObject({
+      code: "RING_RPC_REFUSED",
+      details: { method: "prepareRelay", refusal: "resealWide" },
+    });
+    const named = (refusal as { details: { refusal: string } }).details.refusal;
+    expect(await sealedWide()).toBe(false);
+    expect(await sealedWide(named === "resealWide" ? "wide" : undefined)).toBe(true);
+  });
+
   it("relays a confidential policy ring transfer and SPL withdrawal with no path, opening or pool request", async () => {
     const fixture = await ringFixture({ table: buildRuleTable({ rules: [] }) });
     const network = walletNetwork(fixture);

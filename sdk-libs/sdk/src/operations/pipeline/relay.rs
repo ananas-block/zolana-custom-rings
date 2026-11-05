@@ -14,8 +14,8 @@ use zolana_ring_client::rpc::{
 use zolana_ring_transaction::{published_outputs, ClassifiedInput, RingDelivery};
 
 use super::{
-    approval_totals_of, owner::deposit_funder, Anonymous, Delegated, Owner, Rail, RingTransfer,
-    Sealed,
+    approval_totals_of, owner::deposit_funder, Anonymous, Delegated, Owner, Planned, Rail,
+    RingTransfer, Sealed,
 };
 use crate::{
     relay_message::{
@@ -109,7 +109,7 @@ impl<R: Rail> WalletRelay<'_, R> {
             .pipeline
             .approval_blinder
             .map(|blinder| {
-                let totals = approval_totals_of(inputs, sealed.key_capacity()?)?;
+                let totals = approval_totals_of(inputs, sealed.policy.plan().stream.capacity)?;
                 Ok::<_, RingError>(ApprovalOpening::of(&totals, &blinder))
             })
             .transpose()?;
@@ -176,16 +176,7 @@ impl RingTransfer<Delegated<'_>> {
     }
 }
 
-impl<P> Sealed<'_, P> {
-    /// `N` of the key the seal selected, ahead of any proof.
-    fn key_capacity(&self) -> Result<usize, RingError> {
-        let staged = &self.pipeline.staged;
-        let parts = self
-            .preview
-            .parts(&staged.proof_inputs, &staged.rail, &staged.sender)?;
-        Ok(parts.data()?.audit_stream()?.capacity)
-    }
-
+impl<P: Planned> Sealed<'_, P> {
     /// One per key funding a deposit leg, the payer and an owner of the run left out. The payer pays
     /// the message it builds, and an owner's check refuses a key named beside its run entry.
     fn funder_terms(
@@ -303,7 +294,7 @@ impl<P> Sealed<'_, P> {
             blinding_seed: inputs.blinding_seed,
             output_tree_id: inputs.output_tree_id,
             list_salts: staged.list_salts.clone(),
-            wide_owners: self.preview.wide_owners,
+            wide_owners: self.policy.plan().key.wide,
             approval_blinder: self.pipeline.approval_blinder,
         }
     }

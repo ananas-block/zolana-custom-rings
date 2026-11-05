@@ -52,6 +52,7 @@ import { carriesNoData, type AnonymousPayment, type AnonymousSpendSigner } from 
 import { fetchRingPolicy } from "../../protocol/membership/config.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import type { ProvenRingTransfer } from "../workflow/pipeline.js";
+import type { SealRow } from "../workflow/transfer-plan.js";
 import {
   CustomRingTransfer,
   type AnonymousTransfer,
@@ -83,6 +84,8 @@ export interface RingRelaySpend {
   readonly nullifierKey: NullifierKey;
   /** Must hold the sender's signing key. */
   readonly signer: AnonymousSpendSigner;
+  /** The row a Ring RPC reseal refusal names, unset seals under the public counts' row. */
+  readonly sealRow?: SealRow;
 }
 
 export interface AnonymousSpendOwner {
@@ -709,6 +712,7 @@ async function relayRingSpend<S, R extends RingRelayRail>(
       ...(plan.tokenAccountSetup === undefined
         ? {}
         : { tokenAccountSetup: plan.tokenAccountSetup }),
+      ...(spend.sealRow === undefined ? {} : { sealRow: spend.sealRow }),
     };
     const approval: RingTransferApproval = {
       transaction: {},

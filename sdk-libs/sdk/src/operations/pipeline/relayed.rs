@@ -16,7 +16,7 @@ use super::{
     owner::deposit_funder,
     public_owners::check_zero_key_inputs,
     sealed, shape_keyed, ApprovalDisclosure, CoOwner, CoOwnerKey, DeliveredRail, Rail, RailKind,
-    RingTransfer, Spend, Staged, TransferAuthority,
+    RingTransfer, SealRow, Spend, Staged, TransferAuthority,
 };
 use crate::{CustomRing, CustomRingConfig, RingError};
 
@@ -57,6 +57,7 @@ impl<'a> RingTransfer<Relayed<'a>> {
             },
             list_salts: Vec::new(),
             approval: ApprovalDisclosure::None,
+            seal_row: None,
         }
     }
 
@@ -254,7 +255,7 @@ impl Relayed<'_> {
             spend,
             presealed: Some(PresealedAudit {
                 message: auditor_message,
-                wide_owners: relayed.wide_owners,
+                row: SealRow::of(relayed.wide_owners),
             }),
             list_salts: relayed.list_salts.clone(),
         })

@@ -88,6 +88,7 @@ import {
   type StagedTransfer,
   type StagedTransferInput,
 } from "../workflow/pipeline.js";
+import type { SealRow } from "../workflow/transfer-plan.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";
 import { AnonymousPlan, RingOutputRail } from "./output-rail.js";
 import {
@@ -285,6 +286,7 @@ export class CustomRingTransfer {
         ringProgramId,
         config,
         staged: { ...staged, spend: { rail: "confidential", inProofOwner: owner } },
+        ...(input.sealRow === undefined ? {} : { sealRow: input.sealRow }),
       });
       let payload: Uint8Array | undefined;
       try {
@@ -303,7 +305,7 @@ export class CustomRingTransfer {
           interfaceTransferAccounts: staged.withdrawal === undefined ? [] : [staged.withdrawal],
           blindingSeed: proofInputs.blindingSeed,
           outputTreeId: proofInputs.outputTreeId,
-          wideOwners: sealed.wideOwners,
+          wideOwners: sealed.plan.wideOwners,
           assets: this.#input.assets,
           listSalts: relayListSalts(config, this.#input.listSalts ?? []),
           coOwners: this.#coOwners,
@@ -713,6 +715,7 @@ export class AnonymousTransfer {
         ringProgramId,
         config,
         staged: { ...staged, spend: { rail: "anonymous" } },
+        ...(input.sealRow === undefined ? {} : { sealRow: input.sealRow }),
       });
       let payload: Uint8Array | undefined;
       try {
@@ -737,7 +740,7 @@ export class AnonymousTransfer {
           interfaceTransferAccounts: staged.withdrawal === undefined ? [] : [staged.withdrawal],
           blindingSeed: proofInputs.blindingSeed,
           outputTreeId: proofInputs.outputTreeId,
-          wideOwners: sealed.wideOwners,
+          wideOwners: sealed.plan.wideOwners,
           assets: this.#owner.assets,
           listSalts: relayListSalts(config, this.#owner.listSalts ?? []),
           coOwners: this.#coOwners,
@@ -1405,7 +1408,7 @@ function stagedBlinder(blinder: Bytes32 | undefined): Readonly<{ approvalBlinder
 function sealedExpectation(
   terms: readonly RelayTransferTerms[],
   blinder: Bytes32 | undefined,
-  sealed: Pick<SealedTransfer, "proofInputs" | "layout">,
+  sealed: Pick<SealedTransfer, "proofInputs" | "plan">,
 ): ExpectedSealed {
   return Object.freeze({
     kind: "sealed",
@@ -1413,7 +1416,8 @@ function sealedExpectation(
     ...(blinder === undefined
       ? {}
       : {
-          approval: transferApprovalOf(sealed.proofInputs, sealed.layout.capacity, blinder).opening,
+          approval: transferApprovalOf(sealed.proofInputs, sealed.plan.layout.capacity, blinder)
+            .opening,
         }),
   });
 }
@@ -1532,6 +1536,8 @@ export interface RingRelayInput {
   readonly notes: readonly WalletUtxo[];
   /** Ring RPC creates each account before the withdrawal pays it. */
   readonly tokenAccountSetup?: readonly TokenAccountSetup[];
+  /** The row a Ring RPC reseal refusal names, unset seals under the public counts' row. */
+  readonly sealRow?: SealRow;
 }
 
 export interface PreparedRingRelay {

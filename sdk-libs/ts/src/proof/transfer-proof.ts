@@ -54,15 +54,25 @@ export function selectTransferKey(
   }>,
 ): TransferKeySelection {
   const { spend, addresses, ownerSigners } = input;
+  checkOwnerSignerBound(addresses, ownerSigners);
+  const fitted = fittedSpend(spend);
+  return Object.freeze({ circuit: transferKeyCircuit(fitted), wideOwners: fitted.wide });
+}
+
+/** Refuses a transaction past the account bound, the published owner signers alone take addresses. */
+export function checkOwnerSignerBound(addresses: TransferAddresses, ownerSigners: number): void {
   const capacity = ownerSignerCapacity(addresses);
   if (ownerSigners > capacity)
     throw new RingError("RING_TRANSFER_PAST_ACCOUNT_BOUND", {
       details: { ownerSigners, capacity, ...addresses },
     });
-  const fitted = fittedSpend(spend);
-  const circuit = ringTransferCircuit(fitted);
-  if (circuit === undefined) throw unkeyed(fitted);
-  return Object.freeze({ circuit, wideOwners: fitted.wide });
+}
+
+/** The key of `spend` as its wide flag stands, refused when the catalog keys none. */
+export function transferKeyCircuit(spend: TransferSpend): TransferKeyCircuit {
+  const circuit = ringTransferCircuit(spend);
+  if (circuit === undefined) throw unkeyed(spend);
+  return circuit;
 }
 
 function unkeyed(spend: TransferSpend): RingError {

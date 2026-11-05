@@ -252,6 +252,7 @@ export type {
   ReadCache,
   RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
+export type { SealRow } from "../operations/workflow/transfer-plan.js";
 export {
   OwnerApproval,
   PendingRelaySignature,

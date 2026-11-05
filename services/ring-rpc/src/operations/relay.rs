@@ -6,7 +6,7 @@ use custom_ring_interface::{
     FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{
-    close_frame_buffer, BufferedFrame, FitError, FitSigners, FitTransport, RingError,
+    close_frame_buffer, BufferedFrame, FitError, FitSigners, FitTransport, RingError, SealRow,
     TransactionFit,
 };
 use jsonrpsee::types::ErrorObjectOwned;
@@ -133,6 +133,9 @@ pub enum RelayError {
         "the relay budget is unset, the operator funds no enrollment, buffer or token account"
     )]
     BudgetUnset,
+    /// One code per row, a client reads the row from the code alone.
+    #[error("the sealed auditor stream does not open under the key the records select, seal under the {row:?} row and sign again")]
+    Reseal { row: SealRow },
 }
 
 pub enum RelayPayload {
@@ -264,6 +267,10 @@ impl RelayError {
             Self::LiveAttempt => -32208,
             Self::DepositorSignature => -32209,
             Self::BudgetUnset => -32210,
+            Self::Reseal {
+                row: SealRow::Narrow,
+            } => -32211,
+            Self::Reseal { row: SealRow::Wide } => -32212,
         }
     }
 
@@ -272,6 +279,7 @@ impl RelayError {
         match error {
             RingError::Client(error) => RingRpcError::Upstream(error),
             RingError::Indexer(refused) => RingRpcError::Refused(refused),
+            RingError::ResealRequired { row } => Self::Reseal { row }.into(),
             refused => Self::Proof(refused.to_string()).into(),
         }
     }
@@ -2204,6 +2212,18 @@ pub(crate) mod wide_frame;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reseal_refusal_names_its_row_in_its_code() {
+        let code = |row| match RelayError::proof(RingError::ResealRequired { row }) {
+            RingRpcError::Relay(refused) => ErrorObjectOwned::from(&refused).code(),
+            other => panic!("a relay refusal, not {other}"),
+        };
+        assert_eq!(code(SealRow::Narrow), -32211);
+        assert_eq!(code(SealRow::Wide), -32212);
+        let other = RelayError::proof(RingError::RelayAuditorMessage);
+        assert!(matches!(other, RingRpcError::Relay(RelayError::Proof(_))));
+    }
 
     #[test]
     fn an_in_doubt_commit_keeps_the_reservation_with_no_stored_relay() {

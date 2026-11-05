@@ -5,6 +5,7 @@ mod audit;
 mod compact;
 mod delegate;
 mod owner;
+mod plan;
 mod policy;
 mod pool_subjects;
 mod proof;
@@ -19,7 +20,7 @@ mod tests;
 
 use custom_ring_interface::{
     cosign::{ApprovalMask, CoSignDemand, CoSignOperation},
-    key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend, UnreadSubjects},
+    key_catalog::{RecordPools, RingCircuit, TransferAddresses, TransferSpend},
     AnonymousParties, CheckedAuthorization, CustomRingError, CustomRingProof, FramedSenderBundle,
     InputTrees, InstructionTag, LiveSlot, ParsedTransact, PlainGroth16Proof, PolicyProof,
     PublicLeg, PublicSlots, RingPolicy, RingRail, RootRead, Settlement, SignerDataCounts,
@@ -57,6 +58,7 @@ pub use self::{
         DelegateTransferInput, DelegateWithdrawal, Delegated,
     },
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
+    plan::SealRow,
     public_owners::{PublicOwnerTransfer, PublicOwners},
     relayed::{Relayed, RelayedTransfer, RelayedTransferInput},
 };
@@ -74,7 +76,8 @@ use self::{
         OwnedAppMessage, OwnedExtensions, OwnedInProofOwner, OwnedOutput, OwnedSenderBundle,
         TransactAccounts, TransactParts,
     },
-    policy::{PolicyInputs, PolicyRead},
+    plan::{FrameSettlement, PlannedTransfer, TransferPlanner},
+    policy::{owner_rows, PolicyInputs, PolicyRead},
     spp::{Spp, SppRail, SppWitness},
 };
 use crate::client::{RingClient, RingIndexerBackend};
@@ -122,6 +125,8 @@ pub struct RingTransfer<R: Rail> {
     buffered: bool,
     list_salts: Vec<SubjectListSalt>,
     approval: ApprovalDisclosure,
+    /// `None` seals ahead of the relay's reads under the row the public counts select.
+    seal_row: Option<SealRow>,
 }
 
 /// A frame that discloses its totals carries a digest a named co-signer opens.
@@ -310,6 +315,13 @@ impl<R: Rail> RingTransfer<R> {
         self
     }
 
+    /// The row a relay's `ResealRequired` names, the owner then signs the new seal.
+    #[must_use = "use the updated transfer"]
+    pub const fn with_seal_row(mut self, row: SealRow) -> Self {
+        self.seal_row = Some(row);
+        self
+    }
+
     pub async fn prove<P: AsyncRpc, I: RingIndexerBackend>(
         &self,
         client: &RingClient<P, I>,
@@ -344,7 +356,7 @@ impl<R: Rail> RingTransfer<R> {
     ) -> Result<Unwitnessed<'_>, RingError> {
         let prepared = boxed(|| self.prepare(client.zolana())).await?;
         let policy = boxed(|| prepared.read_policy(client.zolana())).await?;
-        let sealed = prepared.seal(policy.wide_owners, policy)?;
+        let sealed = prepared.seal(policy)?;
         boxed(|| sealed.frame(client)).await
     }
 
@@ -352,10 +364,17 @@ impl<R: Rail> RingTransfer<R> {
     async fn seal_unread<C: AsyncRpc + ?Sized>(
         &self,
         client: &C,
-    ) -> Result<Sealed<'_, ()>, RingError> {
+    ) -> Result<Sealed<'_, PlannedTransfer>, RingError> {
         let prepared = boxed(|| self.prepare(client)).await?;
-        let wide = prepared.sealing_wide()?;
-        prepared.seal(wide, ())
+        let planner = prepared.planner()?;
+        // A direct submission reads before it plans. The relay reads after the seal and keeps
+        // it only where the read's key opens the same stream, so the seal takes the key the
+        // public counts select and a later read never widens it in silence.
+        let plan = match self.seal_row {
+            Some(row) => planner.plan_at(row)?,
+            None => planner.plan(RecordPools::default())?,
+        };
+        prepared.seal(plan)
     }
 
     async fn prepare<C: AsyncRpc + ?Sized>(&self, client: &C) -> Result<Prepared<'_>, RingError> {
@@ -431,7 +450,6 @@ struct Unwitnessed<'a> {
     spend: Spend<'a>,
     trees: SpendTrees,
     priority_fee: Option<u64>,
-    buffered: bool,
 }
 
 /// A transfer whose external data is final.
@@ -444,7 +462,23 @@ struct Sealed<'a, P = PolicyInputs> {
     policy: P,
 }
 
-/// Staged and checked, the key it selects decides every stream counter.
+trait Planned {
+    fn plan(&self) -> PlannedTransfer;
+}
+
+impl Planned for PlannedTransfer {
+    fn plan(&self) -> PlannedTransfer {
+        *self
+    }
+}
+
+impl Planned for PolicyInputs {
+    fn plan(&self) -> PlannedTransfer {
+        self.plan
+    }
+}
+
+/// Staged and checked, the key it plans decides every stream counter.
 struct Prepared<'a> {
     pipeline: Pipeline<'a>,
     trees: SpendTrees,
@@ -463,21 +497,22 @@ struct Preview {
     expiry_unix_ts: u32,
     /// Past the sender bundle and ahead of the auditor's message.
     app_messages: Vec<OwnedAppMessage>,
-    /// The key the spend selects fixes every stream counter.
-    wide_owners: bool,
     discloses_approval: bool,
     signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl Preview {
+    /// `key` sets the header's wide flag, every stream counter follows it.
     fn parts(
         &self,
         inputs: &SppProofInputs,
         rail: &RingOutputRail,
         sender: &ShieldedAddress,
+        key: TransferKey,
     ) -> Result<TransactParts, RingError> {
         Ok(preview_parts(PreviewParts {
             preview: self,
+            wide_owners: key.wide,
             inputs,
             published: &rail.published_slots(inputs, sender)?,
             sender_bundle: rail.published_sender(inputs, &sender.viewing_pubkey)?,
@@ -572,7 +607,6 @@ impl<'a> Pipeline<'a> {
                     data: message.data.clone(),
                 })
                 .collect(),
-            wide_owners: false,
             discloses_approval: self.approval_blinder.is_some(),
             signer_data_counts: signer_data_counts(&owner_signers, &proof_inputs.output_utxos)?,
         };
@@ -610,111 +644,80 @@ impl<'a> Prepared<'a> {
         client: &R,
     ) -> Result<PolicyInputs, RingError> {
         let staged = &self.pipeline.staged;
-        let public = public_slots(&staged.proof_inputs.external_data.interface_transfers)?;
-        let salts = KnownSalts::new(staged.list_salts.clone());
-        self.policy_read(&public, &salts).read(client).await
-    }
-
-    fn policy_read<'r>(&'r self, public: &'r PublicSlots, salts: &'r KnownSalts) -> PolicyRead<'r> {
-        let staged = &self.pipeline.staged;
         let proof_inputs = &staged.proof_inputs;
+        let public = public_slots(&proof_inputs.external_data.interface_transfers)?;
+        let salts = KnownSalts::new(staged.list_salts.clone());
+        let planner = self.planner()?;
+        // A relayed frame arrives sealed, the row its owner sealed under decides which reads keep it.
+        let sealed = staged
+            .presealed
+            .as_ref()
+            .map(|presealed| planner.plan_at(presealed.row))
+            .transpose()?;
         PolicyRead {
             token_owner_hint: match &staged.spend {
                 Spend::Anonymous(a) => a.token_owner,
                 _ => None,
             },
             config: &self.pipeline.config,
-            rail: self.preview.rail,
             inputs: proof_inputs,
-            published_inputs: self.published_inputs,
-            spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
-            n_out: self.preview.n_out,
-            public,
-            salts,
-            wide_floor: staged
-                .presealed
-                .as_ref()
-                .is_some_and(|presealed| presealed.wide_owners),
+            public: &public,
+            salts: &salts,
+            planner,
+            sealed,
         }
+        .read(client)
+        .await
     }
 
-    /// The flag of a seal ahead of every record read, `TransferSpend::sealed_wide` weighs what stays unknown.
-    fn sealing_wide(&self) -> Result<bool, RingError> {
-        let proof_inputs = &self.pipeline.staged.proof_inputs;
-        let transfers = &proof_inputs.external_data.interface_transfers;
-        let public = public_slots(transfers)?;
-        let salts = KnownSalts::default();
-        let read = self.policy_read(&public, &salts);
-        let policy = self.pipeline.config.account();
-        let root_read = RootRead::transfer(policy, read.rail.is_delegate());
-        // 1. The program names the key from the legs its read screens, a ring reading no root
-        // screens none and a deposit never counts, so the wallet counts the same legs.
-        let legs = match root_read {
+    fn planner(&self) -> Result<TransferPlanner<'_>, RingError> {
+        let staged = &self.pipeline.staged;
+        let proof_inputs = &staged.proof_inputs;
+        let rail = self.preview.rail;
+        // The program names the key from the legs its read screens, a ring reading no root
+        // screens none and a deposit never counts.
+        let legs = match RootRead::transfer(self.pipeline.config.account(), rail.is_delegate()) {
             RootRead::None => 0,
-            RootRead::Own | RootRead::Policy => {
-                transfers.iter().filter(|leg| !leg.is_deposit()).count()
-            }
+            RootRead::Own | RootRead::Policy => proof_inputs
+                .external_data
+                .interface_transfers
+                .iter()
+                .filter(|leg| !leg.is_deposit())
+                .count(),
         };
-        let rows = read.owner_rows()?;
-        // 2. An unmatched input asset or a salted list opens more records than the row holding these
-        // counts provides, and only a policy read opens them.
-        let pools = match root_read == RootRead::Policy {
-            true => {
-                let mut owners = rows.clone();
-                owners.extend(read.output_owners()?.into_iter().flatten());
-                owners.sort_unstable();
-                owners.dedup();
-                let mut assets: Vec<[u8; 32]> =
-                    read.output_assets()?.into_iter().flatten().collect();
-                for input in proof_inputs
-                    .input_utxos
-                    .iter()
-                    .filter(|input| input.is_note())
-                {
-                    assets.push(*Member::asset(&input.utxo.asset.asset)?.as_bytes());
-                }
-                assets.extend(
-                    public
-                        .asset_fields()?
-                        .into_iter()
-                        .filter(|asset| *asset != [0; 32]),
-                );
-                assets.sort_unstable();
-                assets.dedup();
-                UnreadSubjects {
-                    owners: owners.len() + legs,
-                    assets: assets.len(),
-                    salted: SourceGates::of(&policy.source_map()?).any_salted(),
-                }
-                .pools()
-            }
-            false => RecordPools::default(),
-        };
-        // 3. One selection on both sides, only the bound stands in for the reads.
-        Ok(TransferSpend {
-            rail: read.rail,
-            inputs: self.published_inputs,
-            outputs: usize::from(self.preview.n_out),
-            spends_default_ring: read.spends_default_ring,
-            legs,
-            owners: rows.len(),
-            pools,
-            wide: false,
-        }
-        // A disclosed opening spans every slot of the key like a data tail, a reader that raised the
-        // key to another output count would leave the opening's rows short of the digest it proves.
-        .sealed_wide(
-            proof_inputs.output_utxos.iter().any(carries_data)
+        Ok(TransferPlanner {
+            subjects: TransferSpend {
+                rail,
+                inputs: self.published_inputs,
+                outputs: usize::from(self.preview.n_out),
+                spends_default_ring: spends_default_ring(&proof_inputs.input_utxos),
+                legs,
+                owners: owner_rows(rail, proof_inputs)?.len(),
+                pools: RecordPools::default(),
+                wide: false,
+            },
+            preview: &self.preview,
+            inputs: proof_inputs,
+            rail: &staged.rail,
+            sender: &staged.sender,
+            // A disclosed opening spans every slot of the key like a data tail, a key of another
+            // output count would leave the opening's rows short of the digest it proves.
+            spans_capacity: proof_inputs.output_utxos.iter().any(carries_data)
                 || self.pipeline.approval_blinder.is_some(),
-        ))
+            settlement: match self.pipeline.buffered {
+                true => FrameSettlement::Buffered,
+                false => FrameSettlement::Inline,
+            },
+        })
     }
 
     /// The external data is final after the seal, the owner signs its message hash.
-    fn seal<P>(self, wide_owners: bool, policy: P) -> Result<Sealed<'a, P>, RingError> {
+    fn seal<P: Planned>(self, policy: P) -> Result<Sealed<'a, P>, RingError> {
+        let plan = policy.plan();
         let Prepared {
             pipeline,
             trees,
-            mut preview,
+            preview,
             published_inputs,
         } = self;
         let Pipeline {
@@ -739,18 +742,13 @@ impl<'a> Prepared<'a> {
         } = staged;
         let ring_rail = preview.rail;
         let auditor = config.auditor_pubkey;
-        preview.wide_owners = wide_owners;
 
         // The auditor message precedes every hash over the external data.
-        let unsealed_parts = preview.parts(&proof_inputs, &rail, &sender)?;
-        let unsealed = unsealed_parts.data()?;
-        let (layout, flags) = (
-            unsealed.audit_stream().map_err(|error| match error {
-                CustomRingError::RingShapeUnkeyed => RingError::ShapeUnkeyed { rail: ring_rail },
-                error => error.into(),
-            })?,
-            unsealed.audit_layout(),
-        );
+        let layout = plan.stream;
+        let flags = preview
+            .parts(&proof_inputs, &rail, &sender, plan.key)?
+            .data()?
+            .audit_layout();
         let sealed = match presealed {
             Some(presealed) => {
                 let opened = presealed.open(layout, flags, &auditor)?;
@@ -817,7 +815,7 @@ impl<'a> Sealed<'a> {
                     staged,
                     co_signers: supplied_co_signers,
                     priority_fee,
-                    buffered,
+                    buffered: _,
                     approval_blinder,
                 },
             sealed,
@@ -907,13 +905,12 @@ impl<'a> Sealed<'a> {
             co_signers,
             delegate,
         };
-        let mut parts = preview.parts(&proof_inputs, &rail, &sender)?;
+        let mut parts = preview.parts(&proof_inputs, &rail, &sender, policy.plan.key)?;
         parts.seal_audit(sealed.envelope.clone(), &sealed.records, &sealed.tails);
         parts.approval = policy.approval;
         let approval_opening = match approval_blinder {
             Some(blinder) => {
-                let totals =
-                    approval_totals_of(&proof_inputs, parts.data()?.audit_stream()?.capacity)?;
+                let totals = approval_totals_of(&proof_inputs, policy.plan.stream.capacity)?;
                 parts.extensions.approval_totals = Some(totals.commitment(&blinder)?);
                 Some(ApprovalOpening::of(&totals, &blinder))
             }
@@ -980,7 +977,6 @@ impl<'a> Sealed<'a> {
             spend,
             trees,
             priority_fee,
-            buffered,
         };
         unwitnessed.check_size()?;
         Ok(unwitnessed)
@@ -997,7 +993,7 @@ impl Unwitnessed<'_> {
             },
             self.priority_fee,
         );
-        if self.buffered {
+        if self.frame.policy.plan.settlement == FrameSettlement::Buffered {
             return AddressCeiling {
                 payer: proof_inputs.payer,
                 instruction: &self.instruction()?,
@@ -1270,6 +1266,7 @@ fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
 /// The compact data before any proof, sized and hashed as the proven one.
 struct PreviewParts<'a> {
     preview: &'a Preview,
+    wide_owners: bool,
     inputs: &'a SppProofInputs,
     published: &'a [PublishedSlot<'a>],
     sender_bundle: Option<FramedSenderBundle<'a>>,
@@ -1328,7 +1325,7 @@ fn preview_parts(parts: PreviewParts<'_>) -> TransactParts {
             .collect(),
         has_data: parts.inputs.output_utxos.iter().any(carries_data),
         entry: spends_default_ring(&parts.inputs.input_utxos),
-        wide_owners: preview.wide_owners,
+        wide_owners: parts.wide_owners,
         outputs: parts
             .published
             .iter()

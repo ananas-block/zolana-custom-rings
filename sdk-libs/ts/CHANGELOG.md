@@ -31,6 +31,7 @@ Breaking
   through the ring capsule, and `syncWallet` no longer does → sync ring
   wallets with `syncRingWallet` and drop `depositPayloadDecoder` from the
   `syncWallet` config.
+- A relayed transfer seals under the row its public counts select, and Ring RPC refuses it with `RingRpcRefusal.resealNarrow` or `resealWide` when a salted or asset record read selects a key whose stream differs → prepare the relay again with that `sealRow` and sign the new message.
 - `RingRpc` now posts each JSON-RPC method beneath its base URL and accepts
   `RingRpcOptions.apiKey` or the URL's `api-key`, while `RingRpc.url` omits the key;
   service clients reject malformed or conflicting credentials during construction
@@ -51,6 +52,7 @@ Added
 - `RingRpc.getWalletStatus`, `RingRpc.getWalletActivity` and `RingRpc.getSpendCoverage` read a wallet's notes, its history and a ring's unresolved spends, and `ringFullScan` and `RingAuditPage.skipped` read a whole ring with no tag read and list each row that does not open.
 - `resolveViewingKey` reads an owner's current viewing key from the user registry, returns `undefined` only when the owner has not registered, and refuses a malformed key or a nullifier key other than the one passed.
 - `RingMergeSettingsRequest` signs an owner's merge settings for a mint and `RingRpc.setMergeSettings` sends them, a zero `targetNoteCount` stops Ring RPC merging that mint, and `RingRpcRefusal.sourceNote` names `-32227`, a recovered delegate note its source does not own.
+- `RingRelaySpend.sealRow` and `RingRelayInput.sealRow` seal a relayed transfer under a named `SealRow`, and `RingRpcRefusal.resealNarrow` and `resealWide` name `-32211` and `-32212`.
 
 Fixed
 

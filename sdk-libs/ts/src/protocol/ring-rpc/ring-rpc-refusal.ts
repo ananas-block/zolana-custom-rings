@@ -45,6 +45,9 @@ export const RingRpcRefusal = Object.freeze({
   liveAttempt: -32208,
   depositorSignature: -32209,
   budgetUnset: -32210,
+  // The owner seals again with `sealRow` set to the row the name carries.
+  resealNarrow: -32211,
+  resealWide: -32212,
   notDelegate: -32220,
   foreignAuditor: -32221,
   sourceUnescrowed: -32222,
