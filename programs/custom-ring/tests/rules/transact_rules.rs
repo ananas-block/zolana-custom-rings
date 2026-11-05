@@ -1255,6 +1255,48 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
     );
 }
 
+/// A leg's funder stands apart from the owner run, a signer on a withdrawal has no such role.
+#[test]
+fn an_anonymous_deposit_leg_admits_its_funder_and_no_other_signer() {
+    let fixture = Fixture::new();
+    let mut ring = Ring::new(Setup::Anonymous);
+    let signer = Keypair::new();
+    let frame = |leg: InterfaceTransfer| {
+        let mut data = fixture.transfer(RingRail::Anonymous, 2, 2, false);
+        data.interface_transfers = vec![leg];
+        data
+    };
+    let group = [
+        AccountMeta::new(Address::new_unique(), false),
+        AccountMeta::new(signer.pubkey(), true),
+    ];
+    let funded = frame(InterfaceTransfer::SolDeposit { amount: 5 });
+    let mut spp = spp_list(&ring.payer.pubkey(), &funded, &[]);
+    spp.extend_from_slice(&group);
+    reaches_verification(send(
+        &mut ring,
+        tag::TRANSFER,
+        Vec::new(),
+        funded.encode().unwrap(),
+        spp,
+        &[&signer],
+    ));
+    let withdrawn = frame(InterfaceTransfer::SolWithdrawal { amount: 5 });
+    let mut spp = spp_list(&ring.payer.pubkey(), &withdrawn, &[]);
+    spp.extend_from_slice(&group);
+    refused(
+        send(
+            &mut ring,
+            tag::TRANSFER,
+            Vec::new(),
+            withdrawn.encode().unwrap(),
+            spp,
+            &[&signer],
+        ),
+        CustomRingError::InvalidAnonymousSigner,
+    );
+}
+
 #[test]
 fn the_forwarded_list_holds_the_ring_pda_and_a_signing_payer() {
     let fixture = Fixture::new();

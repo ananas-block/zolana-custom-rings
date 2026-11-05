@@ -22,7 +22,6 @@ func TestRingDomainsAreTheAsciiTags(t *testing.T) {
 		value uint64
 	}{
 		{"CRAU", shared.AuditStatementDomain},
-		{"CRDS", shared.DeliveredSlotSecretDomain},
 		{"CRBS", shared.BlindingSeedDomain},
 		{"CRTB", shared.PolicyTableDomain},
 		{"CRQW", shared.QueueWriteDomain},

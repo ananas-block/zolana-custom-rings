@@ -9,26 +9,36 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
 	"github.com/helius-labs/zolana/prover/server/prover-test/spp/spptest"
 )
 
-// RecipientBody is the ring body plaintext, the host twin of audit.AuditWires.assertRecipientBody.
+const (
+	// RecipientBodyLen mirrors RECIPIENT_BODY_LEN, be32(blinding) ‖ u64be(amount) ‖ mint.
+	RecipientBodyLen = 72
+	// SenderBundleHeadLen mirrors SENDER_BUNDLE_HEAD_LEN, mint0 ‖ u64be(amount0) ‖ u64be(amount1) ‖ output_seed.
+	SenderBundleHeadLen = 80
+	// recipientBodyEncInfo mirrors RECIPIENT_BODY_LABEL.
+	recipientBodyEncInfo = "CRING/rcp"
+	// senderBundleEncInfo mirrors SENDER_BUNDLE_LABEL.
+	senderBundleEncInfo = "CRING/snd"
+)
+
+// RecipientBody is the ring body plaintext.
 type RecipientBody struct {
 	Blinding *big.Int
 	Amount   uint64
 	Mint     [32]byte
 }
 
-func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [shared.RecipientBodyLen]byte {
+func (b RecipientBody) Seal(t testing.TB, slotSecret *big.Int) [RecipientBodyLen]byte {
 	t.Helper()
 	blinding := spptest.MustFieldBytes(t, b.Blinding)
-	key, nonce := AuditStreamKeys(t, slotSecret, shared.RecipientBodyEncInfo)
-	return [shared.RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
+	key, nonce := AuditStreamKeys(t, slotSecret, recipientBodyEncInfo)
+	return [RecipientBodyLen]byte(CTREncrypt(t, key, nonce, slices.Concat(blinding[:], binary.BigEndian.AppendUint64(nil, b.Amount), b.Mint[:])))
 }
 
-// SenderBundle is the sender bundle plaintext, the host twin of audit.AuditWires.sealSenderBundle, one key per published slot.
+// SenderBundle is the sender bundle plaintext, one key per published slot.
 type SenderBundle struct {
 	Mint              [32]byte
 	Amount, SolAmount uint64
@@ -43,7 +53,7 @@ func (b SenderBundle) Seal(t testing.TB, slotSecret *big.Int) []byte {
 	for _, key := range b.RecipientKeys {
 		plaintext = append(plaintext, key[:]...)
 	}
-	key, nonce := AuditStreamKeys(t, slotSecret, shared.SenderBundleEncInfo)
+	key, nonce := AuditStreamKeys(t, slotSecret, senderBundleEncInfo)
 	return CTREncrypt(t, key, nonce, plaintext)
 }
 

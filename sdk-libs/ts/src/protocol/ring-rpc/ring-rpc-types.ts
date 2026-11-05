@@ -232,13 +232,13 @@ export interface SetMergeSettingsRequest {
 /** Rust `AuthorityPayment`. */
 export interface AuthorityPayment {
   readonly recipient: ShieldedAddress;
+  readonly mint: Address;
   readonly amount: bigint;
 }
 
 /** Rust `AuthorityTransfer`, change returns to an input's owner. */
 export interface AuthorityTransfer {
   readonly sources: readonly ShieldedAddress[];
-  readonly mint: Address;
   readonly payments: readonly AuthorityPayment[];
 }
 

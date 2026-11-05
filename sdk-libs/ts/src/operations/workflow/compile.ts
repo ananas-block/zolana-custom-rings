@@ -1,5 +1,10 @@
 import { blockhash, getTransactionSize, isSignerRole } from "@solana/kit";
-import { InterfaceError, TRANSACTION_SIZE_LIMIT, type Shape } from "@heliuslabs/zolana/interface";
+import {
+  InterfaceError,
+  TRANSACTION_SIZE_LIMIT,
+  type Instruction,
+  type Shape,
+} from "@heliuslabs/zolana/interface";
 import {
   compileUnsignedTransaction,
   type TransactionCompilerOptions,
@@ -22,6 +27,12 @@ export function checkTransactionFits(options: Omit<TransactionCompilerOptions, "
 
 /** Rust `v1::MAX_ADDRESSES`. */
 export const MAX_TRANSACTION_ADDRESSES = 64;
+
+/** Rust `v1::MAX_SIGNATURES`. */
+export const MAX_TRANSACTION_SIGNATURES = 12;
+
+/** Rust `v1::MAX_INSTRUCTIONS`. */
+export const MAX_TRANSACTION_INSTRUCTIONS = 64;
 
 /** Rust `TransactionSize`. */
 export interface TransactionSize {
@@ -55,16 +66,42 @@ export function transactionSize(
         !all.some((instruction) => instruction.programAddress === address)
       )
         left.add(address);
-  const kept = options.instructions.map((instruction) => ({
-    ...instruction,
-    accounts: (instruction.accounts ?? []).filter((account) => !left.has(account.address)),
-  }));
+  // A setup meta can be the one left out, the kit refuses a message past the ceiling either way.
+  const kept = (instructions: readonly Instruction[]): readonly Instruction[] =>
+    instructions.map((instruction) => ({
+      ...instruction,
+      accounts: (instruction.accounts ?? []).filter((account) => !left.has(account.address)),
+    }));
   // A left out address costs its key and one index per meta.
   const leftOut = 32 * left.size + metas.filter((account) => left.has(account.address)).length;
   return Object.freeze({
-    bytes: compiledBytes({ ...options, instructions: kept }) + leftOut,
+    bytes:
+      compiledBytes({
+        ...options,
+        ...(options.setupInstructions === undefined
+          ? {}
+          : { setupInstructions: kept(options.setupInstructions) }),
+        instructions: kept(options.instructions),
+      }) + leftOut,
     addresses: unique.size,
   });
+}
+
+/** The compiler's header count, a key two roles share or only setup adds signs once. */
+export function transactionSignatures(
+  options: Pick<
+    Omit<TransactionCompilerOptions, "lifetime">,
+    "feePayer" | "instructions" | "setupInstructions"
+  >,
+): number {
+  const all = [...(options.setupInstructions ?? []), ...options.instructions];
+  return new Set([
+    options.feePayer,
+    ...all
+      .flatMap((instruction) => instruction.accounts ?? [])
+      .filter((account) => isSignerRole(account.role))
+      .map((account) => account.address),
+  ]).size;
 }
 
 function compiledBytes(options: Omit<TransactionCompilerOptions, "lifetime">): number {

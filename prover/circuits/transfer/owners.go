@@ -31,7 +31,7 @@ func OpenOwnerRows(api frontend.API, members, entries []frontend.Variable, pool 
 func (r OwnerRows) find(api frontend.API, owner frontend.Variable) (found, key frontend.Variable) {
 	found, key = 0, 0
 	for j, member := range r.Members {
-		hit := api.Mul(r.Live[j], api.IsZero(api.Sub(owner, member)))
+		hit := api.Mul(r.Live[j], policy.IsSame(api, owner, member))
 		found = api.Add(found, hit)
 		key = api.Add(key, api.Mul(hit, r.Tracking[j].NullifierPk))
 	}
@@ -51,13 +51,14 @@ func (r OwnerRows) AssertInputOwners(api frontend.API, rail InputRail, inputs []
 	for _, slot := range inputs {
 		zeroKey := isZeroKey(api, slot.NullifierPk)
 		found, key := r.find(api, slot.OwnerPkHash)
+		// 1. Every live input has its owner's row, the sender rules and attribution read rows alone. Only the delegate's zero key note goes without.
 		needsRow := api.Mul(slot.Utxo, api.Sub(1, api.Mul(rail.Delegate, zeroKey)))
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: needsRow, V: api.Sub(1, found)})
-		// A default-ring note carries a key the ring never enrolled.
+		// 2. A ring note's key is the row's enrolled key, the auditor reads the nullifier through it. A default-ring note carries a key the ring never enrolled.
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: api.Mul(slot.Ring, api.Sub(1, zeroKey)), A: slot.NullifierPk, B: key})
-		// Anyone holding the opening computes a zero-key nullifier, that spend would name the hidden owner.
+		// 3. Anyone holding the opening computes a zero-key nullifier, that spend would name the hidden owner.
 		hidden := api.Mul(rail.Hidden, slot.Utxo, zeroKey)
-		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: api.IsZero(api.Sub(slot.OwnerPkHash, rail.HiddenOwner))})
+		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: hidden, V: policy.IsSame(api, slot.OwnerPkHash, rail.HiddenOwner)})
 	}
 }
 
@@ -73,5 +74,5 @@ func AssertOutputOwners(api frontend.API, pool policy.TrackingPool, outputs []sh
 }
 
 func isZeroKey(api frontend.API, nullifierPk frontend.Variable) frontend.Variable {
-	return api.IsZero(api.Sub(nullifierPk, shared.ZeroNullifierPk))
+	return policy.IsSame(api, nullifierPk, shared.ZeroNullifierPk)
 }

@@ -437,7 +437,6 @@ mod tests {
         registry
             .set_policy(custom_ring_interface::PolicyUpdate {
                 sources: [bytemuck::Zeroable::zeroed(); N_SOURCE_SLOTS],
-                salted_lists: zolana_ring_policy::ListSet::EMPTY,
                 rules: rules.encode(),
                 slot: 0,
             })

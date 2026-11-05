@@ -12,7 +12,7 @@ use crate::RingKeyError;
 
 const CTR_NONCE_LEN: usize = 12;
 
-/// One AES key and nonce of the schedule every ring line but merge proves.
+/// One AES key and nonce of the ring schedule, mirrored by `AuditStreamKeySchedule` in `prover/circuits/shared/envelope.go`.
 pub struct RingStream {
     key: Zeroizing<[u8; 32]>,
     nonce: [u8; CTR_NONCE_LEN],

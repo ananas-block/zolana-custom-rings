@@ -1,4 +1,15 @@
 // Package audit proves what a ring auditor reads from a ring transfer.
+//
+// A statement built on the package proves the following.
+//  1. The stream is AES-256-CTR under a key schedule bound to the auditor key, tx_u and the salt,
+//     over the sealed tx_viewing_sk, R, the entry evidence, one record per slot and one tail per slot.
+//  2. Each live slot's record and tail hold the opening its published commitment hashes, and a
+//     published slot's blinding derives from the sealed key. The auditor rebuilds every commitment
+//     from the stream and the frame.
+//  3. R counts the spent notes among the published inputs, and a default-ring input opens in the
+//     entry evidence.
+//
+// It proves nothing about a recipient's body or tag, delivery stays outside the circuit.
 package audit
 
 import (
@@ -38,7 +49,7 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 	// 2. The auditor reads the recovered bytes as they are, an unclamped alias would key another stream.
 	AssertClamped(api, w.TxViewingSk)
 	// 3. tx_u is the key of tx_viewing_sk, the generator bounds every secret byte the packings read.
-	txPk := shared.PackBounded(api, TaggedPubkey(api, w.TxViewingSk))
+	txPk := shared.PackedKey(api, x25519.ScalarMulGenerator(api, w.TxViewingSk))
 	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
 	return Envelope{
 		txViewingSk: w.TxViewingSk,
@@ -161,21 +172,26 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Env
 		ranges:      ranges,
 		sealed:      sealed,
 		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(evidence.head), ranges.entryLen(), spent.Count),
-		RecordChain: regionChain(api, sealed.Ciphertext, ranges.RecordOffset(0), RecordStride, RecordLen, opened.Count),
+		RecordChain: gadget.HashChain4(api, SlotRegions{Start: ranges.RecordOffset(0), Stride: RecordStride, Length: RecordLen}.Hashes(api, sealed.Ciphertext, opened.Count.Active)),
 		TailChain:   tailChain(api, sealed.Ciphertext, ranges, opened),
 		RealInputs:  evidence.realInputs,
 		NoSpend:     api.IsZero(evidence.realInputs),
 	}
 }
 
-// regionChain is HashChain4(hash_bytes(region_i)), zero past the published count.
-func regionChain(api frontend.API, ciphertext []frontend.Variable, start, stride, length int, count ringgadget.Count) frontend.Variable {
-	hashes := make([]frontend.Variable, len(count.Active))
-	for i, active := range count.Active {
-		offset := start + i*stride
-		hashes[i] = api.Mul(active, gadget.HashBoundedBytes(api, ciphertext[offset:offset+length]))
+// SlotRegions locates one ciphertext region per slot inside a sealed stream.
+type SlotRegions struct {
+	Start, Stride, Length int
+}
+
+// Hashes is hash_bytes(region_i) per slot, zero while the slot's flag is clear, the one form every statement binds a slot's ciphertext in.
+func (r SlotRegions) Hashes(api frontend.API, ciphertext, active []frontend.Variable) []frontend.Variable {
+	hashes := make([]frontend.Variable, len(active))
+	for i, flag := range active {
+		offset := r.Start + i*r.Stride
+		hashes[i] = api.Mul(flag, gadget.HashBoundedBytes(api, ciphertext[offset:offset+r.Length]))
 	}
-	return gadget.HashChain4(api, hashes)
+	return hashes
 }
 
 func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRanges, opened Opened) frontend.Variable {
@@ -183,7 +199,7 @@ func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRa
 		return 0
 	}
 	// A clear has_data transmits no tail, the program binds zero.
-	return api.Mul(opened.hasData, regionChain(api, ciphertext, ranges.TailOffset(0), TailLen, TailLen, opened.Count))
+	return api.Mul(opened.hasData, gadget.HashChain4(api, SlotRegions{Start: ranges.TailOffset(0), Stride: TailLen, Length: TailLen}.Hashes(api, ciphertext, opened.Count.Active)))
 }
 
 // countedDigest mirrors ciphertext_digest in program-libs/interface/src/proof/statement.rs over the head and the count's entries.
@@ -248,11 +264,11 @@ func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Out
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: active, A: slot.Blinding, B: transaction.DeriveOutputBlinding(api, w.FirstNullifier, e.outputSeed, i)})
 }
 
-// Head opens every audit statement under domain, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs.
+// Head opens every audit statement under domain, mirrored by AuditHead in program-libs/interface/src/proof/statement.rs. The stream's ephemeral key is tx_u, txPk already binds it.
 func (e Envelope) Head(w AuditWires, s Stream, domain frontend.Variable) []frontend.Variable {
 	return slices.Concat(
 		[]frontend.Variable{domain, w.FirstNullifier, w.RingProgramID, e.txPk[0], e.txPk[1]},
-		s.sealed.Auditor, s.sealed.Eph,
+		s.sealed.Auditor,
 		[]frontend.Variable{s.digest, e.salt, w.Layout},
 	)
 }
@@ -268,11 +284,6 @@ func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
 	// Bit 254 is set and bit 255 is clear, the top RFC 7748 fixes.
 	api.AssertIsEqual(high[6], 1)
 	api.AssertIsEqual(high[7], 0)
-}
-
-// TaggedPubkey is 0x04 ‖ u of the clamped secret, the generator gadget bounds every secret byte.
-func TaggedPubkey(api frontend.API, secret [32]frontend.Variable) []frontend.Variable {
-	return shared.Tagged(x25519.ScalarMulGenerator(api, secret))
 }
 
 func masked(api frontend.API, flag frontend.Variable, bytes []frontend.Variable) []frontend.Variable {

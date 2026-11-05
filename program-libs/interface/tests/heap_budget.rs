@@ -2,6 +2,7 @@
 //! hashing and the pairing are syscalls the rule tests cover on the target.
 
 mod frames;
+mod ring_policy;
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -15,7 +16,8 @@ use custom_ring_interface::{
     AnonymousProofData, CustomRingError, InProofOwner, PolicyProof, PublicLeg, PublicSlots,
     Replies, RingRail, RingTransactData, MIN_REPLY_LEN,
 };
-use frames::{config, Fixture};
+use frames::Fixture;
+use ring_policy::config;
 use solana_message::v1::MAX_TRANSACTION_SIZE;
 use spr_interface::instruction::{InterfaceTransfer, TransactProof};
 use spr_interface::shape::SPP_SUPPORTED_SHAPES;

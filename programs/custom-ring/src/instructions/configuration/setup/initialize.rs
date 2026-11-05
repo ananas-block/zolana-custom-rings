@@ -10,7 +10,7 @@ use pinocchio::{
 };
 use spr_account_checks::AccountIterator;
 use spr_interface::instruction::{encode_instruction, tag, CreateRingConfigData};
-use zolana_ring_policy::{ring_id_field, ListSet};
+use zolana_ring_policy::ring_id_field;
 
 use crate::{
     instructions::{
@@ -99,7 +99,6 @@ pub fn process_initialize_ix(
         .bind()?;
         account.set_policy(PolicyUpdate {
             sources: bound.sources,
-            salted_lists: ListSet::EMPTY,
             rules: bound.rules,
             slot,
         })?;

@@ -36,12 +36,45 @@ type RecordOpening struct {
 
 // Encode mirrors AuditRecord::encode in program-libs/interface/src/proof/audit_stream.rs, padded to RecordStride.
 func (r RecordOpening) Encode(api frontend.API, rc frontend.Rangechecker) []frontend.Variable {
-	mint := assertMint(api, r.Live, r.Asset, r.MintChunks)
-	// SolanaOwnerIdentity bounds every owner key byte, the reader rebuilds the owner from the key.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: r.Live, A: r.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, r.OwnerKey)})
+	raw := identityOpening{Live: r.Live, OwnerPkHash: r.OwnerPkHash, Asset: r.Asset, OwnerKey: r.OwnerKey, MintChunks: r.MintChunks}.open(api)
 	// FieldToBytesBEWith holds the one be32 below q, UintBytesBE fails a live amount at or above 2^64.
 	nullifierPk := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(r.Live, r.NullifierPk))
-	return slices.Concat([]frontend.Variable{r.Kind}, ringgadget.UintBytesBE(api, api.Mul(r.Live, r.Amount), amountLen), masked(api, r.Live, r.OwnerKey[:]), masked(api, r.Live, mint), nullifierPk[:], shared.Zeros(RecordStride-RecordLen))
+	return slices.Concat([]frontend.Variable{r.Kind}, ringgadget.UintBytesBE(api, api.Mul(r.Live, r.Amount), amountLen), raw.ownerKey, raw.mint, nullifierPk[:], shared.Zeros(RecordStride-RecordLen))
+}
+
+// OpeningRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
+const OpeningRecordLen = RecordStride + fieldLen
+
+// OpeningRecord is the one plaintext of a deposit slot and a merge output. No envelope key derives their blinding, so a record seals the secret that rebuilds it.
+type OpeningRecord struct {
+	RecordOpening
+	// Secret is the deposit's blinding or the merge's seed, a clear Live seals zero.
+	Secret frontend.Variable
+}
+
+// Encode mirrors OpeningRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
+func (o OpeningRecord) Encode(api frontend.API, rc frontend.Rangechecker) []frontend.Variable {
+	secret := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(o.Live, o.Secret))
+	return slices.Concat(o.RecordOpening.Encode(api, rc), secret[:])
+}
+
+// identityOpening is a slot's owner and asset beside the raw key and mint the auditor reads.
+type identityOpening struct {
+	Live, OwnerPkHash, Asset frontend.Variable
+	OwnerKey                 [32]frontend.Variable
+	MintChunks               [2]frontend.Variable
+}
+
+type rawIdentity struct {
+	ownerKey, mint []frontend.Variable
+}
+
+// open holds the raw bytes to the slot's commitment fields while Live is set, and zeroes them otherwise. A record of another key or mint would rebuild no commitment the reader accepts.
+func (o identityOpening) open(api frontend.API) rawIdentity {
+	mint := assertMint(api, o.Live, o.Asset, o.MintChunks)
+	// SolanaOwnerIdentity bounds every owner key byte, the reader rebuilds the owner from the key.
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: o.Live, A: o.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, o.OwnerKey)})
+	return rawIdentity{ownerKey: masked(api, o.Live, o.OwnerKey[:]), mint: masked(api, o.Live, mint)}
 }
 
 func (o OutputWires) record(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {
@@ -77,6 +110,11 @@ type EntryWires struct {
 	MintChunks [2]frontend.Variable
 }
 
+// A ring input gets no record, the stream seals R alone. The auditor links a spent ring note by
+// recomputing its nullifier from the opening an earlier record gave and the owner's escrowed secret,
+// then matching SPP's published list. No constraint here binds a nullifier to a record, a note the
+// auditor never opened stays unlinked. A default-ring input has no earlier record, so an entry key's
+// evidence opens it in the same stream.
 type SpentInputs struct {
 	Slots []shared.Output
 	// The published n, R may sit below it.
@@ -124,17 +162,16 @@ func (s SpentInputs) evidence(api frontend.API, rc frontend.Rangechecker, ranges
 // encode mirrors EntryInput::extend in program-libs/interface/src/proof/audit_stream.rs, zero off a default-ring note.
 func (e EntryWires) encode(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {
 	live := slot.Exit
-	mint := assertMint(api, live, slot.Asset, e.MintChunks)
 	// Per input owner and key, mixed owners read apart with no nullifier secret disclosed.
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: live, A: slot.OwnerPkHash, B: gadget.SolanaOwnerIdentity(api, e.OwnerKey)})
+	raw := identityOpening{Live: live, OwnerPkHash: slot.OwnerPkHash, Asset: slot.Asset, OwnerKey: e.OwnerKey, MintChunks: e.MintChunks}.open(api)
 	field := func(value frontend.Variable) []frontend.Variable {
 		bytes := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(live, value))
 		return bytes[:]
 	}
 	return slices.Concat(
-		masked(api, live, e.OwnerKey[:]), field(slot.NullifierPk),
+		raw.ownerKey, field(slot.NullifierPk),
 		ringgadget.UintBytesBE(api, api.Mul(live, slot.Amount), amountLen),
-		masked(api, live, mint), field(slot.Blinding), field(slot.DataHash), field(slot.RingDataHash),
+		raw.mint, field(slot.Blinding), field(slot.DataHash), field(slot.RingDataHash),
 	)
 }
 

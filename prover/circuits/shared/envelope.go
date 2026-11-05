@@ -15,6 +15,7 @@ import (
 )
 
 // EphSk must be fresh per envelope or per SealSalted salt, a reuse under one auditor key repeats the keystream.
+// No constraint holds that freshness, a circuit sees no earlier envelope. A prover that reuses a key reveals the XOR of its own plaintexts to any chain reader, each ciphertext still decrypts to what its proof sealed.
 type Envelope struct {
 	Plaintext []frontend.Variable
 	EphSk     [32]frontend.Variable
@@ -34,7 +35,7 @@ func (s Sealed) StatementFields(api frontend.API) []frontend.Variable {
 // SealStream starts at counter 2, the readers start there.
 func (e Envelope) SealStream(api frontend.API) Sealed {
 	// The X25519 gadgets bound every key byte and return canonical bytes, the packings need no byte check.
-	sealed, secret := e.agree(api, PackBounded(api, Tagged(x25519.ScalarMulGenerator(api, e.EphSk))))
+	sealed, secret := e.agree(api, PackedKey(api, x25519.ScalarMulGenerator(api, e.EphSk)))
 	return e.seal(api, sealed, secret)
 }
 
@@ -47,7 +48,7 @@ func (e Envelope) SealSalted(api frontend.API, eph []frontend.Variable, salt fro
 func (e Envelope) agree(api frontend.API, eph []frontend.Variable) (Sealed, frontend.Variable) {
 	// One encoding per auditor key, the program packs the configured key bytes as they are.
 	agreement := AgreeCanonical(api, e.EphSk, e.AuditorPk)
-	sealed := Sealed{Auditor: PackBounded(api, Tagged(e.AuditorPk)), Eph: eph}
+	sealed := Sealed{Auditor: PackedKey(api, e.AuditorPk), Eph: eph}
 	// Binding both keys keeps the key schedule input from replaying under another key pair.
 	return sealed, gadget.PoseidonHash(api, slices.Concat(
 		[]frontend.Variable{uint64(DomSepCRShared)}, PackBounded(api, agreement[:]), sealed.Eph, sealed.Auditor,
@@ -81,6 +82,7 @@ func AgreeCanonical(api frontend.API, scalar, peer [32]frontend.Variable) [32]fr
 	return x25519.ECDH(api, scalar, peer)
 }
 
-func Tagged(u [32]frontend.Variable) []frontend.Variable {
-	return append([]frontend.Variable{4}, u[:]...)
+// PackedKey is pack_be(0x04 ‖ u), the caller bounds every byte of u.
+func PackedKey(api frontend.API, u [32]frontend.Variable) []frontend.Variable {
+	return PackBounded(api, append([]frontend.Variable{4}, u[:]...))
 }

@@ -1,9 +1,16 @@
 // Package policy proves a custom ring's policy over a transaction SPP proves.
+//
+// Screen proves these properties over the slots SPP hashes and the roots the statement binds.
+// While Screened, the rules are the table the program hashed at policy_hash.
+// Every live sender, payment owner, payment asset and input asset reads its list bits from a record the policy root of its source holds, present or proven absent by its predecessor.
+// Every sender rule holds over every live row, every owner and asset rule over every live payment within its guard, and every unconditional asset rule over every live input's asset.
+// Payment totals read output and withdrawal amounts, an input's amount only nets a same ring receipt of its own owner and asset.
+// While Outflow is set the caps hold and Screening carries the approval bits the flows reach.
+// The authority rail clears Screened and Outflow, no rule binds on it. The merge circuit reads no policy.
 package policy
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/consensys/gnark/frontend"
 
@@ -12,9 +19,10 @@ import (
 )
 
 type PolicyInputs struct {
-	OwnOnly bool `gnark:"-"`
 	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each.
 	Senders, Outputs int `gnark:"-"`
+	// Spent counts the input slots, the pools hold a row for each slot's asset.
+	Spent int `gnark:"-"`
 	// SaltedKeys widens each pool past its public subjects.
 	SaltedKeys      int `gnark:"-"`
 	WithdrawalCount frontend.Variable
@@ -34,25 +42,25 @@ type PolicyInputs struct {
 
 type Policy struct {
 	PolicyInputs
-	OwnRecords         []registry.Record
-	CuratorRecords     []registry.Record
-	OwnProof           registry.SharedQuadProof
-	CuratorProof       registry.SharedQuadProof
-	OwnSubjects        []PoolSubject
-	CuratorSubjects    []PoolSubject
-	SenderEntries      []OwnerEntry
-	OwnerEntries       []OwnerEntry
+	OwnRecords      []registry.Record
+	CuratorRecords  []registry.Record
+	OwnProof        registry.SharedQuadProof
+	CuratorProof    registry.SharedQuadProof
+	OwnSubjects     []PoolSubject
+	CuratorSubjects []PoolSubject
+	SenderEntries   []OwnerEntry
+	OwnerEntries    []OwnerEntry
+	// AssetEntries index each payment's asset subject, then each input slot's.
 	AssetEntries       []PoolEntry
 	PublicAssetEntries []frontend.Variable
 }
 
 type InputsShape struct {
-	Outputs, Withdrawals, Senders, SaltedKeys int
-	OwnOnly                                   bool
+	Outputs, Withdrawals, Senders, SaltedKeys, Spent int
 }
 
 func (s InputsShape) Inputs() PolicyInputs {
-	return PolicyInputs{OwnOnly: s.OwnOnly, Senders: s.Senders, Outputs: s.Outputs, SaltedKeys: s.SaltedKeys, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
+	return PolicyInputs{Senders: s.Senders, Outputs: s.Outputs, Spent: s.Spent, SaltedKeys: s.SaltedKeys, Withdrawals: make([]WithdrawalWires, s.Withdrawals)}
 }
 
 // NewPolicy sizes the record pools, capacity zero fields take the shape's limits.
@@ -71,23 +79,15 @@ func NewPolicy(inputs PolicyInputs, capacity RecordPoolShape, publicAssets int) 
 		CuratorSubjects:    make([]PoolSubject, capacity.CuratorSubjects),
 		SenderEntries:      make([]OwnerEntry, inputs.Senders),
 		OwnerEntries:       make([]OwnerEntry, payments),
-		AssetEntries:       make([]PoolEntry, payments),
+		AssetEntries:       make([]PoolEntry, payments+inputs.Spent),
 		PublicAssetEntries: make([]frontend.Variable, publicAssets),
-	}
-	for i := range p.SenderEntries {
-		p.SenderEntries[i] = newOwnerEntry(inputs.OwnOnly)
-	}
-	for i := range p.OwnerEntries {
-		p.OwnerEntries[i], p.AssetEntries[i] = newOwnerEntry(inputs.OwnOnly), newPoolEntry(inputs.OwnOnly)
 	}
 	var err error
 	if p.OwnProof, err = registry.NewSharedQuadProof(capacity.Own); err != nil {
 		return Policy{}, err
 	}
-	if !inputs.OwnOnly {
-		if p.CuratorProof, err = registry.NewSharedQuadProof(capacity.Curator); err != nil {
-			return Policy{}, err
-		}
+	if p.CuratorProof, err = registry.NewSharedQuadProof(capacity.Curator); err != nil {
+		return Policy{}, err
 	}
 	return p, nil
 }
@@ -99,8 +99,8 @@ func (p *Policy) RecordPools() RecordPoolShape {
 // Validate refuses a pool or reference list sized off the key's shape before any wire is read.
 func (p *Policy) Validate(publicAssets int) error {
 	payments := p.Outputs + len(p.Withdrawals)
-	if p.Outputs == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments {
-		return fmt.Errorf("policy requires owner and asset references for every payment")
+	if p.Outputs == 0 || len(p.OwnerEntries) != payments || len(p.AssetEntries) != payments+p.Spent {
+		return fmt.Errorf("policy requires owner and asset references for every payment and an asset reference for every input")
 	}
 	if len(p.SenderEntries) != p.Senders {
 		return fmt.Errorf("policy requires one reference per screened sender")
@@ -114,20 +114,5 @@ func (p *Policy) Validate(publicAssets int) error {
 	if err := p.OwnProof.Validate(len(p.OwnRecords)); err != nil {
 		return err
 	}
-	if !p.OwnOnly {
-		if err := p.CuratorProof.Validate(len(p.CuratorRecords)); err != nil {
-			return err
-		}
-	}
-	for _, entry := range slices.Concat(p.SenderEntries, p.OwnerEntries) {
-		if err := entry.validate(p.OwnOnly); err != nil {
-			return err
-		}
-	}
-	for _, entry := range p.AssetEntries {
-		if err := entry.validate(p.OwnOnly); err != nil {
-			return err
-		}
-	}
-	return nil
+	return p.CuratorProof.Validate(len(p.CuratorRecords))
 }

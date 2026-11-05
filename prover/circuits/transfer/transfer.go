@@ -1,4 +1,17 @@
 // Package transfer proves a ring transfer's audit, policy and owner predicates in one proof.
+//
+// The statement proves the following on the rail its bits select.
+//  1. Every published output and spent input opens to the commitment SPP publishes or spends, through
+//     the output chain and private_tx_hash, the same wires serve every section below.
+//  2. The auditor stream seals those openings under the ring's auditor key, per package audit.
+//  3. Every live input is a note of the bound ring, or of the default ring on an entry key. Its owner
+//     is in the published signer run, the hidden owner or the in-proof sender, the delegate rail excepted.
+//  4. A live ring slot's nonzero key is its owner's row key under the tracking root, a zero key on an
+//     output leaves its owner absent.
+//  5. Each entry of the signer run counts its data-bearing outputs, per audit.SignerDataCounts.
+//  6. The policy's rules, limits and approval bits hold under the bound roots, off the delegate rail.
+//
+// It proves nothing about a recipient's body or tag, SPP's external data hash binds those bytes alone.
 package transfer
 
 import (
@@ -17,28 +30,6 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 	transaction "github.com/helius-labs/zolana/prover/server/circuits/spp_transaction/shared"
 )
-
-// Shape sizes a key, Inputs also bounds the signers it can bind.
-type Shape struct {
-	Inputs, Outputs, Withdrawals, Owners int
-	Entry                                bool
-	// Wide fits a salted and a public record per owner.
-	Wide bool
-}
-
-// Shapes mirrors TRANSFER_SHAPES in program-libs/interface/src/proof/key_catalog.rs.
-var Shapes = [...]Shape{
-	{Inputs: 24, Outputs: 2, Withdrawals: 4, Owners: 4},
-	{Inputs: 24, Outputs: 4, Withdrawals: 4, Owners: 4},
-	{Inputs: 16, Outputs: 8, Withdrawals: 4, Owners: 4},
-	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5},
-	{Inputs: 24, Outputs: 8, Withdrawals: 32, Owners: 24, Wide: true},
-	{Inputs: 5, Outputs: 16, Withdrawals: 8, Owners: 5, Wide: true},
-	{Inputs: 49, Outputs: 2, Withdrawals: 4, Owners: 12, Wide: true},
-	{Inputs: 8, Outputs: 4, Withdrawals: 4, Owners: 8, Entry: true, Wide: true},
-	{Inputs: 2, Outputs: 8, Withdrawals: 4, Owners: 2, Entry: true, Wide: true},
-	{Inputs: 24, Outputs: 2, Withdrawals: 32, Owners: 12, Entry: true, Wide: true},
-}
 
 func (s Shape) String() string {
 	family := "transfer"
@@ -91,6 +82,8 @@ type Sections struct {
 	SignerCount frontend.Variable
 	// Signers is the program's owner signer run, zero past SignerCount.
 	Signers []frontend.Variable
+	// SignerDataCounts is the statement's packed count per run entry, zero unless a run entry owns a data-bearing output.
+	SignerDataCounts frontend.Variable
 	// Rows are the distinct live input owners, ascending with zero rows last.
 	Rows []frontend.Variable
 	policy.Tracking
@@ -139,7 +132,7 @@ func (s Shape) entries() int {
 }
 
 func NewSections(shape Shape) (Sections, error) {
-	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys()}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
+	p, err := policy.NewPolicy(policy.InputsShape{Outputs: shape.Outputs, Withdrawals: shape.Withdrawals, Senders: shape.Owners, SaltedKeys: shape.saltedKeys(), Spent: shape.Inputs}.Inputs(), policy.RecordPoolShape{}, transaction.NPublicSlots)
 	if err != nil {
 		return Sections{}, err
 	}
@@ -176,31 +169,41 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	if err := c.validate(c.Shape); err != nil {
 		return err
 	}
+	// 1. One rail, every later predicate reads its bits.
 	c.assertRail(api)
 	rc := rangecheck.New(api)
+	// 2. The output slots open and the sealed key derives each published blinding. Every later section reads these wires, so what it proves is about the notes step 7 ties to SPP.
 	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
 	stream := c.Shape.Stream()
 	layout := stream.DecodeLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
 	opened := audit.OpenSlots(api, rc, w, envelope, stream, layout, c.Outputs, c.OutputCount)
+	// 3. The inputs open with dummies last, a live input belongs to the bound ring or on an entry key to the default ring.
 	section := OpenInputs(api, c.Inputs, c.InputCount)
 	section.AssertRingNotes(api, c.RingProgramID, c.Shape.Entry)
+	// 4. The signer run opens under the chain the program rebuilds, and every live input's owner is in it, hidden or the in-proof sender.
 	signers := OpenSigners(api, c.Signers, c.SignerCount)
 	// The delegate signs for every owner, a published run would name a victim.
 	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: c.Delegate, V: c.SignerCount})
 	hiddenOwner := c.hiddenOwner(api, section, signers)
 	signers.AssertOwners(api, section, api.Sub(1, c.Delegate), api.Add(hiddenOwner, c.Sender))
+	// 5. Owner rows and output keys read the tracking root.
 	tracking := c.OpenTracking(api)
 	rows := OpenOwnerRows(api, c.Rows, c.RowEntries, tracking)
 	rows.AssertInputOwners(api, InputRail{Delegate: c.Delegate, Hidden: c.Hidden, HiddenOwner: hiddenOwner}, section.Slots)
 	AssertOutputOwners(api, tracking, opened.Slots, c.OutputEntries)
+	// 6. Each run entry's data-bearing outputs are counted from the opened slots, a signer's check needs the run from step 4 and the slots from step 2.
+	audit.SignerDataCounts{Packed: c.SignerDataCounts, Members: signers.Members, Active: signers.Count.Active, Slots: opened.Slots}.Assert(api)
+	// 7. private_tx_hash reopens over these slots, an opening other than SPP's fails here, and a delegate's statement stays off every policy registry.
 	c.bindTransaction(api, gadget.NonZeroHashChain(api, section.Hashes), opened.Slots)
 	c.assertBypass(api, c.Delegate)
+	// 8. The policy screens the bound slots.
 	// A ring with an own policy registry reads its root on every rail but the delegate's, no prover bit clears the thresholds.
 	g := policy.Rail{ThresholdsActive: ringgadget.IsNonZero(api, c.OwnRoot), Delegate: c.Delegate}.Gates(api, c.PolicyHash)
 	screening := c.Screen(api, rc, g, policy.Spend{Senders: rows.Members, Inputs: section.Slots, Tracking: tracking}, opened.Slots)
 	api.AssertIsEqual(c.ApprovalMask, screening.ApprovalMask)
 	screening.AssertApprovalTotals(api, c.ApprovalTotals, c.ApprovalBlinder)
+	// 9. The stream seals what the earlier steps opened, the statement binds its digest, chains and every public value.
 	sealed := w.SealStream(api, rc, envelope, stream, opened, audit.SpentInputs{Slots: section.Slots, Count: section.Count, Entries: c.Entries})
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, c.statement(envelope, w, sealed, opened, signers)))
 	return nil
@@ -235,7 +238,7 @@ func (c *Sections) assertBypass(api frontend.API, delegate frontend.Variable) {
 // statement mirrors TransferStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *TransferCircuit) statement(e audit.Envelope, w audit.AuditWires, s audit.Stream, opened audit.Opened, signers SignerSet) []frontend.Variable {
 	fields := slices.Concat(e.Head(w, s, shared.TransferStatementDomain), []frontend.Variable{
-		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, s.NoSpend,
+		c.InProof, c.Hidden, c.Delegate, c.ApprovalMask, c.ApprovalTotals, c.SignerDataCounts, s.NoSpend,
 		c.OutputCount, opened.OutputChain, s.RecordChain, s.TailChain,
 		c.InputCount, c.PrivateTxHash, c.Sender,
 	}, c.PartyIdentities[:], []frontend.Variable{

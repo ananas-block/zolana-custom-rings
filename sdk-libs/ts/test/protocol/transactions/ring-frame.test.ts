@@ -244,7 +244,7 @@ describe("the ring frame", () => {
     // The extension byte follows the salt.
     const extensions = 4 + 1 + CUSTOM_RING_PROOF_LENGTH + 8 + 8 + 4 + 32 + 16;
     expect(bytes[extensions]).toBe(1 | 2 | 4 | 8);
-    bytes[extensions] = 1 | 2 | 4 | 8 | 16;
+    bytes[extensions] = 1 | 2 | 4 | 8 | 32;
     expect(reason(() => RingTransactData.parse(bytes, "confidential"))).toBe("FlagNotAllowed");
     const { messages } = RingTransactData.expand(frame, { auditorPubkey: AUDITOR });
     expect(messages.map((message) => message.viewTag)).toEqual([field(83), AUDITOR.slice(1)]);
@@ -307,12 +307,49 @@ describe("the transfer statement", () => {
     expect(elements).toHaveLength(STATEMENT_LENGTH);
     const bigint = (bytes: Bytes32 | undefined): bigint =>
       bytes === undefined ? -1n : BigInt(`0x${Buffer.from(bytes).toString("hex")}`);
-    expect(bigint(elements[15])).toBe(3n);
+    expect(bigint(elements[13])).toBe(3n);
+    expect(bigint(elements[14])).toBe(0n);
     expect(bigint(elements[16])).toBe(1n);
     expect(bigint(elements[17])).toBe(2n);
     expect(bigint(elements[21])).toBe(2n);
     expect(bigint(elements[31])).toBe(1n);
     expect(bigint(elements.at(-1))).toBe(BigInt(elements.length));
+    const disclosed: Frame = { ...frame, extensions: { approvalTotals: field(88) } };
+    expect(
+      transferStatementElements(ringTransferStatement(disclosed, binding([field(31)])))[14],
+    ).toEqual(field(88));
+    const counted: Frame = { ...frame, extensions: { signerDataCounts: 2n } };
+    expect(
+      bigint(transferStatementElements(ringTransferStatement(counted, binding([field(31)])))[15]),
+    ).toBe(2n);
+  });
+
+  it("carries signer data counts under bit 5 past the approval digest, only while nonzero", () => {
+    const frame = ringFrame({ rail: "confidential", inputs: 2, outputs: 2 });
+    const encoded = RingTransactData.encode({
+      ...frame,
+      extensions: { approvalTotals: field(88), signerDataCounts: 0b1_00001n },
+    });
+    const parsed = RingTransactData.parse(encoded, "confidential");
+    expect(parsed.extensions.signerDataCounts).toBe(0b1_00001n);
+    expect(parsed.extensions.approvalTotals).toEqual(field(88));
+    expect(() =>
+      RingTransactData.encode({ ...frame, extensions: { signerDataCounts: 0n } }),
+    ).toThrow();
+    expect(() =>
+      RingTransactData.encode({ ...frame, extensions: { signerDataCounts: 1n << 60n } }),
+    ).toThrow();
+    const lone = RingTransactData.encode({ ...frame, extensions: { signerDataCounts: 1n } });
+    const count = lone.findIndex(
+      (_, at) =>
+        lone[at] === 1 << 5 &&
+        lone[at + 1] === 1 &&
+        lone.subarray(at + 2, at + 9).every((byte) => byte === 0),
+    );
+    expect(count).toBeGreaterThanOrEqual(0);
+    const zeroed = lone.slice();
+    zeroed[count + 1] = 0;
+    expect(() => RingTransactData.parse(zeroed, "confidential")).toThrow();
   });
 
   it("zero fills the output chains to the capacity and leaves the tail chain zero off has_data", () => {

@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use spr_indexer_api::SerializablePubkey;
-use spr_transaction::{instructions::transact::ConfidentialTransaction, Mint};
+use spr_keypair::ShieldedKeypair;
+use spr_program::instruction::{TransactInterfaceTransferAccounts, TransactSolTransferAccounts};
+use spr_transaction::{instructions::transact::ConfidentialTransaction, Mint, SppProofOutputUtxo};
 use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareAuthorityTransferRequest,
     PrepareRelayRequest, RelayIntent, RelayProofInputs, RelayQuote, RelayStatus, RelayStep,
@@ -14,11 +16,16 @@ use zolana_ring_client::rpc::{
 };
 use zolana_ring_keys::RingAddress;
 
+use super::super::Assembled;
+use crate::client::RingClient;
 use crate::tests::{
     pipeline_rules,
     support::{keypair, ring, ring_utxo, Chain, Registry, RingSettings},
 };
-use crate::{AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RingError, RingRelay};
+use crate::{
+    AnonymousPayment, CustomRingTransfer, CustomRingTransferInput, RelayedTransferInput, RingError,
+    RingRelay, RingTransfer,
+};
 
 #[derive(Default)]
 struct StubRelay {
@@ -230,13 +237,362 @@ async fn a_confidential_relay_carries_its_token_account_setup() {
     assert_eq!(token_account_setup, &setup);
 }
 
+/// What a relay rebuilds from the wallet's request, its proof inputs and the frame it assembles.
+async fn relay_round_trip(
+    client: &RingClient<Chain, Chain>,
+    transfer: &CustomRingTransfer<'_>,
+    fee_payer: Address,
+) -> (RelayProofInputs, Assembled) {
+    let relay = StubRelay::default();
+    transfer
+        .prepare_relay(
+            client.zolana(),
+            RelayQuote {
+                fee_payer: SerializablePubkey(fee_payer),
+                valid_until_slot: u64::MAX,
+            },
+        )
+        .await
+        .unwrap()
+        .send(&relay)
+        .await
+        .unwrap()
+        .submitted()
+        .unwrap();
+    let (inputs, signature) = {
+        let prepared = relay.prepared.lock().unwrap();
+        let [PrepareRelayRequest {
+            intent:
+                RelayIntent::Confidential {
+                    proof_inputs,
+                    owner_signature,
+                    ..
+                },
+            ..
+        }] = prepared.as_slice()
+        else {
+            panic!("one confidential prepareRelay call");
+        };
+        (
+            RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap(),
+            owner_signature.0,
+        )
+    };
+    let assembled = RingTransfer::relayed(RelayedTransferInput {
+        ring: ring(),
+        proof_inputs: &inputs,
+        fee_payer,
+    })
+    .with_owner_signature(signature.into())
+    .with_buffered_settlement()
+    .assemble(client)
+    .await
+    .unwrap();
+    (inputs, assembled)
+}
+
+/// A frame at its shape's limit, one ring data hash on every slot, every leg paying its own owner.
+struct FullLoad {
+    sender: ShieldedKeypair,
+    recipients: Vec<ShieldedKeypair>,
+    destinations: Vec<ShieldedKeypair>,
+    notes: u64,
+}
+
+const FULL_LOAD_PAYER: Address = Address::new_from_array([0x44; 32]);
+
+impl FullLoad {
+    fn new(notes: u64, outputs: u8, legs: u8) -> Self {
+        Self {
+            sender: keypair(1),
+            recipients: (0..outputs).map(|slot| keypair(10 + slot)).collect(),
+            destinations: (0..legs).map(|leg| keypair(40 + leg)).collect(),
+            notes,
+        }
+    }
+
+    fn everyone(&self) -> impl Iterator<Item = &ShieldedKeypair> {
+        core::iter::once(&self.sender)
+            .chain(&self.recipients)
+            .chain(&self.destinations)
+    }
+
+    fn registry(&self) -> Registry {
+        let owners: Vec<(&ShieldedKeypair, u64)> =
+            self.everyone().map(|owner| (owner, 1)).collect();
+        Registry::new(&owners)
+    }
+
+    /// The in-proof owner's transfer, settled from a buffer since the widest frames pass one transaction.
+    fn transfer(&self) -> CustomRingTransfer<'_> {
+        let utxos = (0..self.notes)
+            .map(|leaf| ring_utxo(&self.sender, Mint::SOL, 100, leaf))
+            .collect();
+        let mut transaction =
+            ConfidentialTransaction::new_with_ring(utxos, FULL_LOAD_PAYER, ring().program_id())
+                .unwrap();
+        let paid = (self.recipients.len() - 1 + self.destinations.len()) as u64;
+        for (slot, recipient) in self.recipients.iter().enumerate() {
+            transaction
+                .add_output_utxo(SppProofOutputUtxo {
+                    owner_address: Some(recipient.shielded_address().unwrap()),
+                    asset: Mint::SOL,
+                    amount: match slot {
+                        0 => self.notes * 100 - paid,
+                        _ => 1,
+                    },
+                    ring_program_id: Some(ring().program_id()),
+                    ring_data_hash: Some([3; 32]),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let accounts = self
+            .destinations
+            .iter()
+            .map(|destination| {
+                let recipient = destination
+                    .shielded_address()
+                    .unwrap()
+                    .solana_address()
+                    .unwrap();
+                transaction.withdraw_sol(1, recipient).unwrap();
+                TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts { recipient })
+            })
+            .collect();
+        CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &self.sender,
+            nullifier_key: Some(&self.sender.nullifier_key),
+            transaction,
+        })
+        .with_interface_transfer_accounts(accounts)
+        .with_in_proof_owner(&self.sender.signing_key)
+        .with_buffered_settlement()
+    }
+}
+
+/// With no salted list the wallet's counts are all selection reads.
+#[tokio::test]
+async fn relay_and_submission_pick_one_key_at_full_load() {
+    for (notes, outputs, legs, wide) in [
+        (24, 2, 4, false),
+        (24, 4, 4, false),
+        (16, 8, 4, false),
+        (5, 16, 8, false),
+        (8, 16, 8, true),
+    ] {
+        let load = FullLoad::new(notes, outputs, legs);
+        let client = Chain::ring(RingSettings {
+            has_policy: true,
+            ..RingSettings::new(RingMode::Confidential)
+        })
+        .with_registry(load.registry(), &pipeline_rules())
+        .client();
+        let transfer = load.transfer();
+        let (inputs, relayed) = relay_round_trip(&client, &transfer, FULL_LOAD_PAYER).await;
+        let submitted = transfer.frame(&client).await.unwrap();
+        let shape = (notes, outputs);
+        assert_eq!(inputs.wide_owners, wide, "{shape:?}");
+        assert_eq!(relayed.frame.parts.wide_owners, wide, "{shape:?}");
+        assert_eq!(submitted.frame.parts.wide_owners, wide, "{shape:?}");
+    }
+}
+
+/// Past the narrow row's tracking only if every destination holds a row, a read the wallet cannot make.
+#[tokio::test]
+async fn a_salted_read_raises_the_flag_on_a_frame_of_one_stream() {
+    use custom_ring_interface::domain;
+    use zolana_ring_policy::{ListId, Member, Rule, RuleTable, Subject};
+
+    let salt = [7; 32];
+    let load = FullLoad::new(5, 16, 8);
+    let rules = RuleTable::builder()
+        .rule(Rule::forbid(Subject::Sender, ListId::PrivateBlock))
+        .build();
+    let addresses: Vec<_> = load
+        .everyone()
+        .map(|owner| owner.shielded_address().unwrap())
+        .collect();
+    let client = Chain::ring(RingSettings::new(RingMode::Confidential))
+        .with_registry(load.registry(), &rules)
+        .with_tracking_tag(&addresses, domain::list_tag(&salt).unwrap())
+        .client();
+    let transfer = addresses.iter().fold(load.transfer(), |transfer, address| {
+        let member =
+            Member::from_bytes(address.signing_pubkey.owner_proof_input_hash().unwrap()).unwrap();
+        transfer.with_list_salt(member, salt)
+    });
+    let (inputs, relayed) = relay_round_trip(&client, &transfer, FULL_LOAD_PAYER).await;
+    let submitted = transfer.frame(&client).await.unwrap();
+    assert!(!inputs.wide_owners);
+    assert!(relayed.frame.parts.wide_owners);
+    assert!(submitted.frame.parts.wide_owners);
+}
+
+/// A policy entry past two outputs stays on its own key, the wide entry key takes two outputs alone.
+#[tokio::test]
+async fn an_unread_entry_takes_its_capacity_from_its_outputs() {
+    use crate::tests::support::{payer, wallet, TREE_ID};
+    use spr_transaction::{Data, Utxo};
+
+    for (notes, outputs) in [(8, 4), (2, 8), (4, 8)] {
+        let load = FullLoad::new(notes, outputs, 0);
+        let client = Chain::ring(RingSettings {
+            has_policy: true,
+            ..RingSettings::new(RingMode::Anonymous)
+        })
+        .with_registry(load.registry(), &pipeline_rules())
+        .client();
+        let utxos = (0..notes)
+            .map(|leaf| {
+                wallet(
+                    Utxo {
+                        owner: load.sender.signing_pubkey(),
+                        asset: Mint::SOL,
+                        amount: 100,
+                        blinding: spr_keypair::random_blinding(),
+                        ring_program_id: None,
+                        data: Data::default(),
+                    },
+                    &load.sender.nullifier_key,
+                    TREE_ID,
+                    leaf,
+                )
+            })
+            .collect();
+        let mut transaction =
+            ConfidentialTransaction::new_with_ring(utxos, payer(), ring().program_id()).unwrap();
+        for recipient in &load.recipients {
+            transaction
+                .transfer_with_ring(
+                    &recipient.shielded_address().unwrap(),
+                    Mint::SOL,
+                    1,
+                    Some(ring().program_id()),
+                )
+                .unwrap();
+        }
+        let transfer = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &load.sender,
+            nullifier_key: Some(&load.sender.nullifier_key),
+            transaction,
+        })
+        .with_buffered_settlement();
+        let sealed = transfer.seal_unread(client.zolana()).await.unwrap();
+        assert!(!sealed.preview.wide_owners, "{notes}x{outputs}");
+        let submitted = transfer.frame(&client).await.unwrap();
+        assert!(!submitted.frame.parts.wide_owners, "{notes}x{outputs}");
+        assert!(submitted.frame.parts.entry, "{notes}x{outputs}");
+    }
+}
+
+/// Counts follow the run and only a nonzero `data_hash` of a live slot, a ring data hash stays outside.
+#[test]
+fn signer_data_counts_read_the_signer_run_in_order() {
+    use super::super::signer_data_counts;
+
+    let (alice, bob) = (keypair(1), keypair(2));
+    let address = |owner: &ShieldedKeypair| owner.shielded_address().unwrap();
+    let slot = |owner: &ShieldedKeypair, data_hash, ring_data_hash| SppProofOutputUtxo {
+        owner_address: Some(address(owner)),
+        asset: Mint::SOL,
+        amount: 1,
+        ring_program_id: Some(ring().program_id()),
+        data_hash,
+        ring_data_hash,
+        ..Default::default()
+    };
+    let run = [
+        address(&alice).solana_address().unwrap(),
+        address(&bob).solana_address().unwrap(),
+    ];
+    let outputs = [
+        slot(&bob, Some([1; 32]), None),
+        slot(&alice, Some([2; 32]), None),
+        slot(&bob, Some([3; 32]), None),
+        slot(&alice, None, Some([4; 32])),
+        slot(&bob, Some([0; 32]), None),
+    ];
+    let counts = signer_data_counts(&run, &outputs).unwrap().unwrap();
+    assert_eq!(
+        (counts.count(0), counts.count(1), counts.count(2)),
+        (1, 2, 0)
+    );
+
+    let unsigned = signer_data_counts(&[], &outputs).unwrap();
+    assert_eq!(unsigned, None);
+    let ordinary = [slot(&alice, None, Some([4; 32]))];
+    assert_eq!(signer_data_counts(&run, &ordinary).unwrap(), None);
+}
+
+/// The prover reads the packed value the frame carries, a frame with no count sends none.
+#[tokio::test]
+async fn a_signer_owned_data_slot_reaches_the_frame_and_the_request() {
+    let sender = keypair(1);
+    let recipient = keypair(2);
+    let client = Chain::ring(RingSettings {
+        has_policy: true,
+        ..RingSettings::new(RingMode::Confidential)
+    })
+    .with_registry(
+        Registry::new(&[(&sender, 1), (&recipient, 1)]),
+        &pipeline_rules(),
+    )
+    .client();
+    let assembled = |owner: &ShieldedKeypair, data_hash| {
+        let (client, sender, owner) = (&client, &sender, owner.shielded_address().unwrap());
+        async move {
+            let mut transaction = ConfidentialTransaction::new_with_ring(
+                vec![ring_utxo(sender, Mint::SOL, 10, 0)],
+                FULL_LOAD_PAYER,
+                ring().program_id(),
+            )
+            .unwrap();
+            transaction
+                .add_output_utxo(SppProofOutputUtxo {
+                    owner_address: Some(owner),
+                    asset: Mint::SOL,
+                    amount: 10,
+                    ring_program_id: Some(ring().program_id()),
+                    data_hash,
+                    ..Default::default()
+                })
+                .unwrap();
+            CustomRingTransfer::new(CustomRingTransferInput {
+                ring: ring(),
+                sender,
+                nullifier_key: Some(&sender.nullifier_key),
+                transaction,
+            })
+            .assemble(client)
+            .await
+            .unwrap()
+        }
+    };
+    let body = |assembled: &Assembled| {
+        let request = assembled.request().unwrap();
+        serde_json::to_value(
+            crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+        )
+        .unwrap()
+    };
+
+    let counted = assembled(&sender, Some([5; 32])).await;
+    let counts = counted.frame.parts.extensions.signer_data_counts.unwrap();
+    assert_eq!(counts.count(0), 1);
+    assert_eq!(body(&counted)["signerDataCounts"], counts.packed());
+
+    let plain = assembled(&recipient, None).await;
+    assert_eq!(plain.frame.parts.extensions.signer_data_counts, None);
+    assert!(body(&plain).get("signerDataCounts").is_none());
+}
+
 /// The Go golden test solves the relayed tail.
 #[tokio::test]
 async fn a_relayed_spend_proves_on_the_key_its_owner_sealed() {
     use custom_ring_interface::key_catalog::RingCircuit;
-    use spr_transaction::SppProofOutputUtxo;
-
-    use crate::{RelayedTransferInput, RingTransfer};
 
     let sender = keypair(1);
     let recipient = keypair(2);
@@ -270,56 +626,14 @@ async fn a_relayed_spend_proves_on_the_key_its_owner_sealed() {
                     ..Default::default()
                 })
                 .unwrap();
-            let relay = StubRelay::default();
-            CustomRingTransfer::new(CustomRingTransferInput {
+            let transfer = CustomRingTransfer::new(CustomRingTransferInput {
                 ring: ring(),
                 sender,
                 nullifier_key: Some(&sender.nullifier_key),
                 transaction,
             })
-            .with_in_proof_owner(&sender.signing_key)
-            .prepare_relay(
-                client.zolana(),
-                RelayQuote {
-                    fee_payer: SerializablePubkey(fee_payer),
-                    valid_until_slot: u64::MAX,
-                },
-            )
-            .await
-            .unwrap()
-            .send(&relay)
-            .await
-            .unwrap()
-            .submitted()
-            .unwrap();
-            let (inputs, signature) = {
-                let prepared = relay.prepared.lock().unwrap();
-                let [PrepareRelayRequest {
-                    intent:
-                        RelayIntent::Confidential {
-                            proof_inputs,
-                            owner_signature,
-                            ..
-                        },
-                    ..
-                }] = prepared.as_slice()
-                else {
-                    panic!("one confidential prepareRelay call");
-                };
-                (
-                    RelayProofInputs::decode(proof_inputs.as_bytes()).unwrap(),
-                    owner_signature.0,
-                )
-            };
-            let assembled = RingTransfer::relayed(RelayedTransferInput {
-                ring: ring(),
-                proof_inputs: &inputs,
-                fee_payer,
-            })
-            .with_owner_signature(signature.into())
-            .assemble(client)
-            .await
-            .unwrap();
+            .with_in_proof_owner(&sender.signing_key);
+            let (inputs, assembled) = relay_round_trip(client, &transfer, fee_payer).await;
             assert_eq!(assembled.frame.parts.wide_owners, inputs.wide_owners);
             let request = assembled.request().unwrap();
             let body = serde_json::to_value(
@@ -343,8 +657,10 @@ async fn a_relayed_spend_proves_on_the_key_its_owner_sealed() {
     assert_eq!((wide, shape(circuit)), (false, (2, 24, false)));
     let (wide, circuit, _) = relayed(25, None).await;
     assert_eq!((wide, shape(circuit)), (true, (2, 49, true)));
-    let (wide, circuit, built) = relayed(2, Some([3; 32])).await;
-    assert_eq!((wide, shape(circuit)), (true, (8, 24, true)));
+    let (wide, circuit, _) = relayed(2, Some([3; 32])).await;
+    assert_eq!((wide, shape(circuit)), (false, (2, 24, false)));
+    let (wide, circuit, built) = relayed(25, Some([3; 32])).await;
+    assert_eq!((wide, shape(circuit)), (true, (2, 49, true)));
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/custom-ring-transfer-relayed-wide-data.json");
@@ -1229,6 +1545,7 @@ mod delegate_message {
 mod public_signers {
     //! The public owners of a relayed transfer, each rebuilds its own slots against the frame.
 
+    use custom_ring_interface::statement::SignerDataCounts;
     use custom_ring_interface::{
         cosign::ApprovalMask, tag, CoSignScope, InstructionTag, RingRail, RingTransactData,
     };
@@ -1240,19 +1557,23 @@ mod public_signers {
     use super::*;
     use crate::{
         tests::support::relay_message, ApplicationData, ApprovalLimit, ApprovalOpening, CoOwner,
-        CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval, MessageMismatch, NoteData,
-        OwnerApproval, PendingSignature, PreparedRelay, RelaySent, RelayTransferTerms,
-        RingTransfer, SlotOpening,
+        CoSignerApproval, CoSignerRule, CustomRingConfig, ExactApproval, FundedLeg, FunderApproval,
+        MessageMismatch, NoteData, OwnerApproval, PendingSignature, PreparedRelay,
+        RelayFunderTerms, RelaySent, RelayTransferTerms, RingTransfer, SlotOpening,
     };
 
-    const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
+    pub(super) const FEE_PAYER: Address = Address::new_from_array([0x44; 32]);
     const UNITS: u32 = custom_ring_interface::compute_unit_limit(InstructionTag::Transfer);
 
-    fn address(owner: &ShieldedKeypair) -> Address {
+    pub(super) fn address(owner: &ShieldedKeypair) -> Address {
         Address::new_from_array(owner.signing_pubkey().as_ed25519().unwrap())
     }
 
-    fn chain(mode: RingMode, co_signer: Option<Address>, owners: &[&ShieldedKeypair]) -> Chain {
+    pub(super) fn chain(
+        mode: RingMode,
+        co_signer: Option<Address>,
+        owners: &[&ShieldedKeypair],
+    ) -> Chain {
         let owners: Vec<(&ShieldedKeypair, u64)> = owners.iter().map(|owner| (*owner, 1)).collect();
         Chain::ring(RingSettings {
             has_policy: true,
@@ -1262,7 +1583,10 @@ mod public_signers {
         .with_registry(Registry::new(&owners), &pipeline_rules())
     }
 
-    fn transfer<'a>(sender: &'a ShieldedKeypair, notes: Vec<WalletUtxo>) -> CustomRingTransfer<'a> {
+    pub(super) fn transfer<'a>(
+        sender: &'a ShieldedKeypair,
+        notes: Vec<WalletUtxo>,
+    ) -> CustomRingTransfer<'a> {
         CustomRingTransfer::new(CustomRingTransferInput {
             ring: ring(),
             sender,
@@ -1276,7 +1600,7 @@ mod public_signers {
         })
     }
 
-    fn pay(to: &ShieldedKeypair, amount: u64) -> AnonymousPayment {
+    pub(super) fn pay(to: &ShieldedKeypair, amount: u64) -> AnonymousPayment {
         AnonymousPayment {
             to: RingAddress {
                 recipient: to.shielded_address().unwrap(),
@@ -1290,21 +1614,21 @@ mod public_signers {
         }
     }
 
-    fn quote() -> RelayQuote {
+    pub(super) fn quote() -> RelayQuote {
         RelayQuote {
             fee_payer: SerializablePubkey(FEE_PAYER),
             valid_until_slot: u64::MAX,
         }
     }
 
-    struct Sent {
-        request: PrepareRelayRequest,
-        relay_id: RelayId,
-        pending: PendingSignature,
+    pub(super) struct Sent {
+        pub request: PrepareRelayRequest,
+        pub relay_id: RelayId,
+        pub pending: PendingSignature,
     }
 
     /// `prepare_relay` sets the expectation, a relay that asks reaches a wallet holding terms.
-    async fn sent(prepared: PreparedRelay) -> Sent {
+    pub(super) async fn sent(prepared: PreparedRelay) -> Sent {
         let relay = StubRelay {
             asks_signature: true,
             ..StubRelay::default()
@@ -1325,6 +1649,18 @@ mod public_signers {
         client: &crate::RingClient<Chain, Chain>,
         request: &PrepareRelayRequest,
     ) -> Instruction {
+        let assembled = assembled(client, request).await;
+        let frame = &assembled.frame;
+        frame
+            .accounts
+            .instruction(frame.ring, &assembled.config, &frame.parts)
+            .unwrap()
+    }
+
+    pub(super) async fn assembled(
+        client: &crate::RingClient<Chain, Chain>,
+        request: &PrepareRelayRequest,
+    ) -> crate::pipeline::Assembled {
         let (RelayIntent::Anonymous {
             proof_inputs,
             owner_signature,
@@ -1348,12 +1684,7 @@ mod public_signers {
         for co_signer in &request.co_signers {
             relayed = relayed.with_co_signer(co_signer.0);
         }
-        let assembled = relayed.assemble(client).await.unwrap();
-        let frame = &assembled.frame;
-        frame
-            .accounts
-            .instruction(frame.ring, &assembled.config, &frame.parts)
-            .unwrap()
+        relayed.assemble(client).await.unwrap()
     }
 
     /// The terms cross to the signer's wallet as JSON.
@@ -1931,6 +2262,336 @@ mod public_signers {
         .pending()
     }
 
+    /// `frame` under the proved counts `packed` names.
+    async fn frame_counting(
+        client: &crate::RingClient<Chain, Chain>,
+        request: &PrepareRelayRequest,
+        packed: u64,
+    ) -> Instruction {
+        let mut assembled = assembled(client, request).await;
+        assembled.frame.parts.extensions.signer_data_counts =
+            (packed != 0).then(|| SignerDataCounts::new(packed).unwrap());
+        let frame = &assembled.frame;
+        frame
+            .accounts
+            .instruction(frame.ring, &assembled.config, &frame.parts)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_signers_terms_open_exactly_the_data_outputs_the_proof_counts() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let paying = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 20, 0)])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(data_payment(&payee))
+            .unwrap()
+            .with_payment(data_payment(&payee))
+            .unwrap()
+            .with_payment(pay(&payee, 1))
+            .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let terms = asked
+            .pending
+            .transfer_terms(address(&payee))
+            .unwrap()
+            .clone();
+        let (data, ordinary): (Vec<SlotOpening>, Vec<SlotOpening>) = terms
+            .slots
+            .iter()
+            .cloned()
+            .partition(|opening| opening.data_hash.0 != [0; 32]);
+        let ([first, second], [ordinary]) = (data.as_slice(), ordinary.as_slice()) else {
+            panic!("two data outputs and one ordinary payment");
+        };
+        let built = frame_counting(&client, &asked.request, 2).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let opening = |slots: &[&SlotOpening]| RelayTransferTerms {
+            slots: slots.iter().copied().cloned().collect(),
+            ..terms.clone()
+        };
+        let pending = |terms: &RelayTransferTerms| {
+            pending_for(&asked.relay_id, message.clone(), terms, &config)
+        };
+
+        signs(&pending(&terms), &payee).await;
+        // An ordinary payment stays out of the count either way.
+        signs(&pending(&opening(&[first, second])), &payee).await;
+
+        let omitted = opening(&[first]);
+        let duplicated = opening(&[first, first]);
+        let substituted = opening(&[first, ordinary]);
+        let only_ordinary = opening(&[ordinary]);
+        for short in [&omitted, &duplicated, &substituted, &only_ordinary] {
+            refused(&pending(short), &payee, MessageMismatch::DataOutputCount);
+        }
+
+        // An absent extension reads zero, a signer still refuses an output no proof counts.
+        let uncounted = frame_counting(&client, &asked.request, 0).await;
+        refused(
+            &pending_for(
+                &asked.relay_id,
+                relay_message(&FEE_PAYER, core::slice::from_ref(&uncounted), UNITS).0,
+                &terms,
+                &config,
+            ),
+            &payee,
+            MessageMismatch::DataOutputCount,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_signer_reads_the_count_at_its_own_run_entry() {
+        let (sender, lead, next) = (keypair(1), keypair(2), keypair(3));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &lead, &next]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let paying = transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 20, 0)])
+            .with_anonymous_signer(&sender.signing_key)
+            .with_payment(data_payment(&lead))
+            .unwrap()
+            .with_payment(data_payment(&next))
+            .unwrap()
+            .with_payment(data_payment(&next))
+            .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let lead_terms = asked
+            .pending
+            .transfer_terms(address(&lead))
+            .unwrap()
+            .clone();
+        let next_terms = asked
+            .pending
+            .transfer_terms(address(&next))
+            .unwrap()
+            .clone();
+        let bits = SignerDataCounts::ENTRY_BITS;
+        let message =
+            |built: &Instruction| relay_message(&FEE_PAYER, core::slice::from_ref(built), UNITS).0;
+
+        let honest = frame_counting(&client, &asked.request, 1 | 2 << bits).await;
+        let pending = |built: &Instruction, terms: &RelayTransferTerms| {
+            pending_for(&asked.relay_id, message(built), terms, &config)
+        };
+        signs(&pending(&honest, &lead_terms), &lead).await;
+        signs(&pending(&honest, &next_terms), &next).await;
+
+        // The lanes of the other order, each signer's own slots still open.
+        let swapped = frame_counting(&client, &asked.request, 2 | 1 << bits).await;
+        refused(
+            &pending(&swapped, &lead_terms),
+            &lead,
+            MessageMismatch::DataOutputCount,
+        );
+        refused(
+            &pending(&swapped, &next_terms),
+            &next,
+            MessageMismatch::DataOutputCount,
+        );
+
+        // A second copy of the PDA leaves no list the program would read.
+        let mut copied = honest.clone();
+        copied
+            .accounts
+            .push(solana_instruction::AccountMeta::new_readonly(
+                ring().ring_auth_pda(),
+                false,
+            ));
+        refused(
+            &pending(&copied, &lead_terms),
+            &lead,
+            MessageMismatch::Accounts,
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exact_opening_holds_the_keys_rows_under_a_nonzero_blinder() {
+        let (sender, payee, co_signer) = (keypair(1), keypair(2), keypair(6));
+        let client = chain(
+            RingMode::Confidential,
+            Some(address(&co_signer)),
+            &[&sender, &payee],
+        )
+        .client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let mut transaction = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        transaction
+            .transfer_with_ring(
+                &payee.shielded_address().unwrap(),
+                Mint::SOL,
+                4,
+                Some(ring().program_id()),
+            )
+            .unwrap();
+        let attempt = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction,
+        })
+        .with_co_signer(address(&co_signer))
+        .with_exact_approval()
+        .with_in_proof_owner(&sender.signing_key);
+        let asked = sent(
+            attempt
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let opening = asked.pending.approval_opening().unwrap().clone();
+        let built = frame(&client, &asked.request).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let rule = |opening: ApprovalOpening| {
+            CoSignerRule::Exact(ExactApproval {
+                opening,
+                limits: vec![ApprovalLimit {
+                    mint: Mint::SOL.asset,
+                    peak: 4,
+                    outflow: 4,
+                }],
+                seen_blinders: Vec::new(),
+            })
+        };
+        let pending = |opening: ApprovalOpening| {
+            co_signer_pending(
+                &asked.relay_id,
+                message.clone(),
+                address(&co_signer),
+                rule(opening),
+                &config,
+            )
+        };
+
+        let mut short_public = opening.clone();
+        short_public.public.pop();
+        refused(
+            &pending(short_public),
+            &co_signer,
+            MessageMismatch::ApprovalOpeningLayout,
+        );
+        let mut long_outputs = opening.clone();
+        long_outputs.outputs.push(opening.outputs[0].clone());
+        refused(
+            &pending(long_outputs),
+            &co_signer,
+            MessageMismatch::ApprovalOpeningLayout,
+        );
+        let zero_blinder = ApprovalOpening {
+            blinder: spr_indexer_api::Hash([0; 32]),
+            ..opening.clone()
+        };
+        refused(
+            &pending(zero_blinder),
+            &co_signer,
+            MessageMismatch::ZeroApprovalBlinder,
+        );
+        signs(&pending(opening), &co_signer).await;
+    }
+
+    #[tokio::test]
+    async fn a_funder_signs_its_own_deposit_legs_and_nothing_else() {
+        use spr_program::instruction::{
+            TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+        };
+        let (sender, payee, funder) = (keypair(1), keypair(2), keypair(4));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee, &funder]).client();
+        let config = ring().require_config(client.zolana()).await.unwrap();
+        let mut transaction = ConfidentialTransaction::new_with_ring(
+            vec![ring_utxo(&sender, Mint::SOL, 10, 0)],
+            FEE_PAYER,
+            ring().program_id(),
+        )
+        .unwrap();
+        transaction.deposit_sol(5, address(&funder)).unwrap();
+        let paying = CustomRingTransfer::new(CustomRingTransferInput {
+            ring: ring(),
+            sender: &sender,
+            nullifier_key: Some(&sender.nullifier_key),
+            transaction,
+        })
+        .with_interface_transfer_accounts(vec![TransactInterfaceTransferAccounts::Sol(
+            TransactSolTransferAccounts {
+                recipient: address(&funder),
+            },
+        )])
+        .with_anonymous_signer(&sender.signing_key)
+        .with_payment(pay(&payee, 4))
+        .unwrap();
+        let asked = sent(
+            paying
+                .prepare_relay(client.zolana(), quote())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let terms = asked
+            .pending
+            .funder_terms(address(&funder))
+            .unwrap()
+            .clone();
+        assert_eq!(
+            terms.legs,
+            [FundedLeg {
+                mint: None,
+                amount: 5
+            }]
+        );
+        assert!(asked.pending.transfer_terms(address(&funder)).is_none());
+        let built = frame(&client, &asked.request).await;
+        let message = relay_message(&FEE_PAYER, core::slice::from_ref(&built), UNITS).0;
+        let pending = |terms: RelayFunderTerms| {
+            FunderApproval {
+                relay_id: asked.relay_id.clone(),
+                message: message.clone(),
+                terms,
+                config: &config,
+            }
+            .pending()
+        };
+        signs(&pending(terms.clone()), &funder).await;
+        refused(
+            &pending(terms.clone()),
+            &payee,
+            MessageMismatch::Unrequested,
+        );
+        let understated = RelayFunderTerms {
+            legs: vec![FundedLeg {
+                mint: None,
+                amount: 4,
+            }],
+            ..terms.clone()
+        };
+        refused(&pending(understated), &funder, MessageMismatch::FunderLegs);
+        let extra_leg = RelayFunderTerms {
+            legs: vec![terms.legs[0], terms.legs[0]],
+            ..terms.clone()
+        };
+        refused(&pending(extra_leg), &funder, MessageMismatch::FunderLegs);
+        let no_legs = RelayFunderTerms {
+            legs: Vec::new(),
+            ..terms.clone()
+        };
+        refused(&pending(no_legs), &funder, MessageMismatch::Unrequested);
+    }
+
     /// The TypeScript check reads the same frames, neither rule opens a slot.
     #[tokio::test]
     async fn the_shared_co_signer_messages_keep_their_verdicts() {
@@ -2265,6 +2926,162 @@ mod public_signers {
                 .commitment(&[7; 32])
                 .unwrap()
         );
+    }
+}
+
+mod request_fixtures {
+    //! Requests the normal SDK path writes, `prover/ring` solves each with no key.
+
+    use custom_ring_interface::key_catalog::RingCircuit;
+    use custom_ring_interface::stream::DeliveredSlot;
+    use spr_keypair::{random_blinding, ShieldedKeypair, X25519Pubkey};
+    use spr_transaction::{Data, Utxo};
+
+    use super::public_signers::{assembled, chain, pay, quote, sent, transfer};
+    use super::*;
+    use crate::{
+        relay_message::ApprovalOpening,
+        tests::support::{wallet, TREE_ID},
+    };
+
+    /// `UPDATE_PROVER_JSON=1` writes the file, `TestRustFixtures` solves what it holds.
+    fn pinned(
+        name: &str,
+        assembled: &crate::pipeline::Assembled,
+    ) -> (serde_json::Value, RingCircuit) {
+        let request = assembled.request().unwrap();
+        let built = serde_json::to_value(
+            crate::prover::RequestBody::new(request.circuit, &request.body).unwrap(),
+        )
+        .unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/custom-ring-transfer-{name}.json"));
+        if std::env::var_os("UPDATE_PROVER_JSON").is_some() {
+            std::fs::write(&path, serde_json::to_string_pretty(&built).unwrap() + "\n").unwrap();
+        }
+        assert!(path.exists());
+        (built, request.circuit)
+    }
+
+    /// The first message, opened under the sender's viewing key at the index past every slot.
+    fn sender_bundle(
+        assembled: &crate::pipeline::Assembled,
+        sender: &ShieldedKeypair,
+    ) -> custom_ring_interface::SenderBundle {
+        let inputs = &assembled.frame.proof_inputs;
+        let external = &inputs.external_data;
+        let published = external.outputs.len();
+        let tx_viewing_pk = X25519Pubkey::from_bytes(external.tx_viewing_pk).unwrap();
+        let secret = DeliveredSlot {
+            agreement: &sender.viewing_key.ecdh(&tx_viewing_pk).unwrap(),
+            tx_viewing_pk: tx_viewing_pk.as_bytes(),
+            recipient_viewing_pk: sender.viewing_pubkey().as_bytes(),
+            salt: &external.salt,
+            output_index: published as u32,
+            first_nullifier: &inputs.input_utxos[0].nullifier(),
+        }
+        .secret()
+        .unwrap();
+        let body =
+            custom_ring_interface::ring_sender_bundle_output_body(&external.messages[0].data)
+                .unwrap();
+        zolana_ring_transaction::open_sender_bundle(body, &secret, published).unwrap()
+    }
+
+    fn assert_opens(built: &serde_json::Value, opening: &ApprovalOpening) {
+        let digest = built["approvalTotals"].as_str().unwrap();
+        assert_eq!(
+            built["approvalBlinder"].as_str().unwrap(),
+            format!("0x{}", hex::encode(opening.blinder.0))
+        );
+        assert_eq!(digest.len(), 66);
+        assert_ne!(digest, format!("0x{}", hex::encode([0; 32])));
+    }
+
+    #[tokio::test]
+    async fn an_exact_approval_writes_a_digest_its_opening_rebuilds_on_both_paths() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let build = || {
+            transfer(&sender, vec![ring_utxo(&sender, Mint::SOL, 10, 0)])
+                .with_exact_approval()
+                .with_anonymous_signer(&sender.signing_key)
+                .with_payment(pay(&payee, 4))
+                .unwrap()
+        };
+        let direct = build().assemble(&client).await.unwrap();
+        let (built, _) = pinned("exact-approval", &direct);
+        assert_opens(&built, direct.frame.approval_opening.as_ref().unwrap());
+
+        let relay = build();
+        let asked = sent(relay.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let opening = asked.pending.approval_opening().unwrap().clone();
+        let relayed = assembled(&client, &asked.request).await;
+        let (built, _) = pinned("relayed-exact-approval", &relayed);
+        assert_opens(&built, &opening);
+        assert_eq!(relayed.frame.approval_opening.as_ref(), Some(&opening));
+    }
+
+    /// A default note of 40 enters 25, the sender's 15 returns into the ring.
+    #[tokio::test]
+    async fn an_anonymous_entry_returns_its_change_into_the_ring_on_both_paths() {
+        let (sender, payee) = (keypair(1), keypair(2));
+        let client = chain(RingMode::Anonymous, None, &[&sender, &payee]).client();
+        let entry = wallet(
+            Utxo {
+                owner: sender.signing_pubkey(),
+                asset: Mint::SOL,
+                amount: 40,
+                blinding: random_blinding(),
+                ring_program_id: None,
+                data: Data::default(),
+            },
+            &sender.nullifier_key,
+            TREE_ID,
+            0,
+        );
+        let build = || {
+            transfer(&sender, vec![entry.clone()])
+                .with_anonymous_signer(&sender.signing_key)
+                .with_payment(pay(&payee, 25))
+                .unwrap()
+        };
+        let ring_id = ring().program_id();
+        let check = |assembled: &crate::pipeline::Assembled, circuit: RingCircuit| {
+            let RingCircuit::Transfer { entry, .. } = circuit else {
+                panic!("a transfer key");
+            };
+            assert!(entry);
+            let outputs = &assembled.frame.proof_inputs.output_utxos;
+            let live: Vec<_> = outputs
+                .iter()
+                .filter(|output| !output.is_dummy())
+                .map(|output| (output.owner_address, output.ring_program_id, output.amount))
+                .collect();
+            assert_eq!(
+                live,
+                [
+                    (sender.shielded_address().ok(), Some(ring_id), 15),
+                    (payee.shielded_address().ok(), Some(ring_id), 25),
+                ]
+            );
+            let bundle = sender_bundle(assembled, &sender);
+            assert_eq!(
+                (bundle.mint, bundle.amount, bundle.sol_amount),
+                (Mint::SOL.asset.to_bytes(), 15, 0)
+            );
+            assert_eq!(bundle.recipient_keys[0], [0; 32]);
+            assert_eq!(bundle.recipient_keys[1], payee.viewing_pubkey().u());
+        };
+        let direct = build().assemble(&client).await.unwrap();
+        let (_, circuit) = pinned("anonymous-entry", &direct);
+        check(&direct, circuit);
+
+        let relay = build();
+        let asked = sent(relay.prepare_relay(client.zolana(), quote()).await.unwrap()).await;
+        let relayed = assembled(&client, &asked.request).await;
+        let (_, circuit) = pinned("relayed-anonymous-entry", &relayed);
+        check(&relayed, circuit);
     }
 }
 

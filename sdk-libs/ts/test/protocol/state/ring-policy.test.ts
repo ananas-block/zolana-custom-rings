@@ -67,7 +67,6 @@ function row(
 const bit = (id: ListId): number => 1 << (id - 1);
 const OUTPUT_OWNER = 1;
 const SENDER = 2;
-const EXIT = 3;
 const ASSET = 4;
 const PRESENT = 1;
 const ABSENT = 2;
@@ -161,7 +160,7 @@ describe("rule rows", () => {
         { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, threshold: 1n },
       ],
       ["UnknownGuardTag", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, guardTag: 3 }],
-      ["ExitDestination", { subject: EXIT, mode: PRESENT, mask: allow }],
+      ["UnknownSubject", { subject: 3, mode: PRESENT, mask: allow }],
       ["ListInBothSets", { subject: OUTPUT_OWNER, mode: PRESENT, mask: allow, alternative: allow }],
       ["EmptyLists", { subject: OUTPUT_OWNER, mode: PRESENT, mask: 0 }],
       ["SenderGuard", { subject: SENDER, mode: PRESENT, mask: allow, guardTag: 1, threshold: 5n }],
@@ -320,9 +319,6 @@ describe("rule encoding", () => {
     for (const [input, expected] of cases) {
       expect(encodeRule(input)).toEqual(row(expected));
     }
-    expect(reason(() => encodeRule(require("exitDestination", ListId.allow)))).toBe(
-      "ExitDestination",
-    );
     expect(reason(() => encodeRule(above(require("outputOwner", ListId.allow), 1n << 64n)))).toBe(
       "ThresholdRange",
     );
@@ -363,7 +359,6 @@ describe("rule table builder", () => {
         { rules: [rule("outputOwner", [ListId.allow], [ListId.allow, ListId.block])] },
       ],
       ["SenderGuard", { rules: [above(forbid("sender", ListId.frozen), 10n)] }],
-      ["ExitDestination", { rules: [require("exitDestination", ListId.allow)] }],
       ["ZeroThreshold", { rules: [above(require("outputOwner", ListId.approval), 0n)] }],
       ["DuplicateRule", { rules: [requireAllow, above(requireAllow, 10n)] }],
     ];

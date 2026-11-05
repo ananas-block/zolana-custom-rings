@@ -326,6 +326,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 			c.Signers[k] = run[k]
 		}
 	}
+	c.SignerDataCounts = ringaudit.SignerDataCounts(run, a.Utxos())
 	c.Rows = rows(a, delegate, len(c.Rows))
 	c.ApprovalMask, c.ApprovalTotals, c.ApprovalBlinder = w.ApprovalMask, 0, 0
 	assembled := Assembled{Audit: a, Sender: Sender(t), Run: run, Tracking: w.tracking(t, a), delegate: delegate}
@@ -337,7 +338,7 @@ func (w World) fill(t testing.TB, c *transfer.Sections, a ringaudit.Audit, deleg
 // reopen fills both pools over the circuit's rows.
 func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	t.Helper()
-	w.fillPolicy(t, &c.Policy, a, a.delegate, c.Rows, a.Audit.Utxos())
+	w.fillPolicy(t, &c.Policy, a, a.delegate, c.Rows, a.Audit.Utxos(), c.Inputs)
 	outputOwners := make([]frontend.Variable, len(a.Audit.Outputs))
 	payments := make([]frontend.Variable, 0, len(c.OwnerEntries))
 	for o, slot := range a.Audit.Outputs {
@@ -357,7 +358,7 @@ func (w World) reopen(t testing.TB, c *transfer.Sections, a Assembled) {
 	ringpolicy.FillTracking(t, &c.Tracking, a.Tracking, c.Rows, outputOwners, &c.Policy, payments)
 }
 
-func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo) {
+func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate bool, senders []frontend.Variable, utxos []ringaudit.Utxo, inputs []shared.UtxoWires) {
 	t.Helper()
 	p.Table = w.table()
 	p.PolicyHash, p.OwnRoot, p.CuratorRoot = 0, 0, 0
@@ -391,7 +392,7 @@ func (w World) fillPolicy(t testing.TB, p *policy.Policy, a Assembled, delegate 
 	for o, utxo := range utxos {
 		wires[o] = utxo.Wires()
 	}
-	ringpolicy.FillPools(t, p, wires, senders, a.Own, a.Curator, a.Tracking)
+	ringpolicy.FillPools(t, p, wires, inputs, senders, a.Own, a.Curator, a.Tracking)
 }
 
 // withdrawalHash mirrors policy openWithdrawals over the live legs.
@@ -418,7 +419,7 @@ func values(t testing.TB, c *transfer.Sections, a Assembled) Statement {
 	stream := a.Audit.Stream(t)
 	s := Statement{
 		Head: a.Audit.Head(t, stream), Outputs: a.Audit.StatementOutputs(t, stream), InputCount: a.Audit.InputCount,
-		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), ApprovalTotals: ringtest.AsBigInt(c.ApprovalTotals), NoSpend: a.Audit.RealInputs() == 0,
+		ApprovalMask: ringtest.AsBigInt(c.ApprovalMask), ApprovalTotals: ringtest.AsBigInt(c.ApprovalTotals), SignerDataCounts: ringtest.AsBigInt(c.SignerDataCounts), NoSpend: a.Audit.RealInputs() == 0,
 		PrivateTxHash: ringtest.AsBigInt(c.PrivateTxHash),
 		SignerCount:   len(a.Run), SignerChain: ringaudit.SignerChain(t, a.Run, len(c.Signers)),
 		PolicyHash: ringtest.AsBigInt(c.PolicyHash), OwnRoot: ringtest.AsBigInt(c.OwnRoot), CuratorRoot: ringtest.AsBigInt(c.CuratorRoot),

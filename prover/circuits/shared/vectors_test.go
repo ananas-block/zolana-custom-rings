@@ -16,17 +16,13 @@ import (
 
 type ringSecretVectors struct {
 	TxViewingSk        string `json:"tx_viewing_secret"`
-	TxViewingPk        string `json:"tx_viewing_pk"`
-	RecipientViewingPk string `json:"recipient_viewing_pk"`
-	Agreement          string `json:"agreement"`
 	Salt               string `json:"salt"`
 	FirstNullifier     string `json:"first_nullifier"`
 	BlindingSeed       string `json:"blinding_seed"`
 	OutputBlindingSeed string `json:"output_blinding_seed"`
 	Outputs            []struct {
-		OutputIndex         int    `json:"output_index"`
-		DeliveredSlotSecret string `json:"delivered_slot_secret"`
-		Blinding            string `json:"blinding"`
+		OutputIndex int    `json:"output_index"`
+		Blinding    string `json:"blinding"`
 	} `json:"outputs"`
 	SenderKey             string `json:"sender_key"`
 	SenderPkHash          string `json:"sender_pk_hash"`
@@ -38,9 +34,6 @@ type ringSecretVectors struct {
 type ringSecretsCircuit struct {
 	OutputIndexes         []int `gnark:"-"`
 	TxViewingSk           [32]frontend.Variable
-	TxViewingPk           [33]frontend.Variable
-	RecipientViewingPk    [33]frontend.Variable
-	Agreement             [32]frontend.Variable
 	Salt                  [16]frontend.Variable
 	FirstNullifier        frontend.Variable
 	BlindingSeed          frontend.Variable
@@ -54,7 +47,7 @@ type ringSecretsCircuit struct {
 }
 
 type ringSecretWires struct {
-	DeliveredSlotSecret, Blinding frontend.Variable
+	Blinding frontend.Variable
 }
 
 func (c *ringSecretsCircuit) Define(api frontend.API) error {
@@ -65,15 +58,6 @@ func (c *ringSecretsCircuit) Define(api frontend.API) error {
 	api.AssertIsEqual(outputSeed, c.OutputBlindingSeed)
 	for k, out := range c.Outputs {
 		i := c.OutputIndexes[k]
-		delivered := shared.DeliveredSlot{
-			Agreement:      [2]frontend.Variable(gadget.PackBytesBE(api, c.Agreement[:])),
-			TxPk:           [2]frontend.Variable(gadget.PackBytesBE(api, c.TxViewingPk[:])),
-			Recipient:      [2]frontend.Variable(gadget.PackBytesBE(api, c.RecipientViewingPk[:])),
-			Salt:           salt,
-			OutputIndex:    i,
-			FirstNullifier: c.FirstNullifier,
-		}.Secret(api)
-		api.AssertIsEqual(delivered, out.DeliveredSlotSecret)
 		api.AssertIsEqual(transaction.DeriveOutputBlinding(api, c.FirstNullifier, outputSeed, i), out.Blinding)
 	}
 	senderPkHash := gadget.SolanaOwnerIdentity(api, c.SenderKey)
@@ -84,7 +68,7 @@ func (c *ringSecretsCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-// The circuit gadgets rebuild every CRDS, CRBS and TXOB value of the Rust vector from tx_viewing_sk.
+// The circuit gadgets rebuild every CRBS and TXOB value of the Rust vector from tx_viewing_sk.
 func TestRingSecretsMatchRustVectors(t *testing.T) {
 	var vectors ringSecretVectors
 	ringtest.ReadVector(t, "wallet/ring-secrets.json", &vectors)
@@ -98,16 +82,12 @@ func TestRingSecretsMatchRustVectors(t *testing.T) {
 		DepositBlinding:       ringtest.VectorField(t, vectors.DepositBlinding),
 	}
 	copy(witness.TxViewingSk[:], ringtest.VectorWires(t, vectors.TxViewingSk, 32))
-	copy(witness.TxViewingPk[:], ringtest.VectorWires(t, vectors.TxViewingPk, 33))
-	copy(witness.RecipientViewingPk[:], ringtest.VectorWires(t, vectors.RecipientViewingPk, 33))
-	copy(witness.Agreement[:], ringtest.VectorWires(t, vectors.Agreement, 32))
 	copy(witness.Salt[:], ringtest.VectorWires(t, vectors.Salt, 16))
 	copy(witness.SenderKey[:], ringtest.VectorWires(t, vectors.SenderKey, 32))
 	for _, out := range vectors.Outputs {
 		witness.OutputIndexes = append(witness.OutputIndexes, out.OutputIndex)
 		witness.Outputs = append(witness.Outputs, ringSecretWires{
-			DeliveredSlotSecret: ringtest.VectorField(t, out.DeliveredSlotSecret),
-			Blinding:            ringtest.VectorField(t, out.Blinding),
+			Blinding: ringtest.VectorField(t, out.Blinding),
 		})
 	}
 	circuit := &ringSecretsCircuit{OutputIndexes: witness.OutputIndexes, Outputs: make([]ringSecretWires, len(witness.Outputs))}

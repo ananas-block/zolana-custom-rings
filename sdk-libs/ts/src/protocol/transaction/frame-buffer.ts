@@ -8,7 +8,7 @@ import { RingInstructionTag } from "./instruction-tag.js";
 export const FRAME_BUFFER_PDA_SEED = new TextEncoder().encode("frame_buffer");
 export const FRAME_BUFFER_HEADER_LEN = 34;
 /** The runtime's ceiling on an inner create and on CPI instruction data. */
-const MAX_CPI_DATA_LEN = 10 * 1024;
+export const MAX_CPI_DATA_LEN = 10 * 1024;
 export const MAX_FRAME_LEN = MAX_CPI_DATA_LEN - FRAME_BUFFER_HEADER_LEN;
 
 const FRAME_BUFFER_DISCRIMINATOR = 16;
@@ -17,6 +17,11 @@ export function bufferedFrame(account: Uint8Array): Uint8Array | undefined {
   return account.length < FRAME_BUFFER_HEADER_LEN || account[0] !== FRAME_BUFFER_DISCRIMINATOR
     ? undefined
     : account.subarray(FRAME_BUFFER_HEADER_LEN);
+}
+
+/** The account's writer, `undefined` on any other account of the program. */
+export function frameBufferWriter(account: Uint8Array): Uint8Array | undefined {
+  return bufferedFrame(account) === undefined ? undefined : account.subarray(1, 33);
 }
 
 /** The first write creates the buffer at `[seed, writer, nonce]`. */

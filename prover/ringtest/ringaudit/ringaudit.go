@@ -113,7 +113,6 @@ func (k Keys) AuditHead(t testing.TB, firstNullifier, ringID *big.Int, salt [16]
 		RingProgramID:  ringID,
 		TxViewingU:     [32]byte(k.txPk[1:]),
 		AuditorPubkey:  ringprotocol.Tagged(k.auditorPk[:]),
-		EphU:           [32]byte(k.txPk[1:]),
 		Envelope:       envelope,
 		Salt:           salt,
 	}

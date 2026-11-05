@@ -198,8 +198,6 @@ pub struct PolicyBindingIxData {
 pub struct PolicySourceIxData {
     pub list_id: u8,
     pub source: u8,
-    /// Owner rows read the list under salted keys.
-    pub salted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, SchemaRead, SchemaWrite)]

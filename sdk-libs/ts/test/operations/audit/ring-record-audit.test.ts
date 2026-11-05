@@ -30,9 +30,7 @@ import { ownerUtxoHash, type IndexedShieldedTransaction } from "@heliuslabs/zola
 
 import { readFileSync } from "node:fs";
 
-import {
-  saltedAuditorSchedule,
-} from "../../../src/crypto/audit/audit.js";
+import { saltedAuditorSchedule } from "../../../src/crypto/audit/audit.js";
 import {
   MergeRingAuthority,
   decodeRingMergeRequest,
@@ -595,7 +593,6 @@ describe("the deposit reader", () => {
       }),
     ).toThrow(expect.objectContaining({ code: "RING_AUDIT_MESSAGE" }));
   });
-
 });
 
 describe("the origin", () => {

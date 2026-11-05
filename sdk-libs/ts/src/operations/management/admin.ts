@@ -35,6 +35,7 @@ import { RingError } from "../../protocol/error.js";
 import {
   buildRuleTable,
   checkedListId,
+  validateRuleTable,
   encodeRule,
   policySourceLists,
   type ListId,
@@ -274,8 +275,7 @@ export interface RingInitialPolicy extends RingPolicyTableInput {
 
 export type RingPolicyUpdate =
   | (Readonly<{ kind: "rules" }> & RingPolicyTableInput)
-  /** `salted` reads the list at owners' salted keys. */
-  | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner; salted?: boolean }>
+  | Readonly<{ kind: "source"; listId: ListId; source: RingPolicySourceOwner }>
   | Readonly<{ kind: "records"; records: Address }>;
 
 const POLICY_UPDATE_VARIANT = Object.freeze({
@@ -314,7 +314,7 @@ function policyUpdateBody(writer: Writer, update: RingPolicyUpdate): readonly Ad
     case "source": {
       writer.u8(checkedListId(update.listId), "listId");
       const own = update.source.kind === "own";
-      writer.u8(own ? 0 : 1, "source").u8(update.salted === true ? 1 : 0, "salted");
+      writer.u8(own ? 0 : 1, "source");
       return update.source.kind === "own" ? [] : [update.source.registry];
     }
     case "records":
@@ -334,6 +334,7 @@ async function policyWriteMetas(
 function writePolicyTable(writer: Writer, input: RingPolicyTableInput): readonly Address[] {
   const table = buildRuleTable(input.table);
   const referenced = policySourceLists(table.rules);
+  validateRuleTable(table);
   const shared = input.sharedSources ?? [];
   const seen = new Set<ListId>();
   for (const source of shared) {

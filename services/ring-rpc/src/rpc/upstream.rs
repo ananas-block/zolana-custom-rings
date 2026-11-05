@@ -590,10 +590,7 @@ impl TransactionSource for ChainSource {
         let policy = RingPolicy::decode(&account.owner, &ring, &account.data)
             .ok_or_else(|| ClientError::Rpc(INVALID_POLICY.to_owned()))?;
         let mut writers = Vec::new();
-        for registry in policy
-            .salted_registries()
-            .map_err(|_| ClientError::Rpc(INVALID_POLICY.to_owned()))?
-        {
+        for registry in policy.salted_registries() {
             let account = self.rpc.get_account(registry).await?;
             writers.extend(
                 account

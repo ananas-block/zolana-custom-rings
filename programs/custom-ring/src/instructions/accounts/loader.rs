@@ -1,7 +1,7 @@
 use custom_ring_interface::{
     anonymous_exit_destination,
     cosign::{CoSignCover, CoSignRequirement, MAX_CO_SIGNERS},
-    storage::StorageRegistry,
+    storage::{Revision, StorageRegistry},
     tracking::TrackingRegistry,
     CoSigner, CustomRingError, LiveRoots, RingAccount, RingPolicy, RingRole, RootRead,
     SettlementAccount, TokenAccountState, STORAGE_PROGRAM_ID,
@@ -154,6 +154,7 @@ pub struct RingRegistries<'a> {
     own: Option<Ref<'a, StorageRegistry>>,
     curator: Option<Ref<'a, StorageRegistry>>,
     tracking: Ref<'a, TrackingRegistry>,
+    tracking_floor: Revision,
     pub len: usize,
 }
 
@@ -163,6 +164,7 @@ impl RingRegistries<'_> {
             own: self.own.as_deref(),
             curator: self.curator.as_deref(),
             tracking: &self.tracking,
+            tracking_floor: self.tracking_floor,
             slot,
         }
     }
@@ -190,11 +192,14 @@ impl RegistrySlots<'_> {
             Ok(account)
         };
         let ring = self.ring;
+        let mut tracking_floor = 0;
         let mut storage = |bound: Option<Address>| {
             bound
                 .map(|bound| {
                     let source = load_storage_registry(bound_account(&bound)?)?;
                     ring.check_source_pair(&bound, &source)?;
+                    tracking_floor =
+                        u64::max(tracking_floor, ring.tracking_floor(&bound, &source).value());
                     Ok::<_, ProgramError>(source)
                 })
                 .transpose()
@@ -206,6 +211,7 @@ impl RegistrySlots<'_> {
             own,
             curator,
             tracking,
+            tracking_floor: tracking_floor.into(),
             len,
         })
     }

@@ -23,7 +23,9 @@ pub use rule_table::{
     RuleTable, RuleTableBuilder, RuleTableError, SourceMap, SourceMapError, Subject, TableParts,
     MAX_RULES, MAX_SOURCES, POLICY_TABLE_DOMAIN, POLICY_TABLE_FIELDS,
 };
-pub use rules::{OutputSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects};
+pub use rules::{
+    OutputSubjects, PaymentSubjects, RecordLists, RuleRefusal, TransferSubject, TransferSubjects,
+};
 
 /// The ring id field a UTXO inside the ring carries.
 pub fn ring_id_field(program_id: &[u8; 32]) -> Result<[u8; 32], spr_hasher::HasherError> {

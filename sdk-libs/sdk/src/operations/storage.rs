@@ -23,6 +23,10 @@ use crate::{
     CustomRing, RingError,
 };
 
+#[cfg(test)]
+#[path = "../tests/operations/storage.rs"]
+mod tests;
+
 /// The creator signs and becomes the authority, the payer funds the account.
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +46,8 @@ pub struct InitializeStorage {
 pub struct UpdateStorage<'a> {
     pub authority: Address,
     pub registry: Address,
+    /// The account as read, its pin decides whether the update carries the floor account.
+    pub state: &'a StorageRegistry,
     pub data: StorageUpdateIxData<'a>,
 }
 
@@ -62,6 +68,11 @@ pub struct StorageApplyProof<'a> {
 
 impl InitializeStorage {
     /// The ring's records, keyed by the ring program id under the creator who pays.
+    ///
+    /// The pin is immutable and a later policy can serve a private list from these records, so
+    /// every ring pins its tracking registry at creation. An unpinned source refuses every frame
+    /// reading a private list, and without the floor a blocked enrolled owner could prove itself
+    /// unenrolled under an old tracking root.
     pub fn records(ring: CustomRing, creator: Address) -> Self {
         Self {
             payer: creator,
@@ -69,7 +80,7 @@ impl InitializeStorage {
             registry_id: RegistryId(ring.program_id().to_bytes()),
             grace_slots: GRACE_SLOTS,
             ring_id: ring.ring_id().unwrap_or_default(),
-            tracking_registry: Address::default(),
+            tracking_registry: ring.tracking_registry().unwrap_or_default(),
         }
     }
 
@@ -97,12 +108,19 @@ impl InitializeStorage {
 }
 
 impl UpdateStorage<'_> {
+    /// A zero grace write on a pinned source moves the floor, the program reads the pinned account.
     pub fn instruction(self) -> Result<Instruction, RingError> {
+        let mut accounts = vec![
+            AccountMeta::new_readonly(self.authority, true),
+            AccountMeta::new(self.registry, false),
+        ];
+        accounts.extend(
+            self.state
+                .reads_tracking(&self.data)
+                .then(|| AccountMeta::new_readonly(self.state.tracking_registry, false)),
+        );
         Ok(storage_ix(
-            vec![
-                AccountMeta::new_readonly(self.authority, true),
-                AccountMeta::new(self.registry, false),
-            ],
+            accounts,
             [vec![tag::UPDATE], self.data.encode()?].concat(),
         ))
     }

@@ -1,14 +1,22 @@
-import type { Address, Bytes32, Instruction } from "@heliuslabs/zolana/interface";
+import {
+  TRANSACTION_SIZE_LIMIT,
+  type Address,
+  type Bytes32,
+  type Instruction,
+} from "@heliuslabs/zolana/interface";
 import { encodeBase58 } from "@heliuslabs/zolana/internal";
 import { ShieldedKeypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT } from "@heliuslabs/zolana/transaction";
+import { AccountRole } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { MAX_FRAME_LEN } from "../../../src/protocol/transaction/frame-buffer.js";
+import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";
+import { MAX_CPI_DATA_LEN } from "../../../src/protocol/transaction/frame-buffer.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
 import { MAX_TRANSACTION_ADDRESSES as LIMIT } from "../../../src/operations/workflow/compile.js";
 import {
   decideAddressCeiling,
+  TransactionFit,
   type CeilingDecision,
   type MergeCapacity,
   type SpentInput,
@@ -67,17 +75,26 @@ const refused = async (inputs: readonly SpentInput[], other: number) => {
   throw new Error("under the ceiling");
 };
 
-function decideFrame(length: number): Promise<CeilingDecision> {
-  const data = new Uint8Array(length);
-  data[0] = RingInstructionTag.transfer;
-  return decideAddressCeiling({
-    payer: address(1),
-    instruction: { programAddress: address(2), accounts: [], data } as unknown as Instruction,
-    computeUnitLimit: 1_000_000,
-    inputs: [],
-    mergeCapacity: { keyed: 45, zeroKey: 45 },
-  });
-}
+/** A frame that parses under its rail, each message stretches it. */
+const realFrame = (messages: readonly number[] = []): Instruction =>
+  ({
+    programAddress: address(2),
+    accounts: [],
+    data: ringInstructionData({
+      ...ringFrame({ rail: "confidential", inputs: 1, outputs: 2 }),
+      extensions: {
+        messages: messages.map((length) => ({ viewTag: field(9), data: new Uint8Array(length) })),
+      },
+    }),
+  }) as unknown as Instruction;
+
+const signing = (key: number): Instruction =>
+  ({
+    programAddress: address(3),
+    accounts: [{ address: address(key), role: 2 }],
+  }) as unknown as Instruction;
+
+const BUDGET = { computeUnitLimit: 1_000_000 };
 
 describe("decideAddressCeiling, the cases of Rust `validation::address_ceiling`", () => {
   it("keeps a transaction at the ceiling one transaction", async () => {
@@ -141,15 +158,144 @@ describe("decideAddressCeiling, the cases of Rust `validation::address_ceiling`"
     expect(decision.addresses).toBe(LIMIT - 1);
   });
 
-  it("takes a frame past the byte ceiling to a buffer and refuses it past the CPI limit", async () => {
-    expect(await decideFrame(1000)).toMatchObject({ kind: "inline" });
-    const past = await decideFrame(4096);
-    expect(past.kind).toBe("buffered");
-    if (past.kind === "buffered") expect(past.size.bytes).toBeLessThan(4096);
-    expect(await decideFrame(MAX_FRAME_LEN)).toMatchObject({ kind: "buffered" });
-    await expect(decideFrame(MAX_FRAME_LEN + 1)).rejects.toMatchObject({
-      code: "RING_FRAME_TOO_LARGE",
-      details: { bytes: MAX_FRAME_LEN + 1, limit: MAX_FRAME_LEN },
+  it("reads a frame that parses under neither rail as unparsed, whatever its length", async () => {
+    const data = new Uint8Array(1000);
+    data[0] = RingInstructionTag.transfer;
+    const instruction = {
+      programAddress: address(2),
+      accounts: [],
+      data,
+    } as unknown as Instruction;
+    await expect(
+      decideAddressCeiling({
+        payer: address(1),
+        instruction,
+        computeUnitLimit: 1_000_000,
+        inputs: [],
+        mergeCapacity: { keyed: 45, zeroKey: 45 },
+      }),
+    ).rejects.toMatchObject({ code: "RING_FIT_UNPARSED_FRAME" });
+  });
+});
+
+describe("TransactionFit, the refusals of Rust `TransactionFit`", () => {
+  const payer = { payer: address(1) };
+
+  it("keeps a frame under the ceiling inline and reads its CPI bytes", async () => {
+    const fit = await TransactionFit.of(realFrame(), payer, BUDGET);
+    expect(fit).toMatchObject({ transport: "inline", signatures: 1, addresses: 2 });
+    expect(fit.cpiBytes).toBeGreaterThan(realFrame().data?.length ?? 0);
+    expect(fit.setup).toEqual({ instructions: 0, signatures: 0, bytes: 0, addresses: 0 });
+  });
+
+  it("names no CPI bytes off the transfer tags", async () => {
+    const fit = await TransactionFit.of(signing(4), payer, BUDGET);
+    expect(fit.cpiBytes).toBeUndefined();
+    expect(fit.signatures).toBe(2);
+  });
+
+  it("settles from a buffer past the byte ceiling, the figures the settlement's", async () => {
+    const instruction = realFrame([4000]);
+    const fit = await TransactionFit.of(instruction, payer, BUDGET);
+    expect(fit.transport).toBe("buffered");
+    expect(fit.bytes).toBeLessThan(TRANSACTION_SIZE_LIMIT);
+  });
+
+  it("refuses a buffer on the inline path by its bytes", () => {
+    expect(() => TransactionFit.inline(realFrame([4096]), payer, BUDGET)).toThrowError(
+      expect.objectContaining({ code: "RING_FIT_BYTES" }),
+    );
+  });
+
+  it("refuses bytes on a tag no buffer takes", async () => {
+    const instruction = {
+      ...signing(4),
+      data: new Uint8Array(TRANSACTION_SIZE_LIMIT).fill(0xff),
+    } as unknown as Instruction;
+    await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject({
+      code: "RING_FIT_BYTES",
     });
+  });
+
+  it("refuses an expansion past one CPI under either transport, ahead of every other ceiling", async () => {
+    const instruction = realFrame([MAX_CPI_DATA_LEN]);
+    const refusal = { code: "RING_FIT_CPI_BYTES", details: { limit: MAX_CPI_DATA_LEN } };
+    await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject(refusal);
+    const crowded = Array.from({ length: 13 }, (_, key) => signing(50 + key));
+    await expect(
+      TransactionFit.of(instruction, { ...payer, setupInstructions: crowded }, BUDGET),
+    ).rejects.toMatchObject(refusal);
+  });
+
+  it("counts a signer two instructions share once and refuses past twelve", async () => {
+    const twelve = Array.from({ length: 11 }, (_, key) => signing(50 + key));
+    const fit = await TransactionFit.of(
+      signing(50),
+      { ...payer, setupInstructions: twelve },
+      BUDGET,
+    );
+    expect(fit.signatures).toBe(12);
+    expect(fit.setup).toMatchObject({ instructions: 11, signatures: 10 });
+    await expect(
+      TransactionFit.of(signing(61), { ...payer, setupInstructions: twelve }, BUDGET),
+    ).rejects.toMatchObject({
+      code: "RING_FIT_SIGNATURES",
+      details: { signatures: 13, limit: 12 },
+    });
+  });
+
+  it("refuses instructions past the v1 ceiling after signatures", async () => {
+    const setupInstructions = Array.from({ length: 64 }, () => signing(4));
+    await expect(
+      TransactionFit.of(signing(4), { ...payer, setupInstructions }, BUDGET),
+    ).rejects.toMatchObject({
+      code: "RING_FIT_INSTRUCTIONS",
+      details: { instructions: 65, limit: 64 },
+    });
+  });
+
+  it("refuses addresses by their compiled count", async () => {
+    const accounts = Array.from({ length: LIMIT }, (_, seed) => ({
+      address: address(5000 + seed),
+      role: 1,
+    }));
+    const instruction = { programAddress: address(2), accounts } as unknown as Instruction;
+    await expect(TransactionFit.of(instruction, payer, BUDGET)).rejects.toMatchObject({
+      code: "RING_FIT_ADDRESSES",
+      details: { addresses: LIMIT + 2, limit: LIMIT },
+    });
+  });
+
+  it("refuses the address a setup instruction adds past the ceiling", async () => {
+    const accounts = Array.from({ length: LIMIT - 3 }, (_, seed) => ({
+      address: address(5000 + seed),
+      role: AccountRole.READONLY,
+    }));
+    const instruction = { programAddress: address(2), accounts } as unknown as Instruction;
+    const setup = (extra: number): Instruction =>
+      ({
+        programAddress: address(3),
+        accounts: Array.from({ length: extra }, (_, seed) => ({
+          address: address(8000 + seed),
+          role: AccountRole.READONLY,
+        })),
+      }) as unknown as Instruction;
+    const fit = (extra: number) =>
+      TransactionFit.of(instruction, { ...payer, setupInstructions: [setup(extra)] }, BUDGET);
+    expect((await fit(0)).addresses).toBe(LIMIT);
+    await expect(fit(1)).rejects.toMatchObject({
+      code: "RING_FIT_ADDRESSES",
+      details: { addresses: LIMIT + 1, limit: LIMIT },
+    });
+  });
+
+  it("names what setup adds to the shared transaction", async () => {
+    const fit = await TransactionFit.of(
+      signing(4),
+      { ...payer, setupInstructions: [signing(5)] },
+      BUDGET,
+    );
+    expect(fit.setup).toMatchObject({ instructions: 1, signatures: 1, addresses: 1 });
+    expect(fit.setup.bytes).toBeGreaterThan(0);
   });
 });

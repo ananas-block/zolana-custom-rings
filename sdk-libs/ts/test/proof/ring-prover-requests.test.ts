@@ -21,7 +21,7 @@ import {
   type TrackingWriteProofInput,
   type TransferProofRequest,
 } from "../../src/rpc/prover/ring.js";
-import { encodeBase58, isZero } from "@heliuslabs/zolana/internal";
+import { ZERO_32, encodeBase58, isZero } from "@heliuslabs/zolana/internal";
 import { UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
 import type { Address, Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import {
@@ -449,12 +449,21 @@ function request(item: Json): RingProofRequest {
       sender: field(item["sender"]),
       partyIdentities: fields(item["partyIdentities"]),
       approvalMask: count(item["approvalMask"]),
+      ...(item["approvalTotals"] === undefined
+        ? {}
+        : { approvalTotals: field(item["approvalTotals"]) }),
+      ...(item["approvalBlinder"] === undefined
+        ? {}
+        : { approvalBlinder: field(item["approvalBlinder"]) }),
       outputCount: count(item["outputCount"]),
       outputs: list(item["outputs"]).map(outputOpening),
       inputCount: count(item["inputCount"]),
       inputs: list(item["inputs"]).map(opening),
       entries: item["entries"] === undefined ? [] : list(item["entries"]).map(entryOpening),
       signerCount: count(item["signerCount"]),
+      ...(item["signerDataCounts"] === undefined
+        ? {}
+        : { signerDataCounts: BigInt(count(item["signerDataCounts"])) }),
       signers: fields(item["signers"]),
       rows: fields(item["rows"]),
       privateTxHash: field(item["privateTxHash"]),
@@ -983,7 +992,6 @@ function checkTransferStatement(typed: TransferProofRequest): void {
       ringId: typed.ringId,
       txViewingU,
       auditorPubkey: tagged(typed.auditorPk),
-      ephU: txViewingU,
       envelope: sealed.envelope,
       salt: typed.salt,
       layout: typed.layout,
@@ -1003,6 +1011,8 @@ function checkTransferStatement(typed: TransferProofRequest): void {
             sender: typed.sender,
           },
     approvalMask: typed.approvalMask,
+    approvalTotals: typed.approvalTotals ?? ZERO_32,
+    signerDataCounts: typed.signerDataCounts ?? 0n,
     noSpend: live.length === 0,
     outputs: slots.map(({ output }, slot) => ({
       hash: openingHash(output),

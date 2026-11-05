@@ -8,6 +8,7 @@ import { encodeBase58 } from "@heliuslabs/zolana/internal";
 import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
 import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 
+import approvalFrames from "../../../../../test-vectors/proof/approval_totals_frame.json" with { type: "json" };
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };
 import keyed from "../../../../../test-vectors/proof/ring_keyed_shapes.json" with { type: "json" };
 import statements from "../../../../../test-vectors/audit/transfer_statement.json" with { type: "json" };
@@ -74,6 +75,55 @@ describe("ring-transact-expansion.json", () => {
   });
 });
 
+describe("approval_totals_frame.json", () => {
+  const APPROVAL_TOTALS_BIT = 1 << 4;
+
+  describe.each(approvalFrames.cases.map((entry) => [entry.name, entry] as const))(
+    "%s",
+    (_, entry) => {
+      const frame = hexToBytes(entry.frame);
+      const digest = hexToBytes(entry.digest);
+
+      it("reads the digest under bit 4 of the extension byte", () => {
+        expect(frame[entry.extension_offset]).toBe(entry.extension_byte);
+        expect(entry.extension_byte & APPROVAL_TOTALS_BIT).toBe(APPROVAL_TOTALS_BIT);
+        expect(hex(frame.subarray(entry.digest_offset, entry.digest_offset + 32))).toBe(
+          entry.digest,
+        );
+        const parsed = RingTransactData.parse(frame, "confidential");
+        expect(hex(parsed.extensions.approvalTotals as Uint8Array)).toBe(entry.digest);
+      });
+
+      it("writes the same bytes back", () => {
+        expect(hex(RingTransactData.encode(RingTransactData.parse(frame, "confidential")))).toBe(
+          entry.frame,
+        );
+      });
+
+      it("adds the digest to the frame that has none", () => {
+        const base = RingTransactData.parse(hexToBytes(entry.base), "confidential");
+        expect(base.extensions.approvalTotals).toBeUndefined();
+        const written = RingTransactData.encode({
+          ...base,
+          extensions: { ...base.extensions, approvalTotals: digest as Bytes32 },
+        });
+        expect(hex(written)).toBe(entry.frame);
+      });
+
+      it("refuses the next extension bit", () => {
+        const unknown = frame.slice();
+        unknown[entry.extension_offset] = entry.extension_byte | (APPROVAL_TOTALS_BIT << 1);
+        expect(() => RingTransactData.parse(unknown, "confidential")).toThrow(
+          expect.objectContaining({
+            code: "RING_TRANSACT_DATA_INVALID",
+            details: { reason: "FlagNotAllowed" },
+          }),
+        );
+      });
+    },
+  );
+});
+
 describe("frame.hex", () => {
   const lines = readFileSync(
     new URL("../../../../../test-vectors/settlement/frame.hex", import.meta.url),
@@ -107,7 +157,6 @@ describe("transfer_statement.json", () => {
         ringId: field(vector.ring_id),
         txViewingU: field(vector.tx_viewing_u),
         auditorPubkey: hexToBytes(vector.auditor_pubkey) as Bytes33,
-        ephU: field(vector.eph_u),
         envelope: hexToBytes(vector.envelope),
         salt: hexToBytes(vector.salt) as Bytes16,
         layout: { hasData: (vector.layout & 1) !== 0, entry: (vector.layout & 2) !== 0 },
@@ -128,6 +177,7 @@ describe("transfer_statement.json", () => {
             },
       approvalMask: vector.approval_mask,
       approvalTotals: field(vector.approval_totals),
+      signerDataCounts: BigInt((vector as { signer_data_counts?: number }).signer_data_counts ?? 0),
       noSpend: vector.no_spend,
       outputs: vector.outputs.map((output) => ({
         hash: field(output.hash),

@@ -86,7 +86,9 @@ describe("openRecipientNote", () => {
   it("refuses a body off the commitment by amount, mint or blinding", () => {
     const published = commitment(plain(), ENROLLED_KEY);
     expect(openRecipientNote(reader(published), { ...plain(), amount: 43n })).toBeUndefined();
-    expect(openRecipientNote(reader(published), { ...plain(), blinding: field(12) })).toBeUndefined();
+    expect(
+      openRecipientNote(reader(published), { ...plain(), blinding: field(12) }),
+    ).toBeUndefined();
     expect(openRecipientNote(reader(published), plain(UNREGISTERED))).toBeUndefined();
   });
 
@@ -111,6 +113,17 @@ describe("openRecipientNote", () => {
     expect(note?.ringDataHash).toEqual(ringDataHash);
     expect(note?.utxo.data.utxoData()).toEqual(appData);
     expect(openRecipientNote(reader(published), { ...plain(), ringDataHash })).toBeUndefined();
+  });
+
+  it("refuses application bytes under a zero hash, the commitment reads no data", () => {
+    const published = commitment(plain(), ENROLLED_KEY);
+    expect(openRecipientNote(reader(published), plain())).toBeDefined();
+    const unbound = new Uint8Array(32 + 7).fill(9);
+    unbound.fill(0, 0, 32);
+    expect(openRecipientNote(reader(published), { ...plain(), data: unbound })).toBeUndefined();
+    expect(
+      openRecipientNote(reader(published), { ...plain(), data: new Uint8Array(32) }),
+    ).toBeUndefined();
   });
 
   it("refuses data shorter than its leading hash and a blinding off the field", () => {

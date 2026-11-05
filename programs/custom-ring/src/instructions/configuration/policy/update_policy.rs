@@ -7,7 +7,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use spr_account_checks::AccountIterator;
-use zolana_ring_policy::{ListId, ListSet};
+use zolana_ring_policy::ListId;
 
 use crate::instructions::{
     instruction_runtime::parse,
@@ -66,10 +66,8 @@ impl PolicyWrite<'_> {
             curators: self.trailing,
         }
         .bind()?;
-        let salted_lists = self.policy.salted();
         self.policy.set_policy(PolicyUpdate {
             sources: bound.sources,
-            salted_lists,
             rules: bound.rules,
             slot: self.slot,
         })?;
@@ -94,16 +92,10 @@ impl PolicyWrite<'_> {
             list_id: list_id as u8,
             registry,
         };
-        let list = ListSet::single(list_id);
-        let salted_lists = match source.salted {
-            true => self.policy.salted().union(list),
-            false => self.policy.salted().difference(list),
-        };
         // The rehashed source map refuses a second distinct curator.
         let rules = self.policy.rules;
         self.policy.set_policy(PolicyUpdate {
             sources,
-            salted_lists,
             rules,
             slot: self.slot,
         })?;

@@ -2,40 +2,16 @@
 
 use crate::{CoSignScope, CoSigner, CustomRingError, RingPolicy};
 use solana_address::Address;
+pub use zolana_ring_policy::ApprovalMask;
 
-/// Proven by the transfer statement, the program derives no threshold itself.
-#[must_use]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ApprovalMask(u8);
-
-impl ApprovalMask {
-    /// Some `outflow(o,a)` exceeds a nonzero `cosign_above(a)`.
-    pub const OUTFLOW: Self = Self(1);
-    /// Some `gross(a)` exceeds a nonzero `withdrawal_threshold(a)`.
-    pub const WITHDRAWAL: Self = Self(2);
-
-    pub const fn new(bits: u8) -> Option<Self> {
-        if bits & !(Self::OUTFLOW.0 | Self::WITHDRAWAL.0) != 0 {
-            return None;
-        }
-        Some(Self(bits))
-    }
-
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
-
-    pub const fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
-    pub fn classes(self) -> CoSignScope {
-        let class = |mask: Self, class: CoSignScope| match self.0 & mask.0 != 0 {
+impl From<ApprovalMask> for CoSignScope {
+    fn from(mask: ApprovalMask) -> Self {
+        let class = |bit: ApprovalMask, class: Self| match mask.contains(bit) {
             true => class,
-            false => CoSignScope::NONE,
+            false => Self::NONE,
         };
-        class(Self::OUTFLOW, CoSignScope::APPROVE_OUTFLOW)
-            | class(Self::WITHDRAWAL, CoSignScope::APPROVE_WITHDRAWAL)
+        class(ApprovalMask::OUTFLOW, Self::APPROVE_OUTFLOW)
+            | class(ApprovalMask::WITHDRAWAL, Self::APPROVE_WITHDRAWAL)
     }
 }
 
@@ -60,7 +36,7 @@ impl CoSignOperation {
             false => CoSignScope::NONE,
         };
         CoSignDemand {
-            classes: spend | self.public_legs | self.approval.classes(),
+            classes: spend | self.public_legs | self.approval.into(),
         }
     }
 }

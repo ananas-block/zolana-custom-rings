@@ -116,6 +116,14 @@ export {
   type OwnerDebit,
 } from "../protocol/membership/owner-debits.js";
 export {
+  ApprovalTotals,
+  APPROVAL_TOTALS_DOMAIN,
+  approvalOpeningOf,
+  openingTotals,
+  type OutputTotals,
+  type PublicTotals,
+} from "../protocol/membership/approval-totals.js";
+export {
   OutputBlindings,
   openRecipientNote,
   ringBlindingSeed,

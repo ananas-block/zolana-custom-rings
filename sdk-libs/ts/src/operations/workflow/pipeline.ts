@@ -11,6 +11,7 @@ import {
   concatBytes,
   encodeBase58,
   equalBytes,
+  isZero,
   meta,
   solanaOwnerIdentity,
   treeAddress,
@@ -18,7 +19,11 @@ import {
 } from "@heliuslabs/zolana/internal";
 import { type RingProver } from "../../rpc/ports.js";
 import type { ChainReader, ProvenRingTransact, TreeContext } from "@heliuslabs/zolana/client";
-import { ringTransactAccounts, type Shape } from "@heliuslabs/zolana/interface";
+import {
+  ringTransactAccounts,
+  TransactCacheAccounts,
+  type Shape,
+} from "@heliuslabs/zolana/interface";
 import type {
   Address,
   Bytes32,
@@ -27,7 +32,7 @@ import type {
 } from "@heliuslabs/zolana/interface";
 import type { RingTransactInstructionData } from "../../protocol/proof/circuit.js";
 import type { ProvenAnonymousRingTransact } from "../../rpc/ports.js";
-import { ShieldedPublicKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
 import type { RelayTransferTerms, TokenAccountCreate } from "../../rpc/relay-message.js";
 import { SppProofInputs, createExternalData } from "@heliuslabs/zolana/transaction";
 import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
@@ -55,7 +60,6 @@ import { RingError } from "../../protocol/error.js";
 import {
   policyLegs,
   policyDemand,
-  readsPolicyRoot,
   policyRoots,
   publishedNotes,
   readPolicy,
@@ -66,8 +70,16 @@ import {
   type PolicyReadClient,
   type RingListSalt,
 } from "../../proof/policy-proof.js";
-import { selectTransferKey, transferProofRequest } from "../../proof/transfer-proof.js";
-import { fittedSpend } from "../../protocol/proof/transfer-shapes.js";
+import {
+  cacheAccessOf,
+  selectTransferKey,
+  transferApprovalOf,
+  transferProofRequest,
+  type TransferApproval,
+} from "../../proof/transfer-proof.js";
+import type { ApprovalOpening } from "../../protocol/membership/approval-totals.js";
+import { sealedWide, unreadSubjectPools } from "../../protocol/proof/transfer-shapes.js";
+import { memberOfAsset, pinnedPolicy, policySourceView } from "../../protocol/membership/policy.js";
 import { policyWithdrawalHash } from "../../proof/withdrawals.js";
 import { framesData, type PublishedSlot, type RingOutputRail } from "../payments/output-rail.js";
 import {
@@ -97,7 +109,12 @@ import {
   interfaceTransferOf,
   settlementAccounts,
 } from "../../protocol/transaction/spp.js";
-import { decideAddressCeiling } from "./address-ceiling.js";
+import {
+  decideAddressCeiling,
+  TransactionFit,
+  type FitBudget,
+  type FitSigners,
+} from "./address-ceiling.js";
 import { checkTransferFits } from "./compile.js";
 import { BufferedFrame } from "../payments/buffered-frame.js";
 import { ringRegistrySlots, transferRootRead } from "./ring-reads.js";
@@ -143,6 +160,8 @@ export interface StagedTransfer {
   readonly withdrawal?: TransactWithdrawal;
   /** Empty unless the caller sets them. */
   readonly extensions?: FrameExtensions;
+  /** The frame discloses its totals under it, the digest waits for the selected key's `N`. */
+  readonly approvalBlinder?: Bytes32;
   readonly spend: RailSpend;
 }
 
@@ -159,6 +178,8 @@ export interface RingTransactAccounts {
   readonly registries: readonly Address[];
   readonly coSigners: readonly Address[];
   readonly delegate?: Address;
+  /** A cached input reads through it, last in SPP's list. */
+  readonly cache?: TransactCacheAccounts;
 }
 
 /** Every value a transfer's proofs bind that the chain can move before it lands, Rust `BoundState`. */
@@ -182,6 +203,8 @@ export class ProvenRingTransfer {
   readonly roots: readonly BoundRoot[];
   readonly trackingRoot: BoundRoot;
   readonly policy?: BoundPolicy;
+  /** What opens the frame's digest, handed to a co-signer under `CoSignerRule` exact. */
+  readonly approvalOpening?: ApprovalOpening;
 
   /** @internal */
   constructor(fields: Omit<ProvenRingTransfer, "instruction" | "buffered">) {
@@ -193,6 +216,7 @@ export class ProvenRingTransfer {
     this.roots = fields.roots;
     this.trackingRoot = fields.trackingRoot;
     if (fields.policy !== undefined) this.policy = fields.policy;
+    if (fields.approvalOpening !== undefined) this.approvalOpening = fields.approvalOpening;
     Object.freeze(this);
   }
 
@@ -227,11 +251,27 @@ interface AssembledTransfer {
   readonly accounts: RingTransactAccounts;
   readonly ringId: Bytes32;
   readonly preview: RingTransactData;
+  readonly approval?: TransferApproval;
 }
 
 export interface RingTransactionFrame {
   readonly priorityFeeLamports?: bigint;
   readonly setupInstructions?: readonly Instruction[];
+}
+
+/** The fit's view of a frame, one split for the preproof check and the attempt. */
+export function fitSigners(payer: Address, frame: RingTransactionFrame | undefined): FitSigners {
+  return frame?.setupInstructions === undefined
+    ? { payer }
+    : { payer, setupInstructions: frame.setupInstructions };
+}
+
+export function fitBudget(
+  frame: RingTransactionFrame | undefined,
+): Pick<FitBudget, "priorityFeeLamports"> {
+  return frame?.priorityFeeLamports === undefined
+    ? {}
+    : { priorityFeeLamports: frame.priorityFeeLamports };
 }
 
 export type StagedTransferInput = Readonly<{
@@ -284,10 +324,12 @@ export function sealedTransferTerms(
   const { sealed, ringProgramId } = input;
   const { proofInputs } = sealed;
   return input.ownerSigners.map((signer) => {
-    const key = ShieldedPublicKey.fromEd25519(addressBytes(signer) as Bytes32);
+    // A Solana address names a wallet or a PDA alike, a key rebuilt as Ed25519 never equals a PDA owner.
+    const ownedBy = (owner: ShieldedPublicKey): boolean =>
+      equalBytes(owner.confidentialViewTag(), addressBytes(signer));
     const slots = sealed.published.flatMap(({ output }, slot) => {
       const owner = output.ownerAddress;
-      if (owner === undefined || output.isDummy() || !owner.signingPublicKey.equals(key)) return [];
+      if (owner === undefined || output.isDummy() || !ownedBy(owner.signingPublicKey)) return [];
       return [
         Object.freeze({
           slot,
@@ -309,7 +351,7 @@ export function sealedTransferTerms(
       slots: Object.freeze(slots),
       nullifiers: Object.freeze(
         proofInputs.inputUtxos
-          .filter((spent) => !spent.isDummy() && spent.utxo.owner.equals(key))
+          .filter((spent) => !spent.isDummy() && ownedBy(spent.utxo.owner))
           .map((spent) => spent.nullifier()),
       ),
       setup: input.setup,
@@ -357,30 +399,69 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
   return { demandInput, demand, keySpend, addresses, circuit, wideOwners };
 }
 
-/** Rust `Prepared::unread_wide`. */
+/** Rust `Prepared::sealing_wide`, the flag of a seal ahead of every record read. */
 function unreadWide(
   input: Readonly<{
     config: RingPolicy;
-    staged: Pick<StagedTransfer, "proofInputs"> & Readonly<{ spend: Pick<RailSpend, "rail"> }>;
+    staged: Pick<StagedTransfer, "proofInputs" | "approvalBlinder"> &
+      Readonly<{ spend: Pick<RailSpend, "rail"> }>;
   }>,
 ): boolean {
   const { config, staged } = input;
   const { proofInputs, spend } = staged;
+  const delegate = isDelegateRail(spend.rail);
+  const transfers = proofInputs.externalData.interfaceTransfers;
   const inputs = publishedNotes(proofInputs);
-  const entry = spendsDefaultRing(proofInputs);
-  const { wide } = fittedSpend({
-    rail: spend.rail,
-    inputs: inputs.length,
-    outputs: proofInputs.checkShape().outputs,
-    spendsDefaultRing: entry,
-    legs: proofInputs.externalData.interfaceTransfers.length,
-    owners: ownerRows({ inputs, delegate: isDelegateRail(spend.rail) }).length,
-    pools: { own: 0, curator: 0, tracking: 0 },
-    wide: false,
-  });
-  const reads = readsPolicyRoot(config, spend.rail);
-  const data = framesData(proofInputs.outputs.filter((output) => !output.isDummy()));
-  return wide || (reads && (data || entry));
+  const live = proofInputs.outputs.filter((output) => !output.isDummy());
+  // 1. The program names the key from the legs its read screens, a ring reading no root screens
+  // none and a deposit never counts, so the wallet counts the same legs.
+  const legs = policyLegs(config, spend.rail, transfers);
+  const rows = ownerRows({ inputs, delegate });
+  // 2. Only a salted list opens more records than the row holding these counts provides, every
+  // other read fits it by the catalog's pool widths.
+  const distinct = (fields: readonly Bytes32[]): number => new Set(fields.map(bytesKey)).size;
+  const pools =
+    transferRootRead(config, delegate) === "policy" && readsSaltedList(config)
+      ? unreadSubjectPools({
+          owners:
+            legs +
+            distinct([
+              ...rows,
+              ...live.flatMap((output) =>
+                output.ownerAddress === undefined
+                  ? []
+                  : [output.ownerAddress.signingPublicKey.ownerProofInputHash()],
+              ),
+            ]),
+          assets: distinct([
+            ...live.map((output) => memberOfAsset(output.asset)),
+            ...proofInputs.inputUtxos
+              .filter((spent) => !spent.isDummy())
+              .map((spent) => memberOfAsset(spent.utxo.asset)),
+            ...publicSlots(transfers).assets.filter((asset) => !isZero(asset)),
+          ]),
+        })
+      : { own: 0, curator: 0, tracking: 0 };
+  // 3. One selection on both sides, only the bound stands in for the reads.
+  return sealedWide(
+    {
+      rail: spend.rail,
+      inputs: inputs.length,
+      outputs: proofInputs.checkShape().outputs,
+      spendsDefaultRing: spendsDefaultRing(proofInputs),
+      legs,
+      owners: rows.length,
+      pools,
+      wide: false,
+    },
+    // A disclosed opening spans every slot of the key like a data tail, a reader that raised the
+    // key to another output count would leave the opening's rows short of the digest it proves.
+    framesData(live) || staged.approvalBlinder !== undefined,
+  );
+}
+
+function readsSaltedList(config: RingPolicy): boolean {
+  return policySourceView(pinnedPolicy(config).sources).salted !== 0;
 }
 
 /** A relayed owner's seal, the caller wipes `sealed.ephemeralSecret`. */
@@ -462,13 +543,14 @@ async function assembleStagedTransfer<T>(
   const selected = await selectStagedKey(input, context);
   const { demandInput, demand, keySpend, addresses, circuit, wideOwners } = selected;
   const { sealed, layout, published, inputs, senderBundle, shape, proofInputs } =
-    sealStagedTransfer({ ...input, wideOwners });
+    sealStagedTransfer({
+      ...input,
+      wideOwners,
+    });
   const auditor = config.auditorPublicKey;
   try {
     const transfers = proofInputs.externalData.interfaceTransfers;
     const slots = publicSlots(transfers);
-    const entry = layout.key.entry;
-    const listSalts = input.listSalts ?? [];
     const policy = await readPolicy(
       {
         ...demandInput,
@@ -531,8 +613,21 @@ async function assembleStagedTransfer<T>(
       registries: ringRegistrySlots(config, transferRootRead(config, delegate)),
       coSigners,
       ...(spend.delegate === undefined ? {} : { delegate: spend.delegate }),
+      ...(proofInputs.cacheAccounts.read === undefined
+        ? {}
+        : { cache: TransactCacheAccounts.read(proofInputs.cacheAccounts.read) }),
     });
     const ringId = ringIdField(ringProgramId);
+    const approval =
+      staged.approvalBlinder === undefined
+        ? undefined
+        : transferApprovalOf(proofInputs, layout.capacity, staged.approvalBlinder);
+    const cache = cacheAccessOf(proofInputs);
+    const frameExtensions: FrameExtensions = Object.freeze({
+      ...staged.extensions,
+      ...(approval === undefined ? {} : { approvalTotals: approval.digest }),
+      ...(cache === undefined ? {} : { cache }),
+    });
     const preview = previewData({
       rail: ringRail,
       shape,
@@ -547,7 +642,7 @@ async function assembleStagedTransfer<T>(
       noSpend,
       wideOwners,
       publicOwners: spend.publicOwners === true,
-      extensions: staged.extensions ?? NO_EXTENSIONS,
+      extensions: frameExtensions,
       ...(spend.inProofOwner === undefined ? {} : { inProofOwner: spend.inProofOwner }),
     });
     const publicInputHash = transferStatementHash(
@@ -587,13 +682,18 @@ async function assembleStagedTransfer<T>(
         inputs: [],
         mergeCapacity: { keyed: 0, zeroKey: 0 },
       });
-    else
+    else {
       checkTransferFits(shape, {
         ...input.transaction,
         feePayer: proofInputs.payer,
         instructions: [inline],
         computeUnitLimit,
       });
+      TransactionFit.inline(inline, fitSigners(proofInputs.payer, input.transaction), {
+        ...fitBudget(input.transaction),
+        computeUnitLimit,
+      });
+    }
     return await use(
       Object.freeze({
         sealed,
@@ -611,6 +711,7 @@ async function assembleStagedTransfer<T>(
         accounts,
         ringId,
         preview,
+        ...(approval === undefined ? {} : { approval }),
       }),
     );
   } finally {
@@ -643,6 +744,7 @@ async function proveAssembled(
     publicOwners: spend.publicOwners === true,
     partyIdentities: assembled.partyIdentities,
     signers: assembled.signers,
+    ...(assembled.approval === undefined ? {} : { approval: assembled.approval }),
   });
   let proofs: readonly [ProvenRingTransact | ProvenAnonymousRingTransact, Uint8Array];
   try {
@@ -673,6 +775,7 @@ async function proveAssembled(
     ...(screened(policy)
       ? { policy: Object.freeze({ ringProgramId, policyHash: policy.policyHash }) }
       : {}),
+    ...(assembled.approval === undefined ? {} : { approvalOpening: assembled.approval.opening }),
   });
 }
 
@@ -698,6 +801,7 @@ export async function ringTransactInstruction(
       ? { ownerSigners: accounts.ownerSigners }
       : {}),
     ...(accounts.withdrawal === undefined ? {} : { withdrawal: accounts.withdrawal }),
+    ...(accounts.cache === undefined ? {} : { cache: accounts.cache }),
   });
   if (sppAccounts.length > MAX_SPP_CPI_ACCOUNTS)
     throw new RingError("RING_TOO_MANY_SETTLEMENT_ACCOUNTS", {
@@ -746,6 +850,7 @@ function withAuditorMessage(
     }),
     blindingSeed: proofInputs.blindingSeed,
     outputTreeId: proofInputs.outputTreeId,
+    cacheAccounts: proofInputs.cacheAccounts,
   });
 }
 
@@ -994,7 +1099,7 @@ function boundRoots(policy: PolicyInputs): readonly BoundRoot[] {
   );
 }
 
-function transactTag(rail: RingRail): RingInstructionTag {
+export function transactTag(rail: RingRail): RingInstructionTag {
   return isDelegateRail(rail) ? RingInstructionTag.authorityTransfer : RingInstructionTag.transfer;
 }
 

@@ -44,7 +44,7 @@ export interface DebitTransfer {
 
 /** Nonzero outflow rows by ascending owner then assets order, no caller input selects a share. */
 export function ownerDebits(transfer: DebitTransfer): readonly OwnerDebit[] {
-  const owners = distinct(transfer.senders.filter((owner) => !isZero(owner))).sort(compareField);
+  const owners = orderedOwners(transfer);
   const flows = distinct(transfer.assets)
     .flatMap((asset) => assetFlows(transfer, owners, asset))
     .filter((flow) => flow.outflow !== 0n);
@@ -58,7 +58,13 @@ export function compareField(left: Bytes32, right: Bytes32): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function assetFlows(
+/** The order every asset's flows share. */
+export function orderedOwners(transfer: DebitTransfer): Bytes32[] {
+  return distinct(transfer.senders.filter((owner) => !isZero(owner))).sort(compareField);
+}
+
+/** One row per owner, zero rows kept. */
+export function assetFlows(
   transfer: DebitTransfer,
   owners: readonly Bytes32[],
   asset: Bytes32,

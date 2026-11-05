@@ -567,10 +567,12 @@ impl PolicyRows {
     }
     fn build(&self, rule_count: usize) -> Result<RuleTable, RuleTableError> {
         let builder = RuleTable::builder();
-        self.rules[..rule_count]
+        let table = self.rules[..rule_count]
             .iter()
             .fold(builder, |builder, rule| builder.rule(*rule))
-            .try_build()
+            .try_build()?;
+        table.validate()?;
+        Ok(table)
     }
 }
 
@@ -611,7 +613,6 @@ pub fn describe(rule: &Rule) -> String {
         Subject::OutputOwner => "each output owner",
         Subject::Sender => "the sender",
         Subject::Asset => "each asset",
-        Subject::ExitDestination => "each exit destination",
     };
     let condition = match rule.source {
         RuleSource::Lists { .. } => rule
@@ -766,11 +767,11 @@ block = "{CURATOR}"
 
 [[rules]]
 subject = "output-owner"
-any = [{{ forbid = "block" }}, {{ require = "approval" }}]
+any = [{{ require = "allow" }}, {{ require = "approval" }}]
 
 [[rules]]
 subject = "sender"
-forbid = "frozen"
+forbid = "block"
 
 [[rules]]
 subject = "asset"
@@ -787,13 +788,12 @@ above = 1000000
         assert_eq!(rows.len(), 4);
         assert_eq!(
             rows[0],
-            Rule::any_of(
+            Rule::require_any(
                 Subject::OutputOwner,
-                ListSet::single(ListId::Approval),
-                ListSet::single(ListId::Block)
+                ListSet::of(&[ListId::Allow, ListId::Approval])
             )
         );
-        assert_eq!(rows[1], Rule::forbid(Subject::Sender, ListId::Frozen));
+        assert_eq!(rows[1], Rule::forbid(Subject::Sender, ListId::Block));
         assert_eq!(rows[2], Rule::require(Subject::Asset, ListId::Allow));
         assert_eq!(
             rows[3],
@@ -809,6 +809,35 @@ above = 1000000
         );
         assert!(policy.curator(ListId::Block).is_some());
         assert!(policy.curator(ListId::Allow).is_none());
+    }
+
+    #[test]
+    fn a_table_the_program_refuses_does_not_compile() {
+        for (form, message) in [
+            (
+                "any = [{ forbid = \"block\" }, { forbid = \"frozen\" }]",
+                RuleTableError::MultiListAbsence,
+            ),
+            ("require = \"block\"", RuleTableError::InvertedPolarity),
+            ("forbid = \"allow\"", RuleTableError::InvertedPolarity),
+            (
+                "any = [{ require = \"approval\" }, { forbid = \"block\" }]",
+                RuleTableError::MixedPolarity,
+            ),
+        ] {
+            let text = format!(
+                "[[rules]]\nsubject = \"sender\"\nforbid = \"frozen\"\n\n\
+                 [[rules]]\nsubject = \"output-owner\"\n{form}\n"
+            );
+            assert!(
+                matches!(
+                    compiled(&text),
+                    Err(PolicyError::Refused { rule: 1, message: refused })
+                        if refused == message.message()
+                ),
+                "{form}"
+            );
+        }
     }
 
     #[test]

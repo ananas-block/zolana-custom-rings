@@ -1,10 +1,10 @@
 //! The compact transact data a proven transfer owns, and its instruction.
 
 use custom_ring_interface::{
-    cosign::ApprovalMask, storage::Revision, tag, AnonymousProofData, AppMessage, CustomRingProof,
-    FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees, PlainGroth16Proof, PolicyProof,
-    Replies, RingOutput, RingPolicy, RingRail, RingTransactData, RootRead, SlotBody,
-    AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
+    cosign::ApprovalMask, statement::SignerDataCounts, storage::Revision, tag, AnonymousProofData,
+    AppMessage, CustomRingProof, FrameExtensions, FramedSenderBundle, InProofOwner, InputTrees,
+    PlainGroth16Proof, PolicyProof, Replies, RingOutput, RingPolicy, RingRail, RingTransactData,
+    RootRead, SlotBody, AUDIT_RECORD_LEN, DATA_TAIL_LEN, MAX_SPP_CPI_ACCOUNTS,
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -15,6 +15,7 @@ use spr_program::instruction::{
     RingAuthorityTransact, RingTransact, TransactInterfaceTransferAccounts,
 };
 
+use super::owner::deposit_funder;
 use crate::{CustomRing, RingError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +113,7 @@ pub(crate) struct OwnedExtensions {
     pub messages: Vec<OwnedAppMessage>,
     pub cache: Option<CacheAccess>,
     pub approval_totals: Option<[u8; 32]>,
+    pub signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl OwnedExtensions {
@@ -129,6 +131,7 @@ impl OwnedExtensions {
                 .collect(),
             cache: self.cache,
             approval_totals: self.approval_totals.as_ref(),
+            signer_data_counts: self.signer_data_counts,
         }
     }
 }
@@ -254,11 +257,24 @@ pub(crate) struct TransactAccounts {
     /// Only the confidential rail names owner signers.
     pub owner_signers: Vec<Address>,
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
+    /// SPP reads each cached note from it, it follows the settlement groups.
+    pub read_cache: Option<Address>,
     pub co_signers: Vec<Address>,
     pub delegate: Option<Address>,
 }
 
 impl TransactAccounts {
+    /// The funder of each deposit leg, in leg order.
+    pub fn deposit_funders(&self, parts: &TransactParts) -> Vec<[u8; 32]> {
+        parts
+            .interface_transfers
+            .iter()
+            .zip(&self.interface_transfer_accounts)
+            .filter_map(|(transfer, accounts)| deposit_funder(transfer, accounts))
+            .map(|funder| funder.to_bytes())
+            .collect()
+    }
+
     /// The ring prefix, then SPP's own list, the data's tag by its rail.
     pub fn instruction(
         &self,
@@ -282,7 +298,7 @@ impl TransactAccounts {
                 .accounts
             }
             RingRail::Confidential | RingRail::Anonymous => {
-                RingTransact {
+                let transact = RingTransact {
                     payer: self.payer,
                     input_trees: self.input_trees.clone(),
                     output_tree: self.output_tree,
@@ -290,9 +306,11 @@ impl TransactAccounts {
                     owner_signers: self.owner_signers.clone(),
                     interface_transfer_accounts: self.interface_transfer_accounts.clone(),
                     data: expanded,
+                };
+                match self.read_cache {
+                    Some(cache) => transact.instruction_with_cache_read(cache).accounts,
+                    None => transact.instruction().accounts,
                 }
-                .instruction()
-                .accounts
             }
         };
         if spp.len() > MAX_SPP_CPI_ACCOUNTS {

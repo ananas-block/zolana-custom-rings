@@ -339,7 +339,7 @@ describe("ring approval summary", () => {
       getTrackingRecordPool: async (request) => tracked.pool(request.members, request.openings),
     });
   }
-  it("approves the exact amount moved into the ring", async () => {
+  it("approves the exact amount moved into the ring and reaches the proof with its change", async () => {
     const keypair = spendingKeypair();
     const wallet = ringUtxoWallet(keypair, [[40n, undefined]]);
     const { approve, requests } = recordingApproval();
@@ -354,7 +354,10 @@ describe("ring approval summary", () => {
         feePayer: keypair.shieldedAddress().solanaAddress(),
         amount: 25n,
       }),
-    ).rejects.toMatchObject({ code: "RING_BUILD_ENTRY" });
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_ENTRY",
+      cause: { message: expect.stringContaining("proveRingTransact must not be called") },
+    });
     expect(requests.map((request) => request.summary)).toEqual([
       `ring entry of 25 SOL into ring ${RING}`,
     ]);
@@ -411,6 +414,33 @@ describe("ring approval summary", () => {
     }).catch((cause: unknown) => cause);
     return { error, requests };
   }
+
+  it("refuses an SPL entry with change on the anonymous rail, the bundle's second cell is SOL", async () => {
+    const keypair = spendingKeypair();
+    const mint = address("Mint111111111111111111111111111111111111111");
+    const { approve, requests } = recordingApproval();
+    await expect(
+      prepareRingEntryRelay({
+        client: await approvalClient([keypair.shieldedAddress()], "anonymous"),
+        ringProgramId: RING,
+        wallet: fundedWallet(keypair, [40n], { asset: mint }),
+        keys: localKeys(keypair),
+        approve,
+        asset: mint,
+        amount: 25n,
+        anonymous: {
+          quote: { feePayer: PAYER, validUntilSlot: 1n },
+          nullifierKey: keypair.nullifierKey(),
+          signer: signingKeySpendSigner(SigningKey.fromEd25519Bytes(filled(42))),
+          history: ViewingHistory.create(keypair.shieldedAddress().viewingPublicKey, 0n),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "RING_BUILD_ENTRY",
+      causeCode: "RING_ANONYMOUS_CHANGE_COUNT",
+    });
+    expect(requests).toEqual([]);
+  });
 
   it("funds an anonymous ring's entry from at most 24 default notes, the widest entry key", async () => {
     const widest = await anonymousEntry(24_000n, 25);

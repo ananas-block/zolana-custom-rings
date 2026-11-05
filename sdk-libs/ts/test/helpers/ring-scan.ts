@@ -248,11 +248,14 @@ export class ScanWallet {
     payments: readonly Pay[],
     options: Readonly<{ compact?: boolean; slot?: bigint }> = {},
   ): SealedTransfer {
-    const plan = payments.reduce(
-      (planned, pay) =>
-        planned.withPayment({ recipient: pay.to.viewingPublicKey, reply: pay.reply ?? null }),
-      AnonymousPlan.create(),
-    );
+    // An output to the sender is a bundle cell, not a payment.
+    const plan = payments
+      .filter((pay) => !pay.to.viewingPublicKey.equals(this.address.viewingPublicKey))
+      .reduce(
+        (planned, pay) =>
+          planned.withPayment({ recipient: pay.to.viewingPublicKey, reply: pay.reply ?? null }),
+        AnonymousPlan.create(),
+      );
     const input = this.#funding.shift();
     if (input === undefined) throw new Error("no funding left");
     const transfer = (

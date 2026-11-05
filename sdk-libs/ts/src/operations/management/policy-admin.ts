@@ -14,8 +14,9 @@ import {
   type RingPolicyUpdate,
   type RingSharedSource,
 } from "./admin.js";
-import { isPrivateSource, registryCurator } from "../../protocol/codec/ring-codecs.js";
+import { isZeroAddress, registryCurator } from "../../protocol/codec/ring-codecs.js";
 import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership/config.js";
+import { isPrivateList, listIdFromByte } from "../../protocol/membership/policy.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
 
 export type RingPolicyAdminClient = BlockhashProvider & Pick<ChainReader, "getAccount">;
@@ -67,12 +68,17 @@ async function checkSource(
     const current = registryCurator({ sources: others });
     if (current !== undefined && current !== curator) throw sourceInvalid("MultipleCurators");
   }
-  const source = await fetchStorageRegistry(params.client, curator ?? policy.records, context);
-  // Rust `check_source_pair`.
-  if (
-    source.trackingRegistry !== policy.tracking &&
-    (update.salted === true || isPrivateSource(source))
-  )
+  const address = curator ?? policy.records;
+  const source = await fetchStorageRegistry(params.client, address, context);
+  // Rust `check_source_pair`, an unpaired source serving a private list takes no floor. A public
+  // read holds no such risk, one curator serves many rings and pins at most one of their registries.
+  const servesPrivate = policy.sources.some(({ listId, registry }) => {
+    const id = listIdFromByte(listId);
+    if (id === undefined || !isPrivateList(id)) return false;
+    if (id === update.listId) return true;
+    return (isZeroAddress(registry) ? policy.records : registry) === address;
+  });
+  if (source.trackingRegistry !== policy.tracking && servesPrivate)
     throw sourceInvalid("SaltedSourceOtherTracking");
   if (curator === undefined) return;
   await checkCurators(

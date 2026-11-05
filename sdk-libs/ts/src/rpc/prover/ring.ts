@@ -8,6 +8,8 @@ import {
 } from "../../protocol/membership/mint-policy.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 
+import { rawJson } from "../../protocol/codec/raw-json.js";
+
 import { InterfaceError } from "@heliuslabs/zolana/interface";
 import { bigIntBytes, bytesField, type ExpectedProvingKey } from "@heliuslabs/zolana/internal";
 import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
@@ -98,7 +100,7 @@ export interface PolicySourceProofInput {
 /** Go `PolicyTable`, every row past its count zero. */
 export interface PolicyTableProofInputs {
   readonly sources: readonly PolicySourceProofInput[];
-  /** Bit `i` puts list `i + 1` at owners' salted keys. */
+  /** Bit `i` puts list `i + 1` at owners' salted keys, the mapped private lists. */
   readonly salted: number;
   readonly policyLen: number;
   readonly rules: readonly Bytes32[];
@@ -165,6 +167,10 @@ export interface TransferProofInputs
   readonly publicInputHash: Bytes32;
   /** The statement's proven bits. */
   readonly approvalMask: number;
+  /** Absent reads zero, a frame that discloses nothing. */
+  readonly approvalTotals?: Bytes32;
+  /** Fresh per transaction, absent reads zero. */
+  readonly approvalBlinder?: Bytes32;
   /** `m`, the slots past it leave the frame. */
   readonly outputCount: number;
   readonly outputs: readonly OutputOpeningProofInput[];
@@ -175,6 +181,8 @@ export interface TransferProofInputs
   /** One per input class slot on an entry key, empty otherwise. */
   readonly entries: readonly EntryOpeningProofInput[];
   readonly signerCount: number;
+  /** Absent reads zero, Go `SignerDataCounts`. */
+  readonly signerDataCounts?: bigint;
   /** SPP's owner signer run, zero filled to the input class. */
   readonly signers: readonly Bytes32[];
   /** The distinct live input owners ascending, zero rows last, at the key's owner rows. */
@@ -378,6 +386,7 @@ export function ringProofRequestBody(request: RingProofRequest): Readonly<Record
       const { capacity } = request;
       const shape: PolicySectionShape = {
         rows: 0,
+        spent: 0,
         outputs: capacity,
         withdrawals: 0,
         publicAssets: 0,
@@ -466,6 +475,8 @@ type PolicySectionShape = Readonly<{
   rows: number;
   outputs: number;
   withdrawals: number;
+  /** Input slots, each reads an asset entry past the payments'. */
+  spent: number;
   publicAssets: number;
   pools: PolicyPoolCapacity;
 }>;
@@ -477,6 +488,7 @@ function transferJson(request: TransferProofRequest): Json {
     rows: circuit.owners,
     outputs: circuit.outputs,
     withdrawals: circuit.withdrawals,
+    spent: circuit.class,
     publicAssets: N_PUBLIC_SLOTS,
     pools: transferPoolCapacity(circuit),
   };
@@ -488,6 +500,12 @@ function transferJson(request: TransferProofRequest): Json {
     sender: field(request.sender, "sender"),
     partyIdentities: fields(request.partyIdentities, ANONYMOUS_PARTIES, "partyIdentities"),
     approvalMask: integer(request.approvalMask, "approvalMask", 0, APPROVAL_MASK_MAX),
+    ...(request.approvalTotals === undefined
+      ? {}
+      : { approvalTotals: field(request.approvalTotals, "approvalTotals") }),
+    ...(request.approvalBlinder === undefined
+      ? {}
+      : { approvalBlinder: field(request.approvalBlinder, "approvalBlinder") }),
     outputCount: integer(request.outputCount, "outputCount", 1, request.outputs.length),
     outputs: request.outputs.map((output, i) => outputJson(output, `outputs[${i}]`)),
     inputCount: integer(request.inputCount, "inputCount", 1, slots),
@@ -500,6 +518,10 @@ function transferJson(request: TransferProofRequest): Json {
         }
       : {}),
     signerCount: integer(request.signerCount, "signerCount", 0, slots),
+    // Go reads a `uint64` number, 60 bits pass no double exact.
+    ...(request.signerDataCounts === undefined || request.signerDataCounts === 0n
+      ? {}
+      : { signerDataCounts: rawJson(request.signerDataCounts.toString()) }),
     signers: fields(request.signers, slots, "signers"),
     rows: fields(request.rows, circuit.owners, "rows"),
     privateTxHash: field(request.privateTxHash, "privateTxHash"),
@@ -673,12 +695,14 @@ function policyJson(policy: PolicyProofInputs, shape: PolicySectionShape): Json 
     ownerEntries: sized(policy.ownerEntries, slots, "ownerEntries").map((entry, i) =>
       ownerEntryJson(entry, capacity, `ownerEntries[${i}]`),
     ),
-    assetEntries: sized(policy.assetEntries, slots, "assetEntries").map((entry, i) =>
+    assetEntries: sized(policy.assetEntries, slots + shape.spent, "assetEntries").map((entry, i) =>
       entryJson(entry, capacity, `assetEntries[${i}]`),
     ),
-    publicAssetEntries: sized(policy.publicAssetEntries, shape.publicAssets, "publicAssetEntries").map(
-      (index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1),
-    ),
+    publicAssetEntries: sized(
+      policy.publicAssetEntries,
+      shape.publicAssets,
+      "publicAssetEntries",
+    ).map((index, i) => integer(index, `publicAssetEntries[${i}]`, 0, capacity.own - 1)),
   };
 }
 

@@ -42,7 +42,7 @@ impl MigrationTrait for Schema {
         for sql in [
             format!("CREATE TABLE records_batches (id {serial}, registry {blob} NOT NULL, signature {blob} NOT NULL, revision BIGINT NOT NULL, last_valid_block_height BIGINT NOT NULL, status TEXT NOT NULL)"),
             format!("CREATE TABLE cosign_admission (ring {blob} NOT NULL, asset {blob} NOT NULL, PRIMARY KEY(ring, asset))"),
-            format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, outflow {blob} NOT NULL, deposited {blob} NOT NULL, withdrawn {blob} NOT NULL, confirmed BOOLEAN NOT NULL, PRIMARY KEY(signature, owner, asset))"),
+            format!("CREATE TABLE cosign_usage (signature {blob} NOT NULL, ring {blob} NOT NULL, owner {blob} NOT NULL, asset {blob} NOT NULL, slot BIGINT NOT NULL, outflow {blob} NOT NULL, deposited {blob} NOT NULL, withdrawn {blob} NOT NULL, confirmed BOOLEAN NOT NULL, message_digest {blob} NOT NULL, PRIMARY KEY(signature, owner, asset))"),
             format!("CREATE TABLE finalized_notes (ring {blob} NOT NULL, commitment {blob} NOT NULL, sealed {blob} NOT NULL, PRIMARY KEY(ring, commitment))"),
             format!("CREATE TABLE finalized_spent_nullifiers (ring {blob} NOT NULL, nullifier {blob} NOT NULL, slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, position INTEGER NOT NULL, state VARCHAR(16) NOT NULL, sealed_note {blob}, PRIMARY KEY(ring, nullifier))"),
             format!("CREATE TABLE grants (id {serial}, reader {blob} NOT NULL, sealed {blob} NOT NULL)"),
@@ -51,13 +51,16 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE records_updates (seq {serial}, id {blob} NOT NULL UNIQUE, registry {blob} NOT NULL, ring {blob} NOT NULL, request TEXT NOT NULL, writes {blob} NOT NULL, queued_slot BIGINT NOT NULL, valid_until_slot BIGINT NOT NULL, status TEXT NOT NULL, batch BIGINT REFERENCES records_batches(id), reason TEXT, attempts BIGINT NOT NULL DEFAULT 0, awaited BIGINT NOT NULL DEFAULT 0, joined {blob}, member {blob}, signer {blob}, role TEXT)"),
             format!(
                 "CREATE TABLE relay_reservations (key {blob} NOT NULL PRIMARY KEY, relay_id {blob} NOT NULL, \
-                 signer {blob} NOT NULL, lamports BIGINT NOT NULL, landing_rent BIGINT NOT NULL, ring {blob}, buffer {blob}, \
-                 uploaded BIGINT NOT NULL, spent BIGINT NOT NULL, proven TEXT, touched_slot BIGINT NOT NULL)"
+                 signer {blob} NOT NULL, lamports BIGINT NOT NULL, fee_allowance BIGINT NOT NULL, \
+                 closing_fees BIGINT NOT NULL, landing_rent BIGINT NOT NULL, ring {blob}, buffer {blob}, \
+                 uploaded BIGINT NOT NULL, spent BIGINT NOT NULL, proven TEXT, phase TEXT NOT NULL, \
+                 generation BIGINT NOT NULL, lease_until_slot BIGINT NOT NULL, touched_slot BIGINT NOT NULL, \
+                 pending_signature {blob}, pending_valid_height BIGINT, pending_fee BIGINT, pending_upload BIGINT)"
             ),
             format!(
                 "CREATE TABLE relay_reserved (scope {blob} NOT NULL PRIMARY KEY, committed BIGINT NOT NULL)"
             ),
-            "CREATE INDEX relay_reservations_relay ON relay_reservations(relay_id)".to_owned(),
+            "CREATE UNIQUE INDEX relay_reservations_relay ON relay_reservations(relay_id)".to_owned(),
             "CREATE INDEX relay_reservations_touched ON relay_reservations(touched_slot)".to_owned(),
             format!("CREATE TABLE relay_relays (relay_id {blob} PRIMARY KEY, status TEXT NOT NULL, state TEXT NOT NULL)"),
             format!("CREATE TABLE replay_nonces (ring {blob} NOT NULL, nonce {blob} NOT NULL, signed_at BIGINT NOT NULL, PRIMARY KEY(ring, nonce))"),
@@ -65,6 +68,7 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE spend_integrity_faults (ring {blob} NOT NULL, nullifier {blob} NOT NULL, slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, PRIMARY KEY(ring, nullifier, tx_signature, event_index))"),
             format!("CREATE TABLE spend_unread_frames (ring {blob} NOT NULL, slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, PRIMARY KEY(ring, tx_signature, event_index))"),
             "CREATE INDEX cosign_usage_window ON cosign_usage(ring, asset, slot)".to_owned(),
+            "CREATE INDEX cosign_usage_message ON cosign_usage(message_digest)".to_owned(),
             "CREATE INDEX grants_reader ON grants(reader)".to_owned(),
             "CREATE INDEX merge_inputs_ring ON merge_inputs(ring)".to_owned(),
             "CREATE INDEX records_updates_joined ON records_updates(joined)".to_owned(),

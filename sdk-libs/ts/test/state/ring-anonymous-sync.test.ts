@@ -413,6 +413,17 @@ describe("anonymous sync", () => {
     expect(note.nullifier).toEqual(poseidon([hash, note.utxo.blinding, ZERO_32]));
   });
 
+  it("rebuilds an entry's moved note and its change from the two SOL cells", async () => {
+    const indexer = new ScanIndexer();
+    const alice = new ScanWallet(1);
+    const entered = await alice.pay(indexer, [{ to: alice.address, amount: 25n }]);
+    expect(entered.outputSlots.slice(0, 2).map((slot) => slot.payload.length)).toEqual([0, 0]);
+    const scan = await alice.sync(indexer, alice.fresh());
+    expect(found(scan)).toEqual([hex(output(entered, 0)), hex(output(entered, 1))]);
+    expect(scan.utxos.map((note) => note.utxo.amount).sort()).toEqual([25n, 75n]);
+    expect(scan.utxos.every((note) => note.utxo.ringProgramId !== undefined)).toBe(true);
+  });
+
   it("rebuilds a zero amount change slot", async () => {
     const indexer = new ScanIndexer();
     const alice = new ScanWallet(1);

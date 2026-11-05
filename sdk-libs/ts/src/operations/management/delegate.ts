@@ -8,7 +8,6 @@ import type {
   WalletKeys,
 } from "@heliuslabs/zolana/client";
 import {
-  compileUnsignedTransaction,
   reserveEntries,
   reservedUtxoKeys,
   unreserved,
@@ -36,9 +35,7 @@ import {
   type WalletUtxo,
 } from "@heliuslabs/zolana/transaction";
 
-import { RingInstructionTag, ringComputeUnitLimit } from "./admin.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
-import { boundState } from "../workflow/pipeline.js";
 import {
   DelegateTransfer,
   type DelegateOutput,
@@ -51,6 +48,7 @@ import { ringIntentMismatch, ringProofInput, ringSelectionErrors } from "../work
 import {
   RingTransactionSubmission,
   checkRetainedEntries,
+  provenRingAttempt,
   type RingSubmissionAttempt,
   type RingSubmissionBuildState,
 } from "../workflow/submission.js";
@@ -210,7 +208,7 @@ function delegateProofs(
     equalBytes(address.toBytes(), changeOwner.toBytes()),
   );
   if (source === undefined)
-    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+    throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
   const proofs = new NullifierKeyProofAuthority(source.nullifierKey, authority.proofs);
   return { proofs, release: () => proofs.destroy() };
 }
@@ -254,23 +252,38 @@ async function buildDelegateTransaction(
     const ownerOf = (entry: WalletUtxo): ShieldedAddress => {
       const found = owners.find((candidate) => entry.utxo.owner.equals(candidate.signingPublicKey));
       if (found === undefined)
-        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
       return found;
     };
-    const last = selected.at(-1);
-    if (last === undefined)
+    // Every note of a mint but the last is spent whole, its change is that note's owner's.
+    const spentMints = [...amounts].map(([asset, amount]) => {
+      const notes = selected.filter((entry) => entry.utxo.asset === asset);
+      const last = notes.at(-1);
+      if (last === undefined)
+        throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
+      const spent = notes.reduce((total, entry) => total + entry.utxo.amount, 0n);
+      return { asset, owner: ownerOf(last), change: spent - amount };
+    });
+    const [firstMint] = spentMints;
+    if (firstMint === undefined)
       throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "inputs" } });
-    const owner = ownerOf(last);
+    const owner = firstMint.owner;
     const coSources = delegateCoSources(source, selected.map(ownerOf), owner);
-    // Every note but the last is spent whole, a second mint would pay its change to another owner.
-    if (coSources.length !== 0 && amounts.size > 1)
-      throw new RingError("RING_DELEGATE_INVALID", { details: { reason: "mixedOwners" } });
+    // The sender's change pads in, another owner's is a slot of its own.
+    const moved = [
+      ...outputs,
+      ...spentMints
+        .filter((mint) => mint.change > 0n && !equalBytes(mint.owner.toBytes(), owner.toBytes()))
+        .map((mint) =>
+          Object.freeze({ recipient: mint.owner, asset: mint.asset, amount: mint.change }),
+        ),
+    ];
     const intent: TransactionIntent = Object.freeze({
       kind: "ringDelegate",
       ringProgramId: move.ringProgramId,
       delegate: signerAddress(move.delegate),
       source: owner,
-      outputs: outputs.map(({ recipient, asset, amount }) =>
+      outputs: moved.map(({ recipient, asset, amount }) =>
         Object.freeze({ recipient, asset, amount }),
       ),
     });
@@ -288,7 +301,7 @@ async function buildDelegateTransaction(
       sourceProofs: spender.proofs,
       inputs: selected.map((entry) => ringProofInput(entry, ownerOf(entry), move.client)),
       coSources,
-      outputs,
+      outputs: moved,
       assets,
       outputTreeId: move.client.treeId,
       ...(move.txViewingKey === undefined ? {} : { txViewingKey: move.txViewingKey }),
@@ -321,24 +334,17 @@ async function buildDelegateTransaction(
       },
     };
     const proven = await transfer.proveApproved(move.client, approval, context);
-    const [instruction, lifetime] = await Promise.all([
-      proven.instruction(),
-      move.client.getLatestBlockhash(context),
-    ]);
-    const transaction = compileUnsignedTransaction({
-      ...approval.transaction,
-      feePayer: move.feePayer,
-      lifetime,
-      instructions: [instruction],
-      computeUnitLimit: ringComputeUnitLimit(RingInstructionTag.authorityTransfer),
-    });
-    return Object.freeze({
-      transaction,
-      lastValidBlockHeight: lifetime.lastValidBlockHeight,
-      intentHash: planned,
-      ringInstructionIndex: 0,
-      ...boundState(proven),
-    });
+    return await provenRingAttempt(
+      {
+        proven,
+        feePayer: move.feePayer,
+        chain: move.client,
+        transaction: approval.transaction,
+        intentHash: planned,
+        buffered: retry.lifetime === "submission",
+      },
+      context,
+    );
   } catch (cause) {
     if (reservation !== undefined) wallet._releaseReservation(reservation.id);
     throw wrapRingError("RING_BUILD_TRANSFER", cause);

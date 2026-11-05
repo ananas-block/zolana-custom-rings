@@ -92,6 +92,14 @@ impl ListSet {
     pub const PRIVATE_LISTS: Self = Self::of(&[ListId::PrivateAllow, ListId::PrivateBlock]);
     pub const STORAGE_WRITES: Self = Self::AUTHORITY_WRITES.union(Self::MEMBER_WRITES);
 
+    /// The private lists a source map serves, `mapped` reads one slot and hashes nothing.
+    pub fn salted_among(mapped: impl Fn(ListId) -> bool) -> Self {
+        Self::PRIVATE_LISTS
+            .iter()
+            .filter(|list_id| mapped(*list_id))
+            .fold(Self::EMPTY, |set, list_id| set.union(Self::single(list_id)))
+    }
+
     pub const fn written_by(writer: Writer) -> Self {
         let mut set = Self::EMPTY;
         let mut i = 0;
@@ -183,6 +191,12 @@ const _: () = {
         assert!(ListId::ALL[i].slot() == i);
         i += 1;
     }
+};
+
+/// A rule reads each policy list by one polarity, `RuleTable::validate` refuses the other.
+const _: () = {
+    assert!(ListSet::GRANT_LISTS.union(ListSet::DENY_LISTS).bits() == ListSet::POLICY_LISTS.bits());
+    assert!(!ListSet::GRANT_LISTS.intersects(ListSet::DENY_LISTS));
 };
 
 impl TryFrom<u8> for ListId {

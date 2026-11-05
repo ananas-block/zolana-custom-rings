@@ -248,6 +248,7 @@ export type {
   DelegateTransferClient,
   DelegateTransferInput,
   PreparedRingRelay,
+  ReadCache,
   RingRelayInput,
 } from "../operations/payments/transfer-rails.js";
 export {
@@ -261,9 +262,29 @@ export {
 } from "../rpc/relay.js";
 export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
 export {
+  CoSignerApproval,
+  FunderApproval,
+  type CoSignerApprovalInput,
+  type FunderApprovalInput,
+} from "../proof/cosign.js";
+export type {
+  ApprovalOpening,
+  OutputTotalsOpening,
+  PublicTotalsOpening,
+} from "../protocol/membership/approval-totals.js";
+export {
   VerifiedRelayMessage,
+  decodeApprovalOpening,
+  decodeRelayFunderTerms,
   decodeRelayTransferTerms,
+  encodeApprovalOpening,
+  encodeRelayFunderTerms,
   encodeRelayTransferTerms,
+  type ApprovalLimit,
+  type CoSignerRule,
+  type ExactApproval,
+  type FundedLeg,
+  type RelayFunderTerms,
   type RelayTransferTerms,
   type SlotOpening,
   type TokenAccountCreate,
@@ -360,11 +381,14 @@ export type {
 export type { RingMergeClient } from "../rpc/ports.js";
 export {
   RingTransactionSubmission,
+  closeAbandonedFrameBuffers,
   createKitRingSubmissionTransport,
   reconcileRingSubmissions,
 } from "../operations/workflow/submission.js";
 export type {
   ReservationHold,
+  RingBufferReclaim,
+  RingFrameUpload,
   RingSubmissionAttempt,
   RingSubmissionBuild,
   RingSubmissionResult,
@@ -604,9 +628,15 @@ export type { TransactionSize } from "../operations/workflow/compile.js";
 export {
   decideAddressCeiling,
   spentInputOf,
+  TransactionFit,
   type CeilingDecision,
+  type Fit,
+  type FitBudget,
+  type FitSigners,
+  type FitTransport,
   type MergeCapacity,
   type MergeGroup,
+  type SetupEffect,
   type SpentInput,
 } from "../operations/workflow/address-ceiling.js";
 export type { RingListSalt } from "../proof/policy-proof.js";

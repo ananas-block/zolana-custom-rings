@@ -98,6 +98,9 @@ ring_errors! {
     RecordsRegistryOtherRing = 8266 => "the records registry serves another ring",
     ChangeTagNotZero = 8268 => "a change slot carries a nonzero view tag",
     ListNotPolicyReadable = 8255 => "a policy rule reads a list outside the policy lists",
+    MultiListAbsenceRule = 8235 => "a policy rule reads more than one list by absence",
+    InvertedListPolarity = 8236 => "a policy rule reads a grant list by absence or a deny list by presence",
+    MixedPolarityRule = 8237 => "a policy rule mixes presences and absences",
     InvalidCoSignerRecord = 8260 => "co-signer record account is invalid",
     CoSignerRecordAlreadyExists = 8261 => "co-signer record already exists",
     CoSignerOutOfScope = 8262 => "the co-signer's scope misses a demanded class",
@@ -124,6 +127,8 @@ ring_errors! {
     FrameWriteOutOfRange = 8524 => "the write falls outside the frame",
     UnsupportedBufferedTag = 8525 => "the frame's tag does not settle from a buffer",
     FramePayerNotWriter = 8526 => "the SPP payer of a settlement is not the buffer writer",
+    InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or set a bit past the last entry",
+    TooManyAnonymousParties = 8528 => "the co-signers and deposit funders pass the statement's party cells",
 }
 
 impl From<CustomRingError> for ProgramError {
@@ -143,6 +148,9 @@ impl From<RuleTableError> for CustomRingError {
         match error {
             RuleTableError::MemberWrittenList => Self::MemberWrittenListRule,
             RuleTableError::ListNotPolicyReadable => Self::ListNotPolicyReadable,
+            RuleTableError::MultiListAbsence => Self::MultiListAbsenceRule,
+            RuleTableError::InvertedPolarity => Self::InvertedListPolarity,
+            RuleTableError::MixedPolarity => Self::MixedPolarityRule,
             _ => Self::InvalidPolicyRules,
         }
     }

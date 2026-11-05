@@ -94,6 +94,9 @@ pinned_codes! {
     RecordsRegistryOtherRing = 8266,
     ChangeTagNotZero = 8268,
     ListNotPolicyReadable = 8255,
+    MultiListAbsenceRule = 8235,
+    InvertedListPolarity = 8236,
+    MixedPolarityRule = 8237,
     InvalidCoSignerRecord = 8260,
     CoSignerRecordAlreadyExists = 8261,
     CoSignerOutOfScope = 8262,
@@ -120,6 +123,8 @@ pinned_codes! {
     FrameWriteOutOfRange = 8524,
     UnsupportedBufferedTag = 8525,
     FramePayerNotWriter = 8526,
+    InvalidSignerDataCounts = 8527,
+    TooManyAnonymousParties = 8528,
 }
 
 #[test]
@@ -170,7 +175,6 @@ fn storage_error_codes_are_stable() {
         (Error::InvalidOwnerGrant, 9031),
         (Error::InvalidReaderKey, 9032),
         (Error::InvalidAuditorKey, 9033),
-        (Error::TrackingRootBelowFloor, 9034),
     ];
     for (error, code) in pins {
         assert_eq!(error as u32, code, "{error:?}");

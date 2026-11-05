@@ -37,7 +37,8 @@ use crate::{
         CONFIDENTIAL_DATA_FREE_BODY_LEN,
     },
     statement::{
-        AuditHead, ConfidentialSender, SignerSet, TransferFamily, TransferRoots, TransferStatement,
+        AuditHead, ConfidentialSender, SignerDataCounts, SignerSet, TransferFamily, TransferRoots,
+        TransferStatement,
     },
     storage::Revision,
     stream::{slot_tag, SLOT_TAG_LEN},
@@ -233,6 +234,8 @@ pub struct FrameExtensions<'a> {
     pub cache: Option<CacheAccess>,
     /// Present only for a co-signer that reads exact totals, the opening stays off chain.
     pub approval_totals: Option<&'a [u8; 32]>,
+    /// Present exactly while a count is nonzero, an absent one reads zero in the statement.
+    pub signer_data_counts: Option<SignerDataCounts>,
 }
 
 impl<'a> FrameExtensions<'a> {
@@ -274,12 +277,16 @@ impl<'a> FrameExtensions<'a> {
         let approval_totals = has(extension_flag::APPROVAL_TOTALS)
             .then(|| bytes.array())
             .transpose()?;
+        let signer_data_counts = has(extension_flag::SIGNER_DATA_COUNTS)
+            .then(|| SignerDataCounts::new(u64::from_le_bytes(*bytes.array()?)))
+            .transpose()?;
         Ok(Self {
             data_hash,
             ring_data_hash,
             messages,
             cache,
             approval_totals,
+            signer_data_counts,
         })
     }
 
@@ -296,6 +303,10 @@ impl<'a> FrameExtensions<'a> {
                 | flag(
                     self.approval_totals.is_some(),
                     extension_flag::APPROVAL_TOTALS,
+                )
+                | flag(
+                    self.signer_data_counts.is_some(),
+                    extension_flag::SIGNER_DATA_COUNTS,
                 ),
         );
         if let Some(hash) = self.data_hash {
@@ -320,6 +331,9 @@ impl<'a> FrameExtensions<'a> {
         if let Some(totals) = self.approval_totals {
             out.extend_from_slice(totals);
         }
+        if let Some(counts) = self.signer_data_counts {
+            out.extend_from_slice(&counts.packed().to_le_bytes());
+        }
         Ok(())
     }
 
@@ -328,6 +342,9 @@ impl<'a> FrameExtensions<'a> {
         1 + self.data_hash.map_or(0, |_| FIELD)
             + self.ring_data_hash.map_or(0, |_| FIELD)
             + self.approval_totals.map_or(0, |_| FIELD)
+            + self
+                .signer_data_counts
+                .map_or(0, |_| core::mem::size_of::<u64>())
             + match self.messages.is_empty() {
                 true => 0,
                 false => {
@@ -348,7 +365,9 @@ pub mod extension_flag {
     pub const MESSAGES: u8 = 1 << 2;
     pub const CACHE: u8 = 1 << 3;
     pub const APPROVAL_TOTALS: u8 = 1 << 4;
-    pub const KNOWN: u8 = DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE | APPROVAL_TOTALS;
+    pub const SIGNER_DATA_COUNTS: u8 = 1 << 5;
+    pub const KNOWN: u8 =
+        DATA_HASH | RING_DATA_HASH | MESSAGES | CACHE | APPROVAL_TOTALS | SIGNER_DATA_COUNTS;
 }
 
 const CACHE_ACCESS_LEN: usize = 8 + 2 * MAX_CACHE_WRITES;
@@ -498,7 +517,8 @@ pub fn exits_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
     slot_bits(outputs.iter().map(RingOutput::is_exit))
 }
 
-/// Frame parsing alone reads it.
+/// Frame parsing alone reads it. The bitmap is public and no proof reads it, any reader sees the
+/// slots with no recipient body. SPP's external data hash binds each slot's present or absent data.
 pub fn bodiless_bitmap(outputs: &[RingOutput<'_>]) -> u64 {
     slot_bits(outputs.iter().map(|output| output.body == SlotBody::None))
 }
@@ -521,7 +541,7 @@ pub struct FramedSenderBundle<'a> {
 pub struct Replies<'a> {
     /// `reply_len`, at least [`MIN_REPLY_LEN`].
     pub len: u16,
-    /// `len` bytes per body-bearing slot, in slot order, the statement digests the region.
+    /// `len` bytes per body-bearing slot, in slot order, SPP's external data hash binds them through each output.
     pub region: &'a [u8],
 }
 
@@ -594,7 +614,6 @@ impl<'a> ParsedTransact<'a> {
                 ring_id: binding.ring_id,
                 tx_viewing_u: data.tx_viewing_u,
                 auditor_pubkey: binding.auditor_pubkey,
-                eph_u: data.tx_viewing_u,
                 envelope: data.envelope,
                 salt: data.salt,
                 layout: data.audit_layout(),
@@ -602,6 +621,7 @@ impl<'a> ParsedTransact<'a> {
             family,
             approval_mask: data.approval,
             approval_totals: data.extensions.approval_totals.unwrap_or(&ZERO_FIELD),
+            signer_data_counts: data.signer_data_counts(),
             no_spend: data.no_spend,
             outputs: &data.outputs,
             output_capacity: self.stream.capacity,
@@ -1148,8 +1168,13 @@ impl<'a> RingTransactData<'a> {
             InputTrees::Two { .. } => 2,
         };
         let start = crate::RING_TRANSACT_ACCOUNT_PREFIX_LEN + trees + self.nullifiers.len();
+        // The cached selector's accounts follow the settlement groups, a run read through them would
+        // take a cache as an unsigned owner and every cached frame would refuse.
+        let cache_accounts = self.extensions.cache.map_or(0, |access| {
+            usize::from(access.read_bitmap != 0) + 2 * usize::from(access.writes_cache())
+        });
         spp.len()
-            .checked_sub(settlements)
+            .checked_sub(settlements + cache_accounts)
             .and_then(|end| spp.get(start..end))
             .ok_or(CustomRingError::InvalidSettlementAccounts)
     }
@@ -1187,6 +1212,11 @@ impl<'a> RingTransactData<'a> {
             }
             (circuit, _) => circuit,
         }
+    }
+
+    /// The value the statement binds, zero while the extension is absent.
+    pub fn signer_data_counts(&self) -> SignerDataCounts {
+        self.extensions.signer_data_counts.unwrap_or_default()
     }
 
     pub fn first_nullifier(&self) -> Result<&'a [u8; 32], CustomRingError> {
@@ -1468,8 +1498,12 @@ fn check_extensions(
     extensions: &FrameExtensions<'_>,
     rail: RingRail,
 ) -> Result<(), CustomRingError> {
-    match rail.is_delegate() && extensions.cache.is_some() {
-        true => Err(CustomRingError::FlagNotAllowed),
+    if rail.is_delegate() && extensions.cache.is_some() {
+        return Err(CustomRingError::FlagNotAllowed);
+    }
+    // Zero travels as the clear bit, one encoding per statement value.
+    match extensions.signer_data_counts == Some(SignerDataCounts::default()) {
+        true => Err(CustomRingError::InvalidSignerDataCounts),
         false => Ok(()),
     }
 }

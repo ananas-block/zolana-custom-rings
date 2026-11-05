@@ -128,7 +128,11 @@ export class LocalRingKeys implements RingKeys {
   /** The identity key, `list_tag` is final so a rotation keeps the salt. */
   readonly #listRoot: ViewingKey;
 
-  private constructor(keys: LocalShieldedKeys, viewing: readonly ViewingKey[], listRoot: ViewingKey) {
+  private constructor(
+    keys: LocalShieldedKeys,
+    viewing: readonly ViewingKey[],
+    listRoot: ViewingKey,
+  ) {
     this.#keys = keys;
     this.#tags = new ViewingKeyHolder(viewing);
     this.#listRoot = listRoot;
@@ -136,7 +140,11 @@ export class LocalRingKeys implements RingKeys {
 
   /** Copies the keypair's roles, the keypair stays the caller's. */
   static fromKeypair(keypair: ShieldedKeypair): LocalRingKeys {
-    return new LocalRingKeys(LocalShieldedKeys.fromKeypair(keypair), [keypair.viewingKey()], keypair.viewingKey());
+    return new LocalRingKeys(
+      LocalShieldedKeys.fromKeypair(keypair),
+      [keypair.viewingKey()],
+      keypair.viewingKey(),
+    );
   }
 
   /** `viewingKeys` lists the current key first, the caller's objects stay the caller's. */

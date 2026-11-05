@@ -18,8 +18,11 @@ type subjects struct {
 	senders        []subjectView
 	liveSenders    []frontend.Variable
 	owners, assets []subjectView
-	mintPolicies   []mintPolicyWires
-	publicAssets   []publicAsset
+	// inputAssets[i] is the asset of input slot i, liveInputs[i] is set on a spent note.
+	inputAssets  []subjectView
+	liveInputs   []frontend.Variable
+	mintPolicies []mintPolicyWires
+	publicAssets []publicAsset
 }
 
 // Rail is what the statement and the key fix about a transfer's rail, the one source of every section gate.
@@ -52,24 +55,19 @@ func (r Rail) Gates(api frontend.API, policyHash frontend.Variable) Gates {
 }
 
 // resolveSubjects opens one record per subject the gates activate, an inactive query reads zeros and a pool activates as the OR of its queries.
-func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, table tableView, g Gates, spend Spend, payments []Payment) subjects {
+func (p *Policy) resolveSubjects(api frontend.API, table tableView, g Gates, spend Spend, payments []Payment) subjects {
 	senders := spend.Senders
+	// 1. Each pool authenticates its records under its own root and answers a query by member, present or proven absent. Every read below goes through the pools, no prover list bit reaches a rule.
 	ownActive := api.Or(g.Screened, g.Outflow)
 	own := openSubjectPool(api, openRecordPool(api, ownActive, p.OwnRoot, p.OwnRecords, p.OwnProof, ownColumns), p.OwnSubjects)
-	var curator subjectPool
 	curated := api.Mul(g.Screened, table.sources.anyForeign)
-	if !p.OwnOnly {
-		curator = openSubjectPool(api, openRecordPool(api, curated, p.CuratorRoot, p.CuratorRecords, p.CuratorProof, curatorColumns), p.CuratorSubjects)
-	}
+	curator := openSubjectPool(api, openRecordPool(api, curated, p.CuratorRoot, p.CuratorRecords, p.CuratorProof, curatorColumns), p.CuratorSubjects)
 	resolve := func(entry PoolEntry, active, curatedRead, member frontend.Variable) (subjectView, pooledRecord) {
 		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: member, index: entry.Own}))
-		view := subjectView{onList: record.onList}
-		if !p.OwnOnly {
-			foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curatedRead), member: member, index: entry.Curator[0]})
-			view.onList = table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))
-		}
-		return view, record
+		foreign := curator.resolve(api, recordQuery{active: api.Mul(active, curatedRead), member: member, index: entry.Curator[0]})
+		return subjectView{onList: table.sources.lists(api, record.onList, [NSources]frontend.Variable(foreign))}, record
 	}
+	// 2. An owner also reads its salted key, the tracking row forces the salt once the owner has enrolled.
 	anySalted := api.Or(table.sources.saltedOwn, table.sources.saltedCurated)
 	ownerCurated := api.Mul(curated, table.sources.publicForeign)
 	resolveOwner := func(entry OwnerEntry, active, member frontend.Variable) subjectView {
@@ -80,15 +78,14 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 		abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: enrolled, A: shared.ListTag(api, entry.ListSalt), B: row.ListTag})
 		key := shared.ListKey(api, member, entry.ListSalt)
 		salted := pooledRecordAt(own.resolve(api, recordQuery{active: api.Mul(enrolled, table.sources.saltedOwn), member: key, index: entry.OwnSalted})).onList
-		if !p.OwnOnly {
-			curated := curator.resolve(api, recordQuery{active: api.Mul(enrolled, table.sources.saltedCurated), member: key, index: entry.CuratorSalted[0]})
-			salted = table.sources.lists(api, salted, [NSources]frontend.Variable(curated))
-		}
+		curatedSalted := curator.resolve(api, recordQuery{active: api.Mul(enrolled, table.sources.saltedCurated), member: key, index: entry.CuratorSalted[0]})
+		salted = table.sources.lists(api, salted, [NSources]frontend.Variable(curatedSalted))
 		view.onList = table.sources.owner(api, view.onList, salted)
 		return view
 	}
 	resolved := subjects{owners: make([]subjectView, len(payments)), assets: make([]subjectView, len(payments)), mintPolicies: make([]mintPolicyWires, len(payments))}
 	resolved.senders, resolved.liveSenders = make([]subjectView, len(senders)), make([]frontend.Variable, len(senders))
+	// 3. A padded row and a dummy or unused payment close their gates and read zeros, the rule sections skip them on the same bits.
 	for j, sender := range senders {
 		// A zero identity pads the list and carries no rule.
 		resolved.liveSenders[j] = ringgadget.IsNonZero(api, sender)
@@ -108,16 +105,16 @@ func (p *Policy) resolveSubjects(api frontend.API, rc frontend.Rangechecker, tab
 		record := pooledRecordAt(own.resolve(api, recordQuery{active: active, member: asset, index: index}))
 		resolved.publicAssets = append(resolved.publicAssets, publicAsset{limitedAsset: limitedAsset{asset: asset, active: active, policy: decodeMintPolicy(api, record.mintPolicy)}, withdrawalThreshold: record.withdrawalThreshold})
 	}
+	// 4. Every live input's asset reads its lists like a payment's, off the slot SPP spends, and a repeated asset can share one subject row. Only the rules read it, so the outflow gate opens no query here and no mint policy decodes. The authority rail clears Screened and spends with no read.
+	resolved.inputAssets, resolved.liveInputs = make([]subjectView, len(spend.Inputs)), make([]frontend.Variable, len(spend.Inputs))
+	for i, input := range spend.Inputs {
+		resolved.liveInputs[i] = input.Utxo
+		resolved.inputAssets[i], _ = resolve(p.AssetEntries[len(payments)+i], api.Mul(input.Utxo, g.Screened), curated, input.Asset)
+	}
 	return resolved
 }
 
-func (p *PolicyInputs) assertOwnOnly(api frontend.API) {
-	if !p.OwnOnly {
-		return
-	}
-	// The own-only key reads every list from own_root, a curator source or root would be screened against the wrong registry.
-	api.AssertIsEqual(p.CuratorRoot, 0)
-	for _, source := range p.Sources {
-		api.AssertIsEqual(source.Registry, 0)
-	}
+// IsSame reads one on two equal identities, an owner or an asset.
+func IsSame(api frontend.API, a, b frontend.Variable) frontend.Variable {
+	return api.IsZero(api.Sub(a, b))
 }

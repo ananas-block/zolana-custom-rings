@@ -12,7 +12,7 @@ use solana_keypair::{Keypair, Signer};
 use solana_transaction_error::TransactionError;
 use spr_account_checks::AccountError;
 use spr_interface::state::RingConfig;
-use zolana_ring_policy::{ring_id_field, ListId};
+use zolana_ring_policy::{ring_id_field, ListId, ListSet, Rule, Subject, TableParts};
 
 use crate::common::{
     allow_list_table, auditor_pubkey, co_signer_record, list_table, policy_pda, program_data_of,
@@ -338,19 +338,133 @@ fn a_rotated_admin_appoints_the_delegate_and_the_old_one_cannot() {
     assert_eq!(account.delegate(), Some(&delegate.pubkey()));
 }
 
+fn own_source_table(rules: &[Rule]) -> PolicyTableIxData {
+    let referenced = rules
+        .iter()
+        .fold(ListSet::EMPTY, |set, rule| set.union(rule.referenced()));
+    PolicyTableIxData {
+        sources: referenced
+            .iter()
+            .map(|list_id| SourceSpec {
+                list_id: list_id as u8,
+                source: 0,
+            })
+            .collect(),
+        rules: rules.iter().map(Rule::encoded).collect(),
+    }
+}
+
+fn refused_table_forms() -> [(Rule, CustomRingError); 4] {
+    let subject = Subject::OutputOwner;
+    [
+        (
+            Rule::forbid_only_on_all(subject, ListSet::of(&[ListId::Block, ListId::Frozen])),
+            CustomRingError::MultiListAbsenceRule,
+        ),
+        (
+            Rule::require(subject, ListId::Block),
+            CustomRingError::InvertedListPolarity,
+        ),
+        (
+            Rule::forbid(subject, ListId::Allow),
+            CustomRingError::InvertedListPolarity,
+        ),
+        (
+            Rule::any_of(
+                subject,
+                ListSet::single(ListId::Allow),
+                ListSet::single(ListId::Block),
+            ),
+            CustomRingError::MixedPolarityRule,
+        ),
+    ]
+}
+
 #[test]
-fn both_policy_writes_take_a_rule_reading_a_list_by_presence_or_absence() {
+fn initialize_refuses_each_table_form() {
+    for (rule, refusal) in refused_table_forms() {
+        let mut ring = uninitialized(Setup::Policy);
+        let mut data = policy_config(&ring);
+        data.policy = Some(PolicyBindingIxData {
+            table: own_source_table(&[rule]),
+        });
+        refused(upgrade_initialize(&mut ring, data), refusal);
+        assert_eq!(ring.lamports(&policy_pda()), 0, "{rule:?}");
+    }
+}
+
+#[test]
+fn a_table_write_refuses_each_table_form() {
+    for (rule, refusal) in refused_table_forms() {
+        let mut ring = Ring::new(Setup::Policy);
+        let policy = ring.roles.policy.pubkey();
+        let before: RingPolicy = ring.read(&policy_pda());
+        refused(
+            ring.role_send(
+                RingRole::Policy,
+                rules_write(&policy, own_source_table(&[rule])),
+            ),
+            refusal,
+        );
+        let after: RingPolicy = ring.read(&policy_pda());
+        assert_eq!(after, before, "{rule:?}");
+    }
+}
+
+#[test]
+fn a_source_write_refuses_each_table_form_it_would_store_again() {
+    for (rule, refusal) in refused_table_forms() {
+        let mut ring = Ring::new(Setup::Policy);
+        let policy = ring.roles.policy.pubkey();
+        let mut account: RingPolicy = ring.read(&policy_pda());
+        account.rules = TableParts {
+            rows: &[rule.encoded()],
+        }
+        .encode()
+        .unwrap();
+        let referenced = rule.referenced();
+        for (slot, list_id) in account.sources.iter_mut().zip(ListId::ALL) {
+            slot.list_id = match referenced.contains(list_id) {
+                true => list_id as u8,
+                false => 0,
+            };
+        }
+        ring.write(&policy_pda(), &account);
+        let list_id = referenced.iter().next().unwrap();
+        let instruction = UpdatePolicyIx {
+            authority: policy,
+            update: UpdatePolicyIxData::Source(PolicySourceIxData {
+                list_id: list_id as u8,
+                source: 0,
+            }),
+            trailing: &[],
+        }
+        .instruction();
+        refused(ring.role_send(RingRole::Policy, instruction), refusal);
+    }
+}
+
+#[test]
+fn both_policy_writes_take_a_grant_over_several_lists_and_one_denial_per_list() {
+    let table = own_source_table(&[
+        Rule::require_any(
+            Subject::OutputOwner,
+            ListSet::of(&[ListId::Allow, ListId::Approval]),
+        ),
+        Rule::forbid(Subject::OutputOwner, ListId::Block),
+        Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock),
+        Rule::forbid(Subject::Sender, ListId::Frozen),
+    ]);
     let mut ring = uninitialized(Setup::Policy);
-    let block_required = list_table(ListId::Block, Vec::new());
     let mut data = policy_config(&ring);
     data.policy = Some(PolicyBindingIxData {
-        table: block_required.clone(),
+        table: table.clone(),
     });
-    upgrade_initialize(&mut ring, data).expect("a deny list read by presence");
+    upgrade_initialize(&mut ring, data).expect("consistent list operations");
     let mut ring = Ring::new(Setup::Policy);
     let policy = ring.roles.policy.pubkey();
-    ring.role_send(RingRole::Policy, rules_write(&policy, block_required))
-        .expect("a deny list read by presence");
+    ring.role_send(RingRole::Policy, rules_write(&policy, table))
+        .expect("consistent list operations");
 }
 
 #[test]
@@ -604,7 +718,6 @@ const ROLE_WRITES: [RoleWrite; 8] = [
                 update: UpdatePolicyIxData::Source(PolicySourceIxData {
                     list_id: ListId::Allow as u8,
                     source: 0,
-                    salted: false,
                 }),
                 trailing: &[],
             }
@@ -864,11 +977,7 @@ fn a_source_write_names_a_known_list() {
     for list_id in [0, u8::MAX] {
         let instruction = UpdatePolicyIx {
             authority: policy,
-            update: UpdatePolicyIxData::Source(PolicySourceIxData {
-                list_id,
-                source: 0,
-                salted: false,
-            }),
+            update: UpdatePolicyIxData::Source(PolicySourceIxData { list_id, source: 0 }),
             trailing: &[],
         }
         .instruction();

@@ -10,7 +10,7 @@ use std::{
 use custom_ring_cli::{wait_for, Probe, Zolana};
 use custom_ring_interface::{
     mint_policy_write,
-    storage::Revision,
+    storage::{Revision, StorageRegistry},
     storage_instruction::{EnrollIxData, StorageUpdateIxData},
     tracking::TrackingAuthorization,
     RecordWriteData, RingPolicy, WriteRecordsIxData,
@@ -61,13 +61,10 @@ pub const BLOCK_ONLY: RuleTable = RuleTable::builder()
 pub const LIMIT_CAP: u64 = 650_000_000;
 pub const LIMIT_COSIGN_ABOVE: u64 = 300_000_000;
 
-/// Approval or no Block admits an output owner.
-pub const APPROVAL_OR_UNBLOCKED: RuleTable = RuleTable::builder()
-    .rule(Rule::any_of(
-        Subject::OutputOwner,
-        ListSet::single(ListId::Approval),
-        ListSet::single(ListId::Block),
-    ))
+/// An output owner needs an Approval entry and no Block entry.
+pub const APPROVED_AND_UNBLOCKED: RuleTable = RuleTable::builder()
+    .rule(Rule::require(Subject::OutputOwner, ListId::Approval))
+    .rule(Rule::forbid(Subject::OutputOwner, ListId::Block))
     .build();
 
 pub fn owner_member(owner: &ShieldedKeypair) -> Result<Member> {
@@ -527,9 +524,14 @@ impl StorageRecords<'_> {
         let inputs = storage_apply_proof_inputs(&response)?;
         let apply =
             env.run(StorageApplyProof { inputs: &inputs }.prove(env.client.ring_client()))?;
+        let account =
+            spr_test_utils::test_validator_asserts::fetch_account(env.client.rpc(), &registry)?;
+        let state = StorageRegistry::decode(&account.owner, &account.data)
+            .ok_or_else(|| anyhow::anyhow!("the ring's records are not a storage registry"))?;
         let update = UpdateStorage {
             authority,
             registry,
+            state: &state,
             data: StorageUpdateIxData {
                 revision: Revision::from(response.revision),
                 writes: self.writes,

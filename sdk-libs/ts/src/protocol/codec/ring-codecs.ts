@@ -104,8 +104,6 @@ export interface RingPolicy {
   readonly records: Address;
   /** Every read compares it, a forged registry would prove any wallet absent. */
   readonly tracking: Address;
-  /** `ListSet` bits owners read at salted keys, the private lists always. */
-  readonly saltedLists: number;
   /** Zero on an audit-only ring. */
   readonly policyHash: Bytes32;
   /** Rust `RingPolicy::has_policy`, a written `policyHash`. */
@@ -129,7 +127,7 @@ export const RING_CO_SIGNER_SIZE = 35;
 /** Rust `CoSignerCounts::CLASSES`. */
 const RING_COSIGN_CLASSES = [RING_COSIGN_TRANSFERS, RING_COSIGN_DEPOSITS, RING_COSIGN_WITHDRAWALS];
 export const RING_POLICY_DISCRIMINATOR = 15;
-export const RING_POLICY_SIZE = 1093;
+export const RING_POLICY_SIZE = 1092;
 export const STORAGE_REGISTRY_DISCRIMINATOR = 1;
 export const STORAGE_REGISTRY_SIZE = 1653;
 
@@ -170,7 +168,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
   const createdSlot = reader.u64("createdSlot");
   const records = encodeBase58(reader.bytes(32, "records"));
   const tracking = encodeBase58(reader.bytes(32, "tracking"));
-  const saltedLists = reader.u8("saltedLists");
   const policy = readPolicyFields(reader, "RING_POLICY_INVALID");
   reader.done();
   const classes = RING_COSIGN_CLASSES.reduce(
@@ -187,7 +184,6 @@ export function decodeRingPolicy(data: Uint8Array): RingPolicy {
     createdSlot,
     records,
     tracking,
-    saltedLists,
     ...policy,
     hasPolicy: !equalBytes(policy.policyHash, ZERO_32),
   });
@@ -237,11 +233,6 @@ export function decodeStorageRegistry(data: Uint8Array): StorageRegistry {
     trackingFloor,
     roots: Object.freeze(roots),
   });
-}
-
-/** Rust `StorageRegistry::is_private`, a salted list may read it. */
-export function isPrivateSource(registry: Pick<StorageRegistry, "trackingRegistry">): boolean {
-  return !isZeroAddress(registry.trackingRegistry);
 }
 
 /** Rust `StorageRegistry::root`, the current root or a retired one before its expiry. */
@@ -355,7 +346,7 @@ function countedRows(
   return Object.freeze(rows.slice(0, count));
 }
 
-function isZeroAddress(address: Address): boolean {
+export function isZeroAddress(address: Address): boolean {
   return address === ZERO_ADDRESS;
 }
 

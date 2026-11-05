@@ -6,12 +6,7 @@ import { readFileSync } from "node:fs";
 import { initializePoseidon } from "@heliuslabs/zolana";
 import { Reader, ZERO_32, ZERO_NULLIFIER_PK, addressBytes } from "@heliuslabs/zolana/internal";
 import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
-import {
-  NullifierKey,
-  ShieldedKeypair,
-  SigningKey,
-  X25519Keypair,
-} from "@heliuslabs/zolana/keypair";
+import { ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { listTagOf } from "../../../src/crypto/keys/list-salt.js";
@@ -278,7 +273,9 @@ describe("enrollment instructions", () => {
         enrolled,
       );
     await expect(enroll(SEAL)).resolves.toBeDefined();
-    await expect(enroll({ ...SEAL, ciphertext: new Uint8Array(64).fill(0x16) as Bytes64 })).rejects.toMatchObject({
+    await expect(
+      enroll({ ...SEAL, ciphertext: new Uint8Array(64).fill(0x16) as Bytes64 }),
+    ).rejects.toMatchObject({
       code: "RING_ENROLLMENT_KEY_MISMATCH",
     });
     await expect(

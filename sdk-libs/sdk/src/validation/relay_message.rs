@@ -1,10 +1,13 @@
 //! The message a wallet signs for Ring RPC, checked against the request the wallet made.
 
+use std::collections::BTreeSet;
+
 use custom_ring_interface::cosign::ApprovalMask;
 use custom_ring_interface::{
-    compute_unit_limit, frame_digest, settle_buffered_data, stream::slot_tag, tag, AuditRecord,
-    DepositPrefix, FrameBuffer, InstructionTag, ParsedTransact, RecordKind, RingMode, RingRail,
-    RingTransactData, STORAGE_PROGRAM_ID,
+    compute_unit_limit, frame_digest, funder_account_position, settle_buffered_data,
+    stream::slot_tag, tag, AuditRecord, DepositPrefix, FrameBuffer, InstructionTag, ParsedTransact,
+    RecordKind, RingMode, RingRail, RingTransactData, RING_TRANSACT_RING_CONFIG_INDEX,
+    STORAGE_PROGRAM_ID,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -14,6 +17,7 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use spr_client::MAX_LOADED_ACCOUNTS_DATA_SIZE;
 use spr_indexer_api::{Hash, SerializablePubkey};
+use spr_interface::{instruction::instruction_data::settlement_accounts, N_PUBLIC_SLOTS};
 use spr_keypair::{PublicKey, ShieldedAddress, X25519Pubkey};
 use spr_program::instruction::CreateAssociatedTokenAccount;
 use spr_transaction::{Mint, Utxo, WalletUtxo};
@@ -57,12 +61,20 @@ pub enum MessageMismatch {
     MissingApprovalDigest,
     #[error("the opening does not rebuild the frame's approval digest")]
     FalseApprovalOpening,
+    #[error("the opening does not hold one row per output of the key and per public slot")]
+    ApprovalOpeningLayout,
+    #[error("the opening's blinder is zero and hides no total")]
+    ZeroApprovalBlinder,
     #[error("the opening's blinder served an earlier attempt")]
     ReusedApprovalBlinder,
     #[error("the totals pass a limit or name an asset with no limit")]
     ApprovalOverLimit,
     #[error("the message spends a held note the terms do not name")]
     SpendsUnnamedNote,
+    #[error("the terms open another number of data outputs than the proof counts for the signer")]
+    DataOutputCount,
+    #[error("the deposit legs the signer funds differ from its terms")]
+    FunderLegs,
     #[error("the request asks for no signature")]
     Unrequested,
     #[error("the message settles a buffer, read it from the chain before signing")]
@@ -79,6 +91,7 @@ pub(crate) enum ExpectedMessage {
     /// The sealing wallet hands each signer what it reads and signs nothing itself.
     Sealed(SealedTerms),
     PublicOwner(ExpectedPublicOwner),
+    Funder(ExpectedFunder),
     CoSigner(ExpectedCoSigner),
     Enroll(ExpectedEnroll),
 }
@@ -103,6 +116,26 @@ pub struct RelayTransferTerms {
     pub nullifiers: Vec<Hash>,
     /// The token accounts the fee payer creates ahead of the ring instruction.
     pub setup: Vec<TokenAccountCreate>,
+}
+
+/// What one public funder agrees to, its own deposit legs alone. It reads no slot and no note.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RelayFunderTerms {
+    pub ring: SerializablePubkey,
+    pub fee_payer: SerializablePubkey,
+    pub signer: SerializablePubkey,
+    pub legs: Vec<FundedLeg>,
+    /// The token accounts the fee payer creates ahead of the ring instruction.
+    pub setup: Vec<TokenAccountCreate>,
+}
+
+/// `None` on SOL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FundedLeg {
+    pub mint: Option<SerializablePubkey>,
+    pub amount: u64,
 }
 
 /// The preimage of one published output's `utxo_hash`.
@@ -131,6 +164,7 @@ pub struct TokenAccountCreate {
 #[derive(Clone, Debug)]
 pub(crate) struct SealedTerms {
     pub owners: Vec<RelayTransferTerms>,
+    pub funders: Vec<RelayFunderTerms>,
     pub approval: Option<ApprovalOpening>,
 }
 
@@ -224,6 +258,14 @@ pub(crate) struct ExpectedPublicOwner {
     known_nullifiers: Vec<[u8; 32]>,
 }
 
+/// One public funder reading the frame's deposit legs against its terms.
+#[derive(Clone, Debug)]
+pub(crate) struct ExpectedFunder {
+    terms: RelayFunderTerms,
+    setup: Vec<Instruction>,
+    rail: RingRail,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ExpectedDeposit {
     pub ring: CustomRing,
@@ -290,6 +332,7 @@ impl ExpectedMessage {
             Self::Delegate(delegate) => delegate.check(message),
             Self::Sealed(_) => Err(MessageMismatch::Unrequested),
             Self::PublicOwner(owner) => check_inline(owner, message, signer),
+            Self::Funder(funder) => check_inline(funder, message, signer),
             Self::CoSigner(co_signer) => check_inline(co_signer, message, signer),
             Self::Enroll(enroll) => enroll.check(message),
         }
@@ -304,6 +347,7 @@ impl ExpectedMessage {
             Self::Deposit(_) | Self::Sealed(_) | Self::Enroll(_) => Ok(None),
             Self::Delegate(delegate) => delegate.settled_buffer(message),
             Self::PublicOwner(owner) => settled_buffer(owner, message, signer),
+            Self::Funder(funder) => settled_buffer(funder, message, signer),
             Self::CoSigner(co_signer) => settled_buffer(co_signer, message, signer),
         }
     }
@@ -319,6 +363,7 @@ impl ExpectedMessage {
             Self::Delegate(delegate) => delegate.check_settled(message, buffer),
             Self::Sealed(_) => Err(MessageMismatch::Unrequested),
             Self::PublicOwner(owner) => check_settled(owner, message, buffer, signer),
+            Self::Funder(funder) => check_settled(funder, message, buffer, signer),
             Self::CoSigner(co_signer) => check_settled(co_signer, message, buffer, signer),
         }
     }
@@ -327,7 +372,19 @@ impl ExpectedMessage {
         match self {
             Self::Sealed(sealed) => sealed.owners.iter().find(|terms| terms.signer.0 == signer),
             Self::PublicOwner(owner) => (owner.terms.signer.0 == signer).then_some(&owner.terms),
-            Self::Deposit(_) | Self::Delegate(_) | Self::Enroll(_) | Self::CoSigner(_) => None,
+            Self::Deposit(_)
+            | Self::Delegate(_)
+            | Self::Enroll(_)
+            | Self::Funder(_)
+            | Self::CoSigner(_) => None,
+        }
+    }
+
+    pub fn funder_terms_for(&self, signer: Address) -> Option<&RelayFunderTerms> {
+        match self {
+            Self::Sealed(sealed) => sealed.funders.iter().find(|terms| terms.signer.0 == signer),
+            Self::Funder(funder) => (funder.terms.signer.0 == signer).then_some(&funder.terms),
+            _ => None,
         }
     }
 
@@ -649,6 +706,29 @@ impl OwnerApproval<'_> {
     }
 }
 
+/// A funder's approval, its signature moves the legs it names and nothing else of its.
+#[must_use]
+pub struct FunderApproval<'a> {
+    pub relay_id: RelayId,
+    pub message: Vec<u8>,
+    pub terms: RelayFunderTerms,
+    pub config: &'a CustomRingConfig,
+}
+
+impl FunderApproval<'_> {
+    pub fn pending(self) -> PendingSignature {
+        PendingSignature::expecting(
+            self.relay_id,
+            self.message,
+            ExpectedMessage::Funder(ExpectedFunder {
+                setup: setup_instructions(self.terms.fee_payer.0, &self.terms.setup),
+                rail: transfer_rail(self.config.mode),
+                terms: self.terms,
+            }),
+        )
+    }
+}
+
 fn setup_instructions(fee_payer: Address, setup: &[TokenAccountCreate]) -> Vec<Instruction> {
     setup
         .iter()
@@ -681,12 +761,21 @@ impl ExpectedPublicOwner {
         }
     }
 
-    /// A slot of another owner, an opening that rebuilds another commitment or a held note the terms do not name binds nothing.
-    fn check_moved(&self, data: &RingTransactData<'_>) -> Result<(), MessageMismatch> {
+    /// SPP reads one signature as approval of every data-bearing output its signer owns, and each
+    /// published owner tag of a ring output is zero, so no frame field names those outputs. The terms
+    /// stay selective, the proof supplies only how many exist.
+    fn check_moved(
+        &self,
+        data: &RingTransactData<'_>,
+        accounts: &[AccountMeta],
+    ) -> Result<(), MessageMismatch> {
         let terms = &self.terms;
         if terms.slots.is_empty() && terms.nullifiers.is_empty() {
             return Err(MessageMismatch::Unrequested);
         }
+        // 1. Each opening rebuilds the commitment published at its slot and names the signer. Past the
+        // loop a slot index stands for one real output of the signer, so the count below cannot read
+        // another owner's slot or a preimage the sender made up.
         for opening in &terms.slots {
             let published = data
                 .outputs
@@ -697,7 +786,26 @@ impl ExpectedPublicOwner {
                 return Err(MessageMismatch::Recipients);
             }
         }
-        // A named note the wallet cannot place means no list stood behind the check.
+        // 2. The circuit counts the live slots the signer owns with a nonzero `data_hash`, per entry of
+        // the run `signers.Chain` binds. Equality with the distinct opened slots closes the omission
+        // that step 1 alone leaves open, a second data output the sender keeps out of the terms. Slots
+        // dedupe a repeated opening, the filter keeps an ordinary payment from standing in for a data
+        // output, and `ring_data_hash` stays outside since SPP asks no owner signature for it. A
+        // member past the last packed entry reads zero and the circuit holds it to no data output.
+        // The count reveals the public signers that receive data outputs and how many, never an amount.
+        let opened: BTreeSet<u32> = terms
+            .slots
+            .iter()
+            .filter(|opening| opening.data_hash.0 != [0; 32])
+            .map(|opening| opening.slot)
+            .collect();
+        let proved = data
+            .signer_data_counts()
+            .count(self.run_entry(data, accounts)?);
+        if opened.len() != usize::from(proved) {
+            return Err(MessageMismatch::DataOutputCount);
+        }
+        // 3. A named note the wallet cannot place means no list stood behind the check.
         let named_and_held = terms.nullifiers.iter().all(|nullifier| {
             data.nullifiers.contains(&nullifier.0) && self.known_nullifiers.contains(&nullifier.0)
         });
@@ -713,6 +821,44 @@ impl ExpectedPublicOwner {
             false => Ok(()),
         }
     }
+
+    /// The signer's entry in the run the program hashes into `signers.Chain`. The ring auth PDA finds
+    /// SPP's list with no read of the registries or co-signers ahead of it, since the program refuses
+    /// a second copy anywhere in that list and neither a registry slot nor a signer slot can hold the
+    /// PDA. A misplaced run would read another signer's count, the same window the program takes
+    /// closes that.
+    fn run_entry(
+        &self,
+        data: &RingTransactData<'_>,
+        accounts: &[AccountMeta],
+    ) -> Result<usize, MessageMismatch> {
+        let spp = spp_accounts(self.terms.ring.0, accounts)?;
+        let settlements = settlement_accounts(&data.interface_transfers, data.circuit(), spp)
+            .ok_or(MessageMismatch::Accounts)?;
+        data.owner_signers(spp, settlements.len())
+            .map_err(|_| MessageMismatch::Accounts)?
+            .iter()
+            .position(|meta| meta.pubkey == self.terms.signer.0)
+            .ok_or(MessageMismatch::Accounts)
+    }
+}
+
+/// SPP's forwarded list, found by the one ring auth PDA the program admits in it.
+fn spp_accounts(
+    ring: Address,
+    accounts: &[AccountMeta],
+) -> Result<&[AccountMeta], MessageMismatch> {
+    let ring_auth = CustomRing::new(ring).ring_auth_pda();
+    let mut copies = accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, meta)| meta.pubkey == ring_auth);
+    let (Some((slot, _)), None) = (copies.next(), copies.next()) else {
+        return Err(MessageMismatch::Accounts);
+    };
+    slot.checked_sub(RING_TRANSACT_RING_CONFIG_INDEX)
+        .and_then(|start| accounts.get(start..))
+        .ok_or(MessageMismatch::Accounts)
 }
 
 impl SlotOpening {
@@ -764,8 +910,92 @@ impl ExpectedFrame for ExpectedPublicOwner {
             .filter(|(tag, _)| **tag == tag::TRANSFER)
             .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
             .ok_or(MessageMismatch::Data)?;
-        self.check_moved(parsed.data())?;
+        self.check_moved(parsed.data(), accounts)?;
         check_signer(&self.envelope(signer, Self::TAG)?, accounts)
+    }
+}
+
+impl ExpectedFrame for ExpectedFunder {
+    const TAG: InstructionTag = InstructionTag::Transfer;
+
+    fn envelope(&self, signer: Address, tag: InstructionTag) -> Result<Envelope, MessageMismatch> {
+        if self.terms.signer.0 != signer {
+            return Err(MessageMismatch::Unrequested);
+        }
+        Ok(Envelope {
+            ring: CustomRing::new(self.terms.ring.0),
+            program: self.terms.ring.0,
+            units: compute_unit_limit(tag),
+            fee_payer: self.terms.fee_payer.0,
+            signer,
+            setup: self.setup.clone(),
+        })
+    }
+
+    /// The signature authorizes every position naming the key, so the check holds both sides.
+    fn check_frame(
+        &self,
+        signer: Address,
+        frame: &[u8],
+        accounts: &[AccountMeta],
+    ) -> Result<(), MessageMismatch> {
+        if self.terms.legs.is_empty() {
+            return Err(MessageMismatch::Unrequested);
+        }
+        let parsed = frame
+            .split_first()
+            .filter(|(tag, _)| **tag == tag::TRANSFER)
+            .and_then(|(_, data)| RingTransactData::parse(data, self.rail).ok())
+            .ok_or(MessageMismatch::Data)?;
+        let data = parsed.data();
+        let spp = spp_accounts(self.terms.ring.0, accounts)?;
+        let mut groups = settlement_accounts(&data.interface_transfers, data.circuit(), spp)
+            .ok_or(MessageMismatch::Accounts)?;
+        // 1. The legs of the frame that take the key as funder match the terms exactly, a leg the
+        // sender adds would draw funds the signer never agreed to.
+        let mut unfunded = self.terms.legs.clone();
+        let mut funded = 0;
+        for transfer in &data.interface_transfers {
+            let (group, rest) = groups
+                .split_at_checked(transfer.settlement_account_count())
+                .ok_or(MessageMismatch::Accounts)?;
+            groups = rest;
+            let names_signer = funder_account_position(transfer)
+                .and_then(|position| group.get(position))
+                .is_some_and(|meta| meta.pubkey == signer);
+            if !names_signer {
+                continue;
+            }
+            let leg = FundedLeg {
+                mint: transfer
+                    .mint_account_position()
+                    .and_then(|position| group.get(position))
+                    .map(|meta| SerializablePubkey(meta.pubkey)),
+                amount: transfer.amount(),
+            };
+            let held = unfunded
+                .iter()
+                .position(|term| *term == leg)
+                .ok_or(MessageMismatch::FunderLegs)?;
+            unfunded.swap_remove(held);
+            funded += 1;
+        }
+        if !unfunded.is_empty() {
+            return Err(MessageMismatch::FunderLegs);
+        }
+        // 2. Past the legs the key appears nowhere. A run entry would authorize its data outputs and
+        // spent notes under one signature, the sharper authority the terms never name.
+        let named = accounts.iter().filter(|meta| meta.pubkey == signer);
+        if named.clone().count() != funded || !named.clone().all(|meta| meta.is_signer) {
+            return Err(MessageMismatch::Accounts);
+        }
+        match self
+            .envelope(signer, Self::TAG)?
+            .reads_only(accounts.get(..1).unwrap_or_default())
+        {
+            true => Ok(()),
+            false => Err(MessageMismatch::Accounts),
+        }
     }
 }
 
@@ -842,10 +1072,25 @@ impl CoSignerApproval<'_> {
 }
 
 impl ExactApproval {
-    /// The digest binds the totals, the limits then read them with no slot opened.
-    fn check(&self, digest: Option<&[u8; 32]>) -> Result<(), MessageMismatch> {
+    /// The digest binds the totals, the limits then read them with no slot opened. A ring with no
+    /// own registry runs no outflow section and its circuit refuses a nonzero digest, so such a frame
+    /// reads as `MissingApprovalDigest` and exact approval stays out of reach there, the proven bits
+    /// remain the only rule a co-signer can apply to it.
+    fn check(&self, digest: Option<&[u8; 32]>, capacity: usize) -> Result<(), MessageMismatch> {
         let digest = digest.ok_or(MessageMismatch::MissingApprovalDigest)?;
+        // 1. The chain hashes a flat run of three fields per output and four per public slot with no
+        // length in it, so `4a` more output rows and `3a` fewer public rows rebuild the same digest
+        // with every column shifted. Only the key's exact counts make the limits below read a peak
+        // as a peak, and they hold ahead of hashing since the rows come from the sealing wallet.
+        if self.opening.outputs.len() != capacity || self.opening.public.len() != N_PUBLIC_SLOTS {
+            return Err(MessageMismatch::ApprovalOpeningLayout);
+        }
+        // 2. The circuit accepts any blinder, and a zero one lets anyone test guessed totals against
+        // the public digest. Freshness and hiding rest on the reader's refusal alone.
         let blinder = &self.opening.blinder;
+        if blinder.0 == [0; 32] {
+            return Err(MessageMismatch::ZeroApprovalBlinder);
+        }
         if self.seen_blinders.contains(blinder) {
             return Err(MessageMismatch::ReusedApprovalBlinder);
         }
@@ -916,7 +1161,10 @@ impl ExpectedFrame for ExpectedCoSigner {
                     return Err(MessageMismatch::ApprovalMaskUnaccepted);
                 }
             }
-            CoSignerRule::Exact(exact) => exact.check(data.extensions.approval_totals)?,
+            CoSignerRule::Exact(exact) => exact.check(
+                data.extensions.approval_totals,
+                parsed.audit_stream().capacity,
+            )?,
         }
         check_signer(&self.envelope(signer, Self::TAG)?, accounts)
     }

@@ -110,15 +110,7 @@ export class BufferedFrame {
 
   /** Abandons an unsettled buffer, its rent returns to the writer. */
   close(): Instruction {
-    return instruction(
-      closeFrameBufferData(),
-      [
-        meta(this.#writer, true, true),
-        meta(this.buffer, false, true),
-        meta(this.#writer, true, true),
-      ],
-      this.#ringProgram,
-    );
+    return closeFrameBuffer(this.#ringProgram, this.#writer, this.buffer);
   }
 
   #write(offset: number, bytes: Uint8Array): Instruction {
@@ -132,4 +124,17 @@ export class BufferedFrame {
       this.#ringProgram,
     );
   }
+}
+
+/** Rust `close_frame_buffer`, its rent returns to the writer. */
+export function closeFrameBuffer(
+  ringProgram: Address,
+  writer: SignerAccount,
+  buffer: Address,
+): Instruction {
+  return instruction(
+    closeFrameBufferData(),
+    [meta(writer, true, true), meta(buffer, false, true), meta(writer, true, true)],
+    ringProgram,
+  );
 }

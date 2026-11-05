@@ -13,6 +13,7 @@ import { concatBytes, indexerScalars, sha256 } from "@heliuslabs/zolana/internal
 import type { indexerTypes } from "@heliuslabs/zolana/internal";
 
 import { RingError } from "../protocol/error.js";
+import type { ApprovalOpening } from "../protocol/membership/approval-totals.js";
 import {
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
@@ -28,6 +29,7 @@ import {
   checkRelayMessage,
   checkSettledMessage,
   expectedPublicOwner,
+  type RelayFunderTerms,
   type RelayTransferTerms,
   type DelegateRingConfig,
   settledBufferOf,
@@ -164,6 +166,20 @@ export class PendingRelaySignature {
     return this.#expected?.kind === "publicOwner" && this.#expected.terms.signer === signer
       ? this.#expected.terms
       : undefined;
+  }
+
+  /** What the wallet sealed for one public funder of a deposit leg. */
+  funderTerms(signer: Address): RelayFunderTerms | undefined {
+    if (this.#expected?.kind === "sealed")
+      return this.#expected.funders?.find((terms) => terms.signer === signer);
+    return this.#expected?.kind === "funder" && this.#expected.terms.signer === signer
+      ? this.#expected.terms
+      : undefined;
+  }
+
+  /** What opens the sealed frame's digest, for the wallet to hand to its co-signer, Rust `approval_opening`. */
+  approvalOpening(): ApprovalOpening | undefined {
+    return this.#expected?.kind === "sealed" ? this.#expected.approval : undefined;
   }
 
   /** Rust `PendingSignature::verify`, the expectation comes from the wallet's own request. */

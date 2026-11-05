@@ -350,7 +350,6 @@ fn a_policy_source_names_a_curator_registry_only_when_shared() {
             UpdatePolicyIxData::Source(PolicySourceIxData {
                 list_id: ListId::Allow as u8,
                 source,
-                salted: false,
             })
         );
     }

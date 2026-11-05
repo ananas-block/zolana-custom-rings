@@ -380,6 +380,8 @@ pub struct LiveRoots<'a> {
     pub curator: Option<&'a StorageRegistry>,
     /// Bound by address to the ring's pin.
     pub tracking: &'a TrackingRegistry,
+    /// `RingPolicy::tracking_floor` of the sources passed, zero with no salted read.
+    pub tracking_floor: Revision,
     pub slot: u64,
 }
 
@@ -396,10 +398,8 @@ impl LiveRoots<'_> {
 
     /// Refused below a salted source's floor.
     pub fn tracking(&self, revision: Revision) -> Result<[u8; 32], CustomRingError> {
-        for source in [self.own, self.curator].into_iter().flatten() {
-            source
-                .check_tracking_revision(revision)
-                .map_err(|_| CustomRingError::TrackingRootBelowFloor)?;
+        if revision.value() < self.tracking_floor.value() {
+            return Err(CustomRingError::TrackingRootBelowFloor);
         }
         self.tracking
             .root(revision, self.slot)
@@ -470,8 +470,6 @@ pub struct RingPolicy {
     pub records: Address,
     /// Every read compares it, a forged registry would prove any wallet absent.
     pub tracking: Address,
-    /// [`ListSet`] bits owner rows read under salted keys.
-    pub salted_lists: u8,
     /// Zero without a policy.
     pub policy_hash: [u8; 32],
     /// Non-empty exactly for the lists `rules` references.
@@ -498,7 +496,6 @@ pub struct CoSigner {
 #[derive(Debug, Copy, Clone)]
 pub struct PolicyUpdate {
     pub sources: [SourceSlot; N_SOURCE_SLOTS],
-    pub salted_lists: ListSet,
     pub rules: EncodedRuleTable,
     pub slot: u64,
 }
@@ -577,22 +574,20 @@ impl RingPolicy {
         (self.policy_hash != [0; 32]).then_some(&self.policy_hash)
     }
 
-    /// A list no rule reads keeps no salted bit.
+    /// `Initialize`, the table write and the source write all end here, the one point a table
+    /// reaches the account, and each validates the whole table it would store.
     pub fn set_policy(&mut self, update: PolicyUpdate) -> Result<(), CustomRingError> {
         let PolicyUpdate {
             sources,
-            salted_lists,
             rules,
             slot,
         } = update;
-        let salted_lists = ListSet::from_bits(salted_lists.bits() & rules.referenced().bits());
-        let source_map = salted_source_map(&sources, salted_lists)?;
+        let source_map = source_map_of(&sources)?;
         rules.validate(&source_map)?;
         let policy_hash = rules.hash(&source_map)?;
         self.count_generation(slot)?;
         self.policy_hash = policy_hash;
         self.sources = sources;
-        self.salted_lists = salted_lists.bits();
         self.rules = rules;
         Ok(())
     }
@@ -632,11 +627,12 @@ impl RingPolicy {
 
     /// The map `policy_hash` was computed over.
     pub fn source_map(&self) -> Result<SourceMap, CustomRingError> {
-        salted_source_map(&self.sources, self.salted())
+        source_map_of(&self.sources)
     }
 
-    pub const fn salted(&self) -> ListSet {
-        ListSet::from_bits(self.salted_lists)
+    /// `SourceMap::salted` of `source_map`, read from the slots with no registry hash.
+    pub fn salted(&self) -> ListSet {
+        ListSet::salted_among(|list_id| self.sources[list_id.slot()].list_id != 0)
     }
 
     pub fn rule_table(&self) -> Result<RuleTable, CustomRingError> {
@@ -651,12 +647,11 @@ impl RingPolicy {
             .chain([self.tracking])
     }
 
-    pub fn salted_registries(&self) -> Result<Vec<Address>, CustomRingError> {
-        let salted = self.source_map()?.salted();
-        Ok(salted
+    pub fn salted_registries(&self) -> Vec<Address> {
+        self.salted()
             .iter()
             .map(|list_id| *source_address(&self.sources[list_id.slot()], &self.records))
-            .collect())
+            .collect()
     }
 
     /// A salted list needs a floor against the ring's tracking registry.
@@ -665,14 +660,32 @@ impl RingPolicy {
         address: &Address,
         source: &StorageRegistry,
     ) -> Result<(), CustomRingError> {
-        let needs_pin = self
-            .salted()
-            .iter()
-            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address);
-        match source.tracking_registry == self.tracking || (!needs_pin && !source.is_private()) {
+        // An unpaired source serving a private list takes no floor, and a blocked enrolled owner
+        // then proves itself unenrolled under an old tracking root. A public read holds no such
+        // risk, one curator serves many rings and pins at most one of their registries.
+        match source.tracking_registry == self.tracking || !self.reads_salted(address) {
             true => Ok(()),
             false => Err(CustomRingError::SaltedSourceOtherTracking),
         }
+    }
+
+    /// The floor a frame's tracking root answers to through `source`, zero with no salted read.
+    ///
+    /// The one exception to tracking grace, a stale root could prove a blocked owner unenrolled.
+    /// A source's floor counts revisions of the registry it pins, so a public curator's floor
+    /// says nothing of the ring's registry and comparing them would refuse a live root.
+    pub fn tracking_floor(&self, address: &Address, source: &StorageRegistry) -> Revision {
+        match self.reads_salted(address) {
+            true => source.tracking_floor,
+            false => Revision::default(),
+        }
+    }
+
+    /// The ring maps a private list to the source at `address`.
+    fn reads_salted(&self, address: &Address) -> bool {
+        self.salted()
+            .iter()
+            .any(|list_id| source_address(&self.sources[list_id.slot()], &self.records) == address)
     }
 
     pub fn own_registry(&self, read: RootRead) -> Option<Address> {
@@ -698,20 +711,17 @@ fn source_address<'a>(slot: &'a SourceSlot, records: &'a Address) -> &'a Address
     }
 }
 
-fn salted_source_map(
-    sources: &[SourceSlot; N_SOURCE_SLOTS],
-    salted: ListSet,
-) -> Result<SourceMap, CustomRingError> {
+fn source_map_of(sources: &[SourceSlot; N_SOURCE_SLOTS]) -> Result<SourceMap, CustomRingError> {
     let mut slots = [PolicySource::default(); N_SOURCE_SLOTS];
     for (dst, slot) in slots.iter_mut().zip(sources) {
         *dst = slot.policy_source()?;
     }
-    Ok(SourceMap::from_slots(slots)?.with_salted(salted))
+    Ok(SourceMap::from_slots(slots)?)
 }
 
 const _: () = assert!(core::mem::size_of::<SourceSlot>() == 33);
 const _: () = assert!(ROOT_HISTORY <= u8::MAX as usize);
-const _: () = assert!(RingPolicy::SIZE == 1093);
+const _: () = assert!(RingPolicy::SIZE == 1092);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, roles) == 6);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, delegate) == 134);
 const _: () = assert!(core::mem::offset_of!(RingPolicy, auditor_pubkey) == 166);

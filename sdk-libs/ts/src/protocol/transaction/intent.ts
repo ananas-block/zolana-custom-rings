@@ -86,6 +86,19 @@ export function checkRingPreparedTransfer(
   intent: RingTransactionIntent,
   mismatch: (field: string) => Error,
 ): void {
+  if (intent.kind === "ringEntry") {
+    checkEntryChange(prepared, intent, mismatch);
+    checkPreparedTransfer(
+      {
+        ...prepared,
+        outputs: prepared.outputs.slice(prepared.senderOutputCount),
+        senderOutputCount: 0,
+      },
+      intent,
+      mismatch,
+    );
+    return;
+  }
   checkPreparedTransfer(
     prepared,
     intent.kind === "ringAnonymousTransfer"
@@ -101,4 +114,23 @@ export function checkRingPreparedTransfer(
       : intent,
     mismatch,
   );
+}
+
+/** An entry's change stays with its owner in the ring. */
+function checkEntryChange(
+  prepared: PreparedTransfer,
+  intent: Extract<TransactionIntent, { kind: "ringEntry" }>,
+  mismatch: (field: string) => Error,
+): void {
+  const owner = prepared.owner.toBytes();
+  for (const output of prepared.outputs.slice(0, prepared.senderOutputCount)) {
+    if (output.isDummy()) continue;
+    if (
+      output.ownerAddress === undefined ||
+      !equalBytes(output.ownerAddress.toBytes(), owner) ||
+      output.asset !== intent.asset ||
+      output.ringProgramId !== intent.ringProgramId
+    )
+      throw mismatch("change");
+  }
 }

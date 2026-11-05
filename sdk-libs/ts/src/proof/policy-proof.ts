@@ -40,6 +40,7 @@ import {
   unopenedRecordPool,
   type MemberOpeningRead,
 } from "../protocol/membership/member-opening.js";
+import { ApprovalTotals } from "../protocol/membership/approval-totals.js";
 import {
   approvalMask,
   ownerDebits,
@@ -50,7 +51,9 @@ import {
 import { listTagOf } from "../crypto/keys/list-salt.js";
 import { privateListKey } from "../protocol/membership/private-list.js";
 import {
-  admitTransfer,
+  evaluateInputAssets,
+  evaluatePayments,
+  evaluateSenders,
   memberOfAsset,
   pinnedPolicy,
   policySourceView,
@@ -75,6 +78,7 @@ import { isDelegateRail, type RingRail } from "../protocol/transaction/transact.
 import {
   publicAmountFields,
   publicGrossFields,
+  publicSlots,
   N_PUBLIC_SLOTS,
   type PublicSlots,
 } from "../protocol/transaction/spp.js";
@@ -113,6 +117,8 @@ export interface PolicyInputs {
   /** The output slots then the withdrawals, the request pads them to the key. */
   readonly ownerEntries: readonly PolicyOwnerEntry[];
   readonly assetEntries: readonly PolicySubjectEntry[];
+  /** One per published input slot, the request pads them to the key's input class past the payments. */
+  readonly inputAssetEntries: readonly PolicySubjectEntry[];
   readonly publicAssetEntries: readonly number[];
   /** Every rail reads it. */
   readonly trackingBound: BoundRoot;
@@ -204,6 +210,8 @@ interface PolicySubjects {
   /** By output slot, undefined on a dummy. */
   readonly owners: readonly (Bytes32 | undefined)[];
   readonly assets: readonly (Bytes32 | undefined)[];
+  /** By published input slot, undefined on a dummy or an address slot and off a policy. */
+  readonly inputAssets: readonly (Bytes32 | undefined)[];
   /** Screened owners, empty off a policy. */
   readonly ownerMembers: readonly Bytes32[];
   readonly assetMembers: readonly Bytes32[];
@@ -218,10 +226,7 @@ function policySubjects(
 ): PolicySubjects {
   const { config, rail, proofInputs } = input;
   const pinned = config.hasPolicy && !isDelegateRail(rail) ? pinnedPolicy(config) : undefined;
-  const view =
-    pinned === undefined
-      ? undefined
-      : policySourceView({ slots: pinned.sources, salted: pinned.salted });
+  const view = pinned === undefined ? undefined : policySourceView(pinned.sources);
   const liveRows = input.rows.filter((row) => !isZero(row));
   const { outputs } = proofInputs;
   const owners = outputs.map((output) =>
@@ -229,6 +234,12 @@ function policySubjects(
   );
   const assets = outputs.map((output) =>
     output.isDummy() ? undefined : memberOfAsset(output.asset),
+  );
+  // Only the rules read an input's asset, so the thresholds alone open none.
+  const inputAssets = publishedNotes(proofInputs).map((spent) =>
+    pinned === undefined || spent.isDummy() || spent.isAddress()
+      ? undefined
+      : memberOfAsset(spent.utxo.asset),
   );
   const ownerMembers =
     pinned === undefined
@@ -245,8 +256,9 @@ function policySubjects(
     liveRows,
     owners,
     assets,
+    inputAssets,
     ownerMembers,
-    assetMembers: firstSeen([...assets, ...withdrawals.map((leg) => leg.asset)]),
+    assetMembers: firstSeen([...assets, ...withdrawals.map((leg) => leg.asset), ...inputAssets]),
     publicAssets: input.publicSlots.assets.filter((asset) => !isZero(asset)),
     trackingMembers: firstSeen([
       ...liveRows,
@@ -286,8 +298,7 @@ export function relayListSalts(
   salts: readonly RingListSalt[],
 ): readonly RingListSalt[] {
   if (!config.hasPolicy) return [];
-  const { sources, salted } = pinnedPolicy(config);
-  return policySourceView({ slots: sources, salted }).salted === 0 ? [] : salts;
+  return policySourceView(pinnedPolicy(config).sources).salted === 0 ? [] : salts;
 }
 
 function saltsByOwner(salts: readonly RingListSalt[]): ReadonlyMap<string, Bytes32> {
@@ -337,7 +348,7 @@ export async function readPolicy(
   const { client, config, proofInputs, circuit, rail, ringProgramId, demand } = input;
   const { withdrawals } = demand;
   const subjects = policySubjects(input, withdrawals);
-  const { pinned, view, liveRows, owners, assets } = subjects;
+  const { pinned, view, liveRows, owners, assets, inputAssets } = subjects;
   const screening = pinned !== undefined;
   const { trackingBound, tracking, rowOf, trackingEntry } = await readTracking(
     input,
@@ -354,6 +365,7 @@ export async function readPolicy(
     senderEntries: Object.freeze(input.rows.map(() => ABSENT_OWNER)),
     ownerEntries: Object.freeze([]) as readonly PolicyOwnerEntry[],
     assetEntries: Object.freeze([]) as readonly PolicySubjectEntry[],
+    inputAssetEntries: Object.freeze([]) as readonly PolicySubjectEntry[],
     publicAssetEntries: Object.freeze(Array.from({ length: N_PUBLIC_SLOTS }, () => 0)),
     trackingBound,
     tracking,
@@ -436,7 +448,7 @@ export async function readPolicy(
     Array.from({ length: circuit.outputs - owners.length }, () => zero);
   const spent = spentNotes(proofInputs);
   if (pinned !== undefined) {
-    const sources = { slots: pinned.sources, salted: pinned.salted };
+    const sources = pinned.sources;
     const live = proofInputs.outputs.flatMap((output, slot) =>
       output.isDummy() ? [] : [{ output, slot }],
     );
@@ -459,19 +471,23 @@ export async function readPolicy(
         mintPolicy: policyOf(leg.asset),
       })),
     ];
-    // A co-owner who receives nothing is screened, every row passes the sender rules.
-    for (const sender of liveRows) {
-      const refusal = admitTransfer(pinned.table, sources, {
-        sender: recordLists(sender),
-        ringInputs,
-        outputs: payments,
-      });
-      if (refusal !== undefined)
-        throw ruleUnsatisfied(
-          refusal,
-          live.map(({ slot }) => slot),
-        );
-    }
+    // A co-owner who receives nothing is screened, every row passes the sender rules. Payments
+    // read once with or without a row, a dummy sender would hold a deposit to sender rules.
+    const refusal =
+      evaluateSenders(pinned.table, sources, liveRows.map(recordLists)) ??
+      evaluatePayments(pinned.table, sources, { ringInputs, outputs: payments }) ??
+      evaluateInputAssets(
+        pinned.table,
+        sources,
+        inputAssets.flatMap((asset, input) =>
+          asset === undefined ? [] : [{ input, lists: recordLists(asset) }],
+        ),
+      );
+    if (refusal !== undefined)
+      throw ruleUnsatisfied(
+        refusal,
+        live.map(({ slot }) => slot),
+      );
   }
   return Object.freeze({
     ...base,
@@ -480,10 +496,7 @@ export async function readPolicy(
     ...(pinned === undefined
       ? {}
       : {
-          table: policyTableProofInputs(pinned.table, {
-            slots: pinned.sources,
-            salted: pinned.salted,
-          }),
+          table: policyTableProofInputs(pinned.table, pinned.sources),
           policyHash: pinned.policyHash,
         }),
     own,
@@ -503,6 +516,7 @@ export async function readPolicy(
       ...padding(ABSENT_ENTRY),
       ...withdrawals.map((leg) => entry(leg.asset)),
     ]),
+    inputAssetEntries: Object.freeze(inputAssets.map((asset) => entry(asset))),
     publicAssetEntries: Object.freeze(
       input.publicSlots.assets.map((asset) => subject(ownReads, asset)),
     ),
@@ -621,10 +635,7 @@ export async function readDepositSection(
 > {
   const { client, config, ringProgramId, owner, asset } = input;
   const pinned = config.hasPolicy ? pinnedPolicy(config) : undefined;
-  const view =
-    pinned === undefined
-      ? undefined
-      : policySourceView({ slots: pinned.sources, salted: pinned.salted });
+  const view = pinned === undefined ? undefined : policySourceView(pinned.sources);
   const anySalted = view !== undefined && view.salted !== 0;
   const enrolled = !equalBytes(input.nullifierPk, ZERO_NULLIFIER_PK);
   const capacity = depositKeyCapacity({
@@ -731,7 +742,7 @@ export async function readDepositSection(
     member === undefined ? 0 : (reads?.get(bytesKey(member))?.index ?? 0);
   return Object.freeze({
     ...section,
-    ...policyTableProofInputs(pinned.table, { slots: pinned.sources, salted: pinned.salted }),
+    ...policyTableProofInputs(pinned.table, pinned.sources),
     policyHash: pinned.policyHash,
     ownRoot: own.root,
     curatorRoot: curator?.root ?? ZERO_32,
@@ -882,7 +893,10 @@ export function policyParams(policy: PolicyInputs, proving: PolicyProving): Poli
     curatorPool: policy.curatorPool ?? unopenedRecordPool(capacity.curator),
     senderEntries: policy.senderEntries,
     ownerEntries: pad(policy.ownerEntries, slots, ABSENT_OWNER),
-    assetEntries: pad(policy.assetEntries, slots, ABSENT_ENTRY),
+    assetEntries: [
+      ...pad(policy.assetEntries, slots, ABSENT_ENTRY),
+      ...pad(policy.inputAssetEntries, policy.circuit.class, ABSENT_ENTRY),
+    ],
     publicAssetEntries: policy.publicAssetEntries,
   });
 }
@@ -920,6 +934,30 @@ export function transferApprovalMask(
   return approvalMask({ flows, publicGross, policyOf });
 }
 
+/**
+ * The wallet and the relay read one layout, one slot per output of the key and every public slot in
+ * statement order, rows are the inputs' owners whatever their padding, Rust `approval_totals_of`.
+ */
+export function approvalTotalsOf(proofInputs: SppProofInputs, outputSlots: number): ApprovalTotals {
+  const slots = publicSlots(proofInputs.externalData.interfaceTransfers);
+  const inputs = spentNotes(proofInputs);
+  const outputs = slotOutputs(proofInputs);
+  return ApprovalTotals.new({
+    transfer: {
+      senders: inputs.map((note) => note.owner),
+      assets: [],
+      inputs,
+      outputs,
+      publicGross: grossOf(slots),
+    },
+    slotAssets: Array.from({ length: outputSlots }, (_, slot) => {
+      const output = proofInputs.outputs[slot];
+      return output === undefined || output.isDummy() ? undefined : assetField(output.asset);
+    }),
+    publicSlots: slots.assets.map((asset, slot) => ({ asset, gross: slots.gross[slot] ?? 0n })),
+  });
+}
+
 function grossOf(slots: PublicSlots): readonly PublicGross[] {
   return slots.assets.flatMap((asset, slot) => {
     const gross = slots.gross[slot] ?? 0n;
@@ -935,7 +973,7 @@ export function publishedNotes(proofInputs: SppProofInputs): readonly ProofInput
 /** Live notes, `ring` clear on a default-ring note, held for debit and no same-ring input. */
 function spentNotes(proofInputs: SppProofInputs): readonly (DebitInput & { ring: boolean })[] {
   return publishedNotes(proofInputs)
-    .filter((input) => !input.isDummy())
+    .filter((input) => !input.isDummy() && !input.isAddress())
     .map((input) => ({
       owner: input.utxo.owner.ownerProofInputHash(),
       asset: assetField(input.utxo.asset),
@@ -978,16 +1016,14 @@ function emptyTable(): PolicyTableProofInputs {
 /** The rule and the subject a refusal names, outputs by their SPP slot. */
 function ruleUnsatisfied(refusal: RuleRefusal, live: readonly number[]): RingError {
   const { subject } = refusal;
+  const reason = { reason: refusal.kind, ruleIndex: refusal.rule, subject: subject.kind };
   return new RingError("RING_POLICY_RULE_UNSATISFIED", {
     details:
       subject.kind === "sender"
-        ? { reason: refusal.kind, ruleIndex: refusal.rule, subject: "sender" }
-        : {
-            reason: refusal.kind,
-            ruleIndex: refusal.rule,
-            subject: subject.kind,
-            slotIndex: live[subject.output] ?? -1,
-          },
+        ? reason
+        : subject.kind === "inputAsset"
+          ? { ...reason, inputIndex: subject.input }
+          : { ...reason, slotIndex: live[subject.output] ?? -1 },
   });
 }
 

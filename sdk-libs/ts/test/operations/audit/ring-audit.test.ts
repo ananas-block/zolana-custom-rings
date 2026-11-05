@@ -22,8 +22,7 @@ import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
 import { ShieldedKeypair, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import { AssetRegistry, SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
 import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/zolana/transaction";
-import { STREAM_FIRST_COUNTER,
- } from "../../../src/protocol/codec/ring-disclosure-layout.js";
+import { STREAM_FIRST_COUNTER } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   AUDIT_ENC_INFO,
   AuditSchedule,
@@ -78,26 +77,10 @@ function field(value: string): Bytes32 {
   return hex<Bytes32>(value, 32);
 }
 
-
-
-
 const SIGNATURE = "1".repeat(64) as Signature;
 /** A mint no default registry names, the exit of the pair vector settles it. */
 const FOREIGN_MINT = encodeBase58(new Uint8Array(32).fill(0x0a));
 const OTHER_RING = encodeBase58(new Uint8Array(32).fill(0x0b));
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function withSlot(
   index: number,
@@ -143,9 +126,9 @@ describe("auditor envelope", () => {
   });
 });
 
-
-
-const RING = encodeBase58(field("9090909090909090909090909090909090909090909090909090909090909090"));
+const RING = encodeBase58(
+  field("9090909090909090909090909090909090909090909090909090909090909090"),
+);
 
 const TX_SECRET = field("001013121514171619181b1a1d1c1f1e010003020504070609080b0a0d0c0f4e");
 const TX_SALT = hex<Bytes16>("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", 16);
@@ -248,7 +231,9 @@ function sealedTransfer(
     slot: 7n,
     txSignature: input.txSignature ?? SIGNATURE,
     eventIndex: 0,
-    txViewingPublicKey: x25519FromU(field("3632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63")),
+    txViewingPublicKey: x25519FromU(
+      field("3632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63"),
+    ),
     salt: TX_SALT,
     outputSlots: records.map((record, slot) => ({
       viewTag: new Uint8Array(32).fill(slot + 1) as Bytes32,

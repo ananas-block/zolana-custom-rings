@@ -10,8 +10,7 @@ use zolana_ring_transaction::{RingDelivery, RingOutputRail};
 
 use super::{
     anonymous::{
-        anonymous_plan, check_payment_ring, payment_salts, AnonymousPayment, HiddenOwner,
-        SenderChange,
+        anonymous_plan, check_payment_ring, payment_salts, AnonymousPayment, SenderChange,
     },
     canonical_shape,
     owner::Owner,
@@ -41,6 +40,10 @@ impl Rail for PublicOwners<'_> {
 
 impl<'a> RingTransfer<Owner<'a>> {
     /// `wallet` signs in public and may spend its zero-key notes, nothing selects them for it.
+    ///
+    /// A program owner names its PDA here and CPI signs, any [`super::RingSender`] whose address
+    /// carries `PublicKey::from_pda` holds its keys. The program requires the owner's signer flag on
+    /// either key class, only hidden authorization needs an Ed25519 key.
     pub fn spend_public(self, wallet: Address) -> RingTransfer<PublicOwners<'a>> {
         RingTransfer {
             ring: self.ring,
@@ -100,7 +103,7 @@ impl PublicOwners<'_> {
         if self.zero_key_change {
             sender.nullifier_pubkey = ZERO_NULLIFIER_PUBKEY;
         }
-        let named = HiddenOwner::of(&sender.signing_pubkey)?.0;
+        let named = sender.solana_address()?;
         if named != self.wallet {
             return Err(RingError::PublicSpendWalletMismatch {
                 named: self.wallet,
@@ -145,13 +148,14 @@ impl PublicOwners<'_> {
     }
 }
 
-/// Only a spend that named its wallet takes a zero-key note of that wallet.
+/// Only a spend that named its wallet takes a zero-key note of that wallet, an address slot spends no note.
 pub(super) fn check_zero_key_inputs(
     inputs: &[SppProofInputUtxo],
     owner: &PublicKey,
 ) -> Result<(), RingError> {
     match inputs.iter().position(|input| {
         !input.is_dummy()
+            && !input.is_address()
             && input.nullifier_pubkey == ZERO_NULLIFIER_PUBKEY
             && input.utxo.owner == *owner
     }) {

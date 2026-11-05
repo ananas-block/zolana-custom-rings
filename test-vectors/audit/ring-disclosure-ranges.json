@@ -850,6 +850,142 @@
       ]
     },
     {
+      "capacity_blocks": 115,
+      "class": 8,
+      "entry": false,
+      "envelope_blocks": 3,
+      "envelope_len_by_input_count": [
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33
+      ],
+      "first_record_counter": 5,
+      "first_tail_counter": 117,
+      "has_data": false,
+      "message_len_by_input_count": [
+        1746,
+        1746,
+        1746,
+        1746,
+        1746,
+        1746,
+        1746,
+        1746
+      ],
+      "outputs": 16,
+      "record_len": 105,
+      "record_start_counters": [
+        5,
+        12,
+        19,
+        26,
+        33,
+        40,
+        47,
+        54,
+        61,
+        68,
+        75,
+        82,
+        89,
+        96,
+        103,
+        110
+      ],
+      "tail_len": 0,
+      "tail_start_counters": [
+        117,
+        121,
+        125,
+        129,
+        133,
+        137,
+        141,
+        145,
+        149,
+        153,
+        157,
+        161,
+        165,
+        169,
+        173,
+        177
+      ]
+    },
+    {
+      "capacity_blocks": 179,
+      "class": 8,
+      "entry": false,
+      "envelope_blocks": 3,
+      "envelope_len_by_input_count": [
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33,
+        33
+      ],
+      "first_record_counter": 5,
+      "first_tail_counter": 117,
+      "has_data": true,
+      "message_len_by_input_count": [
+        2770,
+        2770,
+        2770,
+        2770,
+        2770,
+        2770,
+        2770,
+        2770
+      ],
+      "outputs": 16,
+      "record_len": 105,
+      "record_start_counters": [
+        5,
+        12,
+        19,
+        26,
+        33,
+        40,
+        47,
+        54,
+        61,
+        68,
+        75,
+        82,
+        89,
+        96,
+        103,
+        110
+      ],
+      "tail_len": 64,
+      "tail_start_counters": [
+        117,
+        121,
+        125,
+        129,
+        133,
+        137,
+        141,
+        145,
+        149,
+        153,
+        157,
+        161,
+        165,
+        169,
+        173,
+        177
+      ]
+    },
+    {
       "capacity_blocks": 17,
       "class": 49,
       "entry": false,
@@ -1259,6 +1395,94 @@
         106,
         110,
         114
+      ]
+    },
+    {
+      "capacity_blocks": 109,
+      "class": 4,
+      "entry": true,
+      "envelope_blocks": 53,
+      "envelope_len_by_input_count": [
+        241,
+        441,
+        641,
+        841
+      ],
+      "first_record_counter": 55,
+      "first_tail_counter": 111,
+      "has_data": false,
+      "message_len_by_input_count": [
+        1114,
+        1314,
+        1514,
+        1714
+      ],
+      "outputs": 8,
+      "record_len": 105,
+      "record_start_counters": [
+        55,
+        62,
+        69,
+        76,
+        83,
+        90,
+        97,
+        104
+      ],
+      "tail_len": 0,
+      "tail_start_counters": [
+        111,
+        115,
+        119,
+        123,
+        127,
+        131,
+        135,
+        139
+      ]
+    },
+    {
+      "capacity_blocks": 141,
+      "class": 4,
+      "entry": true,
+      "envelope_blocks": 53,
+      "envelope_len_by_input_count": [
+        241,
+        441,
+        641,
+        841
+      ],
+      "first_record_counter": 55,
+      "first_tail_counter": 111,
+      "has_data": true,
+      "message_len_by_input_count": [
+        1626,
+        1826,
+        2026,
+        2226
+      ],
+      "outputs": 8,
+      "record_len": 105,
+      "record_start_counters": [
+        55,
+        62,
+        69,
+        76,
+        83,
+        90,
+        97,
+        104
+      ],
+      "tail_len": 64,
+      "tail_start_counters": [
+        111,
+        115,
+        119,
+        123,
+        127,
+        131,
+        135,
+        139
       ]
     },
     {

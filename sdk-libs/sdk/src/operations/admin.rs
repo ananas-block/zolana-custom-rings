@@ -236,7 +236,6 @@ impl UpdatePolicy<'_> {
                 UpdatePolicyIxData::Source(PolicySourceIxData {
                     list_id: list_id as u8,
                     source: u8::from(matches!(source, SourceOwner::Curator(_))),
-                    salted: false,
                 })
             }
             PolicyUpdate::Records(records) => {

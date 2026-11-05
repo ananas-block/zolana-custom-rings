@@ -202,7 +202,8 @@ impl GuardScope<'_> {
     }
 }
 
-/// The statement's proven approval bits.
+/// The statement's proven approval bits, the program derives no threshold itself.
+#[must_use]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ApprovalMask(u8);
 
@@ -214,7 +215,7 @@ impl ApprovalMask {
     pub const WITHDRAWAL: Self = Self(2);
 
     /// `None` when a bit no class names is set.
-    pub const fn from_bits(bits: u8) -> Option<Self> {
+    pub const fn new(bits: u8) -> Option<Self> {
         if bits & !(Self::OUTFLOW.0 | Self::WITHDRAWAL.0) != 0 {
             return None;
         }
@@ -223,6 +224,10 @@ impl ApprovalMask {
 
     pub const fn bits(self) -> u8 {
         self.0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
     }
 
     pub const fn union(self, other: Self) -> Self {
@@ -242,7 +247,6 @@ pub struct ApprovalInputs<'a> {
 
 impl ApprovalInputs<'_> {
     /// A zero threshold and an asset with no record both mean no threshold.
-    #[must_use]
     pub fn mask(&self, policy_of: impl Fn(&[u8; 32]) -> MintPolicy) -> ApprovalMask {
         let over_outflow = self.flows.iter().any(|flow| {
             let above = policy_of(&flow.asset).cosign_above;
@@ -497,6 +501,6 @@ mod tests {
             inputs.mask(policy(9, 9)),
             ApprovalMask::OUTFLOW.union(ApprovalMask::WITHDRAWAL)
         );
-        assert_eq!(ApprovalMask::from_bits(4), None);
+        assert_eq!(ApprovalMask::new(4), None);
     }
 }

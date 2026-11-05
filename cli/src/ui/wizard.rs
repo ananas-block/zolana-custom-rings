@@ -43,7 +43,7 @@ const POLICY_OPTIONS: [&str; 11] = [
     "recipient public and private blocklist",
     "sender freeze",
     "asset allowlist",
-    "blocklist with approval exception",
+    "approved recipients outside a blocklist",
     "per-mint recipient limits",
     "advanced rule",
     "remove",
@@ -242,13 +242,10 @@ impl Wizard<'_> {
                 )),
                 "sender freeze" => Some(vec![forbid(SubjectName::Sender, "frozen")]),
                 "asset allowlist" => Some(vec![self.asset_rule(target, false)?]),
-                "blocklist with approval exception" => Some(vec![simple_rule(
-                    SubjectName::OutputOwner,
-                    SourceSpec::Any(vec![
-                        Alternative::Require(named_list("approval")),
-                        Alternative::Forbid(named_list("block")),
-                    ]),
-                )]),
+                "approved recipients outside a blocklist" => Some(vec![
+                    require(SubjectName::OutputOwner, "approval"),
+                    forbid(SubjectName::OutputOwner, "block"),
+                ]),
                 "per-mint recipient limits" => Some(vec![RuleSpec {
                     limits: Some(self.asset_limits(target)?),
                     ..require(SubjectName::OutputOwner, "allow")
@@ -746,9 +743,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_approval_exception_asks_only_for_the_lists_it_reads() {
+    fn the_approved_blocklist_asks_only_for_the_lists_it_reads() {
         let answers = run(script(&[
-            Answer::from("blocklist with approval exception"),
+            Answer::from("approved recipients outside a blocklist"),
             Answer::from("finish"),
             Answer::from(&*format!("curator {CURATOR} manages the members")),
             Answer::from(OWN_ENTRIES),
@@ -758,11 +755,10 @@ pub(crate) mod tests {
         let compiled = policy.compile(Target::Localnet).expect("compiles");
         assert_eq!(
             compiled.rules.rules(),
-            [Rule::any_of(
-                Subject::OutputOwner,
-                ListSet::single(ListId::Approval),
-                ListSet::single(ListId::Block)
-            )]
+            [
+                Rule::require(Subject::OutputOwner, ListId::Approval),
+                Rule::forbid(Subject::OutputOwner, ListId::Block),
+            ]
         );
         assert_eq!(
             compiled.shared_sources,
@@ -842,9 +838,9 @@ pub(crate) mod tests {
             Answer::from("either-or lists"),
             Answer::from("output-owner"),
             Answer::from("require"),
+            Answer::from("allow"),
+            Answer::from("require"),
             Answer::from("approval"),
-            Answer::from("forbid"),
-            Answer::from("block"),
             Answer::from("done"),
             Answer::from("above per-mint amounts"),
             Answer::from(OTHER_MINT),

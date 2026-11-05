@@ -51,7 +51,9 @@ const EPHEMERAL_SK = hex("011013121514171619181b1a1d1c1f1e010003020504070609080b
 const NULLIFIER_SECRET = hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
 const NULLIFIER_PK = hex("2d1faf6cf358763421511eb637adf7b6609443d38edc4ed2b042dfbf834b03f5");
 const EPH_PK = hex("043632fe89228ea5215eea45a56704f569e3929868a8573363d015e39609f0eb63");
-const CIPHERTEXT = hex("4be6ab2544799bd0c018ff495f59e8205d6fe9d007f74e44ec739529c0b27f25d23f6f5b30bde013afd5a02f1913cb4c354c8529e12a01ad583bb6f72692d99c");
+const CIPHERTEXT = hex(
+  "4be6ab2544799bd0c018ff495f59e8205d6fe9d007f74e44ec739529c0b27f25d23f6f5b30bde013afd5a02f1913cb4c354c8529e12a01ad583bb6f72692d99c",
+);
 
 const LIST_SALT = Uint8Array.of(0, ...new Uint8Array(31).fill(9)) as Bytes32;
 const RING = address("9vyTbYGyh3cwxkAQpjjFQGXmdJP6p9B6YcQ5pNuXPNbh");
@@ -129,16 +131,15 @@ async function ring(who: ReturnType<typeof enrolled>, seal: TrackingSeal | null 
     slot: 1n,
     root: request.expectedRoot,
     revision: REVISION,
-    openings: request.members.map(
-      (member): ServedTrackingOpening =>
-        equalBytes(member, who.row.member)
-          ? {
-              kind: "present",
-              record: who.row,
-              path: rowPath,
-              ...(seal === null ? {} : { seal }),
-            }
-          : absent(member),
+    openings: request.members.map((member): ServedTrackingOpening =>
+      equalBytes(member, who.row.member)
+        ? {
+            kind: "present",
+            record: who.row,
+            path: rowPath,
+            ...(seal === null ? {} : { seal }),
+          }
+        : absent(member),
     ),
   }));
   return {
