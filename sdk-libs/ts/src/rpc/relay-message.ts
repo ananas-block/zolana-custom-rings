@@ -1045,6 +1045,8 @@ function checkExactApproval(exact: ExactApproval, frame: RingTransactData): void
  * SPP's list with no read of the registries or co-signers ahead of it, since the program refuses a
  * second copy anywhere in that list and neither a registry slot nor a signer slot can hold the PDA.
  * A misplaced run would read another signer's count, the same window the program takes closes that.
+ * The counts index the run `SignerSet` keeps, first occurrences only, a raw position past a repeat
+ * reads another entry and lets a signer pass over its own omitted output.
  */
 function signerRunEntry(
   expected: ExpectedPublicOwner,
@@ -1054,11 +1056,12 @@ function signerRunEntry(
   const ringAuth = ringAuthSlot(expected.ringAuth, accounts);
   const trees = frame.inputTrees.kind === "one" ? 1 : 2;
   const start = ringAuth + 1 + trees + frame.nullifiers.length;
-  const entry = accounts
+  const run = accounts
     .slice(start, settlementWindow(frame, accounts).start)
-    .findIndex((meta) => meta.address === expected.terms.signer);
-  if (entry < 0) throw mismatch("Accounts");
-  return entry;
+    .map((meta) => meta.address);
+  const first = run.indexOf(expected.terms.signer);
+  if (first < 0) throw mismatch("Accounts");
+  return new Set(run.slice(0, first)).size;
 }
 
 /** The one ring auth PDA the program admits in SPP's list. */

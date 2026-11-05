@@ -1,5 +1,10 @@
 /** Refuses a relay message that moves more than the request, against the Rust check's vectors. */
-import { decompileTransactionMessage, getCompiledTransactionMessageDecoder } from "@solana/kit";
+import {
+  AccountRole,
+  decompileTransactionMessage,
+  getCompiledTransactionMessageDecoder,
+  type AccountMeta,
+} from "@solana/kit";
 import type { Instruction } from "@heliuslabs/zolana/interface";
 import { encodeBase58, equalBytes } from "@heliuslabs/zolana/internal";
 import { sealedAuditorSchedule } from "../../../src/crypto/audit/audit.js";
@@ -415,6 +420,7 @@ describe("relay message check", () => {
       named: typeof terms,
       signerDataCounts: bigint | undefined,
       published: readonly (typeof first)[] = [dataOpening],
+      runHead: readonly AccountMeta[] = [],
     ): Promise<string> => {
       const frame = RingTransactData.parse(
         Uint8Array.from(instruction().data ?? []).subarray(1),
@@ -427,6 +433,7 @@ describe("relay message check", () => {
         instructions: [
           {
             ...instruction(),
+            accounts: withRunHead(runHead),
             data: ringInstructionData({
               ...frame,
               extensions: {
@@ -473,6 +480,12 @@ describe("relay message check", () => {
       );
     };
     const count = (value: bigint): bigint => value << BigInt(5 * position());
+    function withRunHead(head: readonly AccountMeta[]): readonly AccountMeta[] {
+      const accounts = instruction().accounts ?? [];
+      const signer = accounts.findIndex((meta) => meta.address === terms.signer);
+      const start = signer - position();
+      return [...accounts.slice(0, start), ...head, ...accounts.slice(start)];
+    }
 
     it("passes one opening for each proved slot at the signer's place in the run", async () => {
       expect(await verdictWith(opened, count(1n))).toBe("Accepted");
@@ -483,6 +496,30 @@ describe("relay message check", () => {
       expect(
         await verdictWith({ ...terms, slots: [payment] }, count(1n), [dataOpening, payment]),
       ).toBe("DataOutputCount");
+    });
+
+    describe("under a run that repeats an earlier signer", () => {
+      const repeated: AccountMeta = {
+        address: "11111111111111111111111111111112" as Address,
+        role: AccountRole.READONLY_SIGNER,
+      };
+      const twice = [repeated, repeated];
+      const payment = { ...first, slot: first.slot - 1, dataHash: new Uint8Array(32) as Bytes32 };
+
+      it("reads the count at the signer's entry in the deduplicated run", async () => {
+        expect(await verdictWith(opened, count(1n) << 5n, [dataOpening], twice)).toBe("Accepted");
+      });
+
+      it("refuses a data output the terms omit", async () => {
+        expect(
+          await verdictWith(
+            { ...terms, slots: [payment] },
+            count(1n) << 5n,
+            [dataOpening, payment],
+            twice,
+          ),
+        ).toBe("DataOutputCount");
+      });
     });
 
     it("refuses a repeated opening that would pad a count", async () => {
