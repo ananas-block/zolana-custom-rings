@@ -4484,6 +4484,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "custom-ring-interface",
+ "custom-ring-sdk",
  "hex",
  "serde_json",
  "solana-address 2.6.1",
