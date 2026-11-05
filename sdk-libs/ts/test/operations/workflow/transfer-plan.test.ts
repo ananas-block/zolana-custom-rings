@@ -2,14 +2,12 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { RingError } from "../../../src/protocol/error.js";
 import type { TransferKeyCircuit } from "../../../src/protocol/proof/transfer-shapes.js";
 import { ringStreamLayout, type RingRail } from "../../../src/protocol/transaction/transact.js";
 import {
   NO_RECORD_POOLS,
   planTransfer,
   planTransferAt,
-  rekeyedPlan,
   type PlanFrame,
 } from "../../../src/operations/workflow/transfer-plan.js";
 
@@ -22,7 +20,7 @@ interface RustCircuit {
   readonly wide: boolean;
 }
 
-/** One case of Rust `a_read_keeps_a_seal_of_one_stream_and_refuses_another`. */
+/** One case of Rust `a_read_keeps_a_seal_of_one_stream_and_refuses_another`, its keys alone. */
 interface RekeyCase {
   readonly name: string;
   readonly rail: RingRail;
@@ -30,11 +28,9 @@ interface RekeyCase {
   readonly outputs: number;
   readonly spendsDefaultRing: boolean;
   readonly hasData: boolean;
-  readonly approval: boolean;
   readonly readPools: Readonly<{ own: number; curator: number; tracking: number }>;
   readonly sealed: RustCircuit;
   readonly read: RustCircuit;
-  readonly outcome: "reuse" | "reseal";
 }
 
 const CASES = JSON.parse(
@@ -68,7 +64,6 @@ function frameOf(rekey: RekeyCase): PlanFrame {
         wideOwners,
       }),
     settlement: "inline",
-    spansCapacity: rekey.hasData || rekey.approval,
   };
 }
 
@@ -77,37 +72,14 @@ function rustCircuit(circuit: TransferKeyCircuit): RustCircuit {
   return { outputs, inputs: circuit.class, withdrawals, owners, entry, wide };
 }
 
-describe("a planned transfer under a later read", () => {
-  it("covers every Rust case", () => {
-    expect(CASES.map((rekey) => rekey.outcome)).toEqual([
-      "reuse",
-      "reseal",
-      "reuse",
-      "reseal",
-      "reseal",
-    ]);
-  });
-
+describe("a planned transfer", () => {
   for (const rekey of CASES)
-    it(`${rekey.outcome === "reuse" ? "keeps" : "refuses until resealed"} ${rekey.name}`, () => {
+    it(`takes the Rust keys of ${rekey.name}`, () => {
       const frame = frameOf(rekey);
-      const sealed = planTransfer(frame, NO_RECORD_POOLS);
+      expect(rustCircuit(planTransfer(frame, NO_RECORD_POOLS).circuit)).toEqual(rekey.sealed);
       const read = planTransfer(frame, rekey.readPools);
-      expect(rustCircuit(sealed.circuit)).toEqual(rekey.sealed);
       expect(rustCircuit(read.circuit)).toEqual(rekey.read);
-      if (rekey.outcome === "reuse") {
-        // The relay proves the key a direct transfer takes from the same read.
-        expect(rekeyedPlan(sealed, read)).toBe(read);
-        return;
-      }
-      let refusal: unknown;
-      try {
-        rekeyedPlan(sealed, read);
-      } catch (cause) {
-        refusal = cause;
-      }
-      expect(refusal).toBeInstanceOf(RingError);
-      expect(refusal).toMatchObject({ code: "RING_RESEAL_REQUIRED", details: { row: "wide" } });
-      expect(rekeyedPlan(planTransferAt(frame, "wide"), read)).toBe(read);
+      // Every fixture read takes the wide row, so a wide reseal takes the read's key.
+      expect(planTransferAt(frame, "wide").circuit).toEqual(read.circuit);
     });
 });

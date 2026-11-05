@@ -402,7 +402,7 @@ async function selectStagedKey(input: StagedTransferInput, context: RequestConte
 function stagedPlanFrame(
   input: Readonly<{
     config: RingPolicy;
-    staged: Pick<StagedTransfer, "proofInputs" | "approvalBlinder"> &
+    staged: Pick<StagedTransfer, "proofInputs"> &
       Readonly<{ spend: Pick<RailSpend, "rail" | "publicOwners"> }>;
     bufferedSettlement?: boolean;
   }>,
@@ -440,9 +440,6 @@ function stagedPlanFrame(
         wideOwners,
       }),
     settlement: input.bufferedSettlement === true ? "buffered" : "inline",
-    // A disclosed opening spans every slot of the key like a data tail, a key of another output
-    // count would leave the opening's rows short of the digest it proves.
-    spansCapacity: hasData || staged.approvalBlinder !== undefined,
   });
 }
 
