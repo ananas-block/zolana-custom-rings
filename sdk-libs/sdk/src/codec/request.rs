@@ -787,48 +787,6 @@ pub(crate) struct MergeRequest {
     pub tracking: Option<TrackingOpeningRequest>,
 }
 
-/// Mirror Go `DepositParams`, every slot list at the key's capacity.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DepositRequest<'a> {
-    #[serde(with = "fe")]
-    pub public_input_hash: [u8; 32],
-    #[serde(with = "fe")]
-    pub context_hash: [u8; 32],
-    pub count: u32,
-    #[serde(serialize_with = "fe::seq")]
-    pub owner_pk_hashes: Vec<[u8; 32]>,
-    #[serde(serialize_with = "fe::seq")]
-    pub owner_keys: Vec<[u8; 32]>,
-    #[serde(serialize_with = "fe::seq")]
-    pub nullifier_pks: Vec<[u8; 32]>,
-    #[serde(serialize_with = "zeroizing_seq")]
-    pub blinding_secrets: Zeroizing<Vec<[u8; 32]>>,
-    #[serde(serialize_with = "fe::zeroizing")]
-    pub eph_sk: Zeroizing<[u8; 32]>,
-    #[serde(serialize_with = "coordinate")]
-    pub auditor_pk: X25519Pubkey,
-    #[serde(serialize_with = "fe::seq")]
-    pub assets: Vec<[u8; 32]>,
-    #[serde(serialize_with = "fe::seq")]
-    pub amounts: Vec<[u8; 32]>,
-    pub mint_chunks: Vec<MintChunks>,
-    #[serde(flatten)]
-    pub tracking: TrackingParams,
-    #[serde(flatten)]
-    pub policy: PolicyParams<'a>,
-}
-
-/// The 31 and 1 byte chunks of one raw mint.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MintChunks(pub [[u8; 32]; 2]);
-
-impl Serialize for MintChunks {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        fe::seq(&self.0, serializer)
-    }
-}
-
 /// The Solana key an owner identity hashes, the disclosure names it.
 pub(crate) fn owner_key(owner: &PublicKey) -> Result<[u8; 32], RingError> {
     Ok(owner.confidential_view_tag()?)
@@ -860,13 +818,6 @@ fn path<S: Serializer>(path: &QuadPath, serializer: S) -> Result<S::Ok, S::Error
         .flat_map(|level: &[[u8; 32]; QUAD_ARITY - 1]| level.iter().copied())
         .collect();
     fe::seq(&flat, serializer)
-}
-
-fn zeroizing_seq<S: Serializer>(
-    values: &Zeroizing<Vec<[u8; 32]>>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    fe::seq(values.as_slice(), serializer)
 }
 
 #[derive(Serialize)]

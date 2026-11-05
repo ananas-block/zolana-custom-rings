@@ -246,7 +246,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         rpc,
         &signature,
         "audited ring deposit",
-        u64::from(compute_unit_limit(InstructionTag::Deposit)),
+        u64::from(compute_unit_limit(InstructionTag::Transfer)),
     )?;
     let recovery = RingRecovery::new(ring_program, &auditor).for_member(SourceMember {
         address: &member_address,
@@ -260,7 +260,6 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         bail!("the recovery paused at the page cap");
     };
     assert!(deposited.unopened.is_empty());
-    assert!(deposited.unsupported_deposits.is_empty());
     assert_eq!(deposited.utxos.len(), 1);
     assert_eq!(deposited.utxos[0].utxo, input.utxo);
     assert_eq!(deposited.utxos[0].utxo.amount, DEFAULT_DEPOSIT);
@@ -394,7 +393,7 @@ fn the_key_enrollment_lifecycle_ends_in_a_delegate_move() -> Result<()> {
         rpc,
         &signature,
         "enrolled audited deposit",
-        u64::from(compute_unit_limit(InstructionTag::Deposit)),
+        u64::from(compute_unit_limit(InstructionTag::Transfer)),
     )?;
 
     // The delegate moves the enrolled member's note back to the member.

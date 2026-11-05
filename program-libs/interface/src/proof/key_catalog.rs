@@ -38,9 +38,6 @@ pub enum RingCircuit {
         writes: u8,
     },
     RegisterKey,
-    Deposit {
-        capacity: u8,
-    },
     Merge,
 }
 
@@ -355,17 +352,6 @@ impl RingCircuit {
             .map(TransferShape::circuit)
     }
 
-    pub const fn deposit(count: u8) -> Self {
-        Self::Deposit {
-            capacity: match count {
-                0..=1 => 1,
-                2 => 2,
-                3..=4 => 4,
-                _ => 8,
-            },
-        }
-    }
-
     pub const fn apply_records(pending: u64, mode: ApplyMode) -> Self {
         Self::ApplyRecords {
             writes: apply_width(pending),
@@ -458,7 +444,7 @@ impl RingKey {
         format!("{}.key", self.name.replace('-', "_"))
     }
 
-    /// The release lock section, `custom-ring-deposit-2` reads `deposit_2_key`.
+    /// The release lock section, `custom-ring-apply-records-2` reads `apply_records_2_key`.
     pub fn section(self) -> String {
         let stem = self.name.strip_prefix(NAME_PREFIX).unwrap_or(self.name);
         key_suffixed(&stem.replace('-', "_"), "_")
@@ -485,17 +471,20 @@ mod tests {
 
     #[test]
     fn key_names_carry_one_key_suffix() {
-        let deposit = RingKey {
-            circuit: RingCircuit::Deposit { capacity: 2 },
-            name: "custom-ring-deposit-2",
+        let apply = RingKey {
+            circuit: RingCircuit::ApplyRecords {
+                writes: 2,
+                mode: ApplyMode::Public,
+            },
+            name: "custom-ring-apply-records-2",
         };
         let register = RingKey {
             circuit: RingCircuit::RegisterKey,
             name: "custom-ring-register-key",
         };
-        assert_eq!(deposit.file_name(), "custom_ring_deposit_2.key");
-        assert_eq!(deposit.section(), "deposit_2_key");
-        assert_eq!(deposit.asset("v6"), "custom-ring-deposit-2-key-v6.key");
+        assert_eq!(apply.file_name(), "custom_ring_apply_records_2.key");
+        assert_eq!(apply.section(), "apply_records_2_key");
+        assert_eq!(apply.asset("v6"), "custom-ring-apply-records-2-key-v6.key");
         assert_eq!(register.section(), "register_key");
         assert_eq!(register.asset("v6"), "custom-ring-register-key-v6.key");
     }

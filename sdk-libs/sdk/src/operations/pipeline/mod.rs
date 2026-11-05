@@ -61,13 +61,14 @@ pub use self::{
     owner::{CustomRingTransfer, CustomRingTransferInput, Owner},
     plan::SealRow,
     public_owners::{PublicOwnerTransfer, PublicOwners},
+    relay::UnsignedRelay,
     relayed::{Relayed, RelayedTransfer, RelayedTransferInput},
 };
 
 pub(crate) use self::{
     anonymous::HiddenOwner,
     delegate::{delegate_rail, same_owner},
-    pool_subjects::{pool_at_width, KnownSalts, OwnerQuery, PoolSubjects, RecordPlan, SourceGates},
+    pool_subjects::{KnownSalts, SourceGates},
 };
 
 use self::{
@@ -1118,6 +1119,25 @@ impl Unwitnessed<'_> {
     }
 }
 
+#[cfg(test)]
+impl Assembled {
+    pub(crate) fn proof_inputs(&self) -> &SppProofInputs {
+        &self.frame.proof_inputs
+    }
+
+    pub(crate) fn parts(&self) -> &TransactParts {
+        &self.frame.parts
+    }
+
+    pub(crate) fn accounts(&self) -> &TransactAccounts {
+        &self.frame.accounts
+    }
+
+    pub(crate) fn co_sign_demand(&self) -> CoSignDemand {
+        self.frame.co_sign_demand
+    }
+}
+
 impl Assembled {
     async fn prove<P: AsyncRpc, I: RingIndexerBackend>(
         self,
@@ -1528,12 +1548,23 @@ pub(crate) fn public_leg(transfer: &SettlementTransfer) -> PublicLeg {
     }
 }
 
-/// The wallet and the relay read one layout, rows are the inputs' owners whatever their padding.
 /// `capacity` is the selected key's `N`, the circuit commits every slot of it.
 pub(crate) fn approval_totals_of(
     inputs: &SppProofInputs,
     capacity: usize,
 ) -> Result<ApprovalTotals, RingError> {
+    read_outflows(inputs, |outflows| outflows.approval_totals(capacity))
+}
+
+pub(crate) fn charged_outflows_of(inputs: &SppProofInputs) -> Result<Vec<OwnerDebit>, RingError> {
+    read_outflows(inputs, |outflows| outflows.flows())
+}
+
+/// The wallet and the relay read one layout, rows are the inputs' owners whatever their padding.
+fn read_outflows<T>(
+    inputs: &SppProofInputs,
+    read: impl FnOnce(&Outflows<'_>) -> Result<T, RingError>,
+) -> Result<T, RingError> {
     let public = public_slots(&inputs.external_data.interface_transfers)?;
     let senders = inputs
         .input_utxos
@@ -1541,14 +1572,13 @@ pub(crate) fn approval_totals_of(
         .filter(|input| input.is_note())
         .map(|input| Ok(input.utxo.owner.owner_proof_input_hash()?))
         .collect::<Result<Vec<_>, RingError>>()?;
-    Outflows {
+    read(&Outflows {
         senders: &senders,
         inputs: &inputs.input_utxos,
         outputs: &inputs.output_utxos,
         public_assets: &public.asset_fields()?,
         public_gross: &public.gross(),
-    }
-    .approval_totals(capacity)
+    })
 }
 
 pub(crate) fn public_slots(transfers: &[SettlementTransfer]) -> Result<PublicSlots, RingError> {

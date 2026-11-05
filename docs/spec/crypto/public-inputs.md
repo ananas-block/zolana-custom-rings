@@ -1,6 +1,6 @@
 # Public inputs
 
-Every ring proof has one public input. It is the fold of a statement its verifier rebuilds. The ring program rebuilds the transfer, deposit and merge statements, and the Storage program the apply and register key statements. A prover supplies none of the elements the verifier can derive. Element lists are in order. [Spec](../../spec.md) [Hashing](hashing.md)
+Every ring proof has one public input. It is the fold of a statement its verifier rebuilds. The ring program rebuilds the transfer and merge statements, and the Storage program the apply and register key statements. A prover supplies none of the elements the verifier can derive. Element lists are in order. [Spec](../../spec.md) [Hashing](hashing.md)
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
@@ -8,7 +8,6 @@ Every ring proof has one public input. It is the fold of a statement its verifie
 | Apply records | `HashChain4` | 9, or 11 on a private key | Storage `Update` |
 | Apply enrollments | `HashChain4` | 8 | Storage `ApplyEnrollments` |
 | Register key | `HashChain4` | 10 | Storage `Enroll`, first enrollment |
-| Deposit | `HashChain4` | 43 | `Deposit` |
 | Merge | `HashChain` | 12 | `Merge` |
 
 ## Transfer
@@ -114,20 +113,6 @@ The Storage program supplies `old_root` as the tracking registry's newest root, 
 ```
 
 The statement has 10 elements and no registry root. The Storage program takes `ring_id` and `auditor_pubkey` from the tracking registry, which pins both at creation, and computes `member = solana_owner_identity(owner)` from the signing owner. A proof for another ring, auditor or member fails. `nullifier_pk`, `list_tag`, `eph_u` and the 64-byte `ciphertext` come from the instruction data. The proof shows the ciphertext seals the nullifier secret behind `nullifier_pk` and the list salt behind `list_tag` to the auditor key. The program refuses `nullifier_pk = Poseidon(0)` ahead of the proof. A rotation carries no proof and no statement.
-
-## Deposit
-
-```text
-context_hash = HashChain([ hash_bytes(program id), hash_bytes(tree),
-                           right_align(len(spp_data) as u64), HashChain(right-aligned 31-byte chunks of spp_data) ])
-statement    = HashChain4([ CRDP, context_hash, right_align(count),
-                            (owner_utxo_hash_i, hash_bytes(ciphertext_i)) × 8,
-                            pack_be(auditor_pubkey), pack_be(eph_pk),
-                            tracking_root, own_root, curator_root, policy_hash,
-                            (asset_i, right_align(amount_i)) × 8 ])
-```
-
-`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `ciphertext_i` is slot `i`'s 144-byte opening record, and every slot shares one `eph_pk`. The context binds the executing program id. `tracking_root` is the tracking root at the prefix's `tracking_revision`. `own_root` is the own root at the prefix's `own_revision` on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the ring account's written hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
 
 ## Merge
 

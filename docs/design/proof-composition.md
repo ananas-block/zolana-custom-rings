@@ -214,13 +214,12 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - SPP's proof ties every input to that owner, asset and sum, and refuses a note with a data hash. No list, guard, cap or co-signer rule is proven.
 - The tests are `TestMergeRefusals`, `TestMergeRecordOffItsOpening`, `TestMergeTrackingRow`, `TestMergeModes`, `TestMergeZeroKeyIgnoresEveryRow`, `TestMergePayer` and `TestMergeRecordRebuildsTheOutput` in `prover/circuits`.
 
-### A deposit opens its notes to the auditor
+### A deposit is a transfer that spends no note
 
-- The program builds `context_hash` over the forwarded SPP data, and supplies each root and `policy_hash` from its accounts.
-- The circuit binds each occupied slot's commitment to its opening record. Blindings stay in the `CRDB` domain.
-- The circuit holds each key to its owner's row as a transfer output does, in `AssertOutputOwners`. It screens each recipient and asset through the section a transfer uses. It runs no sender rule.
-- The path touches no nullifier tree, and a transfer with a deposit leg stays valid beside it.
-- The tests are `TestDepositSlotRefusals`, `TestDepositRecordOffItsOpening`, `TestDepositZeroKeyHoldsAtTheRootTheFrameNames`, `TestDepositAbsenceReadsTheFrameRoot`, `TestDepositScreensEachRecipientOnTheBlockList`, `TestDepositScreensEachAssetOnItsRecord` and `TestDepositReaderRebuildsEachNoteFromItsRecord` in `prover/circuits`.
+- The frame sets `no_spend`, every SPP input is a dummy and a deposit leg funds the outputs. The program checks the funder's signature as on any public leg.
+- Each output opens to the auditor, holds its key to its owner's row and meets the payment rules, through the transfer sections above. No row is live, so no sender rule binds.
+- No ring instruction signs SPP's proofless ring deposit.
+- The test is `TestPublicDepositIntoTheRing` in `prover/circuits/transfer`.
 
 ## What no proof covers
 

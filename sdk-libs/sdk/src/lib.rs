@@ -79,8 +79,8 @@ pub use crate::{
         TrackingEnrollment,
     },
     deposit::{
-        fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
-        RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
+        fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RingDeposit,
+        RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,
     },
     enrollment::{
         Enroll, EnrollInstruction, EnrollRelay, EnrollmentAttempt, EnrollmentJournal,
@@ -100,6 +100,7 @@ pub use crate::{
         DelegateWithdrawal, Delegated, EntrySpend, NoteData, Owner, ProvenRingTransfer,
         PublicOwnerTransfer, PublicOwners, Rail, RailKind, ReadCache, Relayed, RelayedTransfer,
         RelayedTransferInput, RingPayment, RingSender, RingTransfer, SealRow, TransferKey,
+        UnsignedRelay,
     },
     records::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,

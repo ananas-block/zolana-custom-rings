@@ -15,15 +15,15 @@ use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::{viewing_key::ViewTag, PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey};
+use spr_keypair::{PublicKey, ShieldedAddress, ViewingKey, X25519Pubkey};
 use spr_transaction::{
     instructions::merge::{MergeOutputPlaintext, MergeSeed},
-    DecryptionResult, DepositPayload, Mint, ShieldedKeys, ShieldedTransaction, TransactionError,
+    DecryptionResult, Mint, ShieldedKeys, ShieldedTransaction, TransactionError,
     TransactionKeyRequest, WalletUtxo,
 };
 use zolana_ring_keys::{
     MergeSeedHolder, MergeSeedRequest, RingDeliveryRequest, RingKeys, RingTagFrame, RingTagKind,
-    RingTagProbe, ViewTagRequest, ViewTagStream,
+    RingTagProbe,
 };
 use zolana_ring_transaction::{
     is_contributory, open_recipient_body, open_reply, open_sender_bundle, AnonymousOutput,
@@ -35,24 +35,15 @@ use crate::{
     anonymous_wallet::{AnonymousWallet, PendingNote, WalletRevision},
     confidential::is_ring_merge,
     delivered::{self, RingDeliveryContext},
-    deposit::{DepositOpener, DepositSlot, OpenedDeposit},
-    deposit_payload, exactly_one, exactly_one_each,
+    exactly_one, exactly_one_each,
     merge_audit::RingMergeBody,
     tags::IndexerReads,
-    viewing_history::{StreamCounter, ViewingHistory, ViewingKeyEntry},
+    viewing_history::{ViewingHistory, ViewingKeyEntry},
     AnonymousError,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnonymousStream {
-    /// A change output or a deposit under `get_sender_view_tag(index)`.
-    Sender {
-        index: u64,
-    },
-    Request {
-        index: u64,
-    },
-    Bootstrap,
     /// A transfer's slot or bundle whose tag hint matched.
     TagHint,
     Merge {
@@ -190,13 +181,12 @@ impl AnonymousScan {
     }
 }
 
-/// Reads every ring and deposit stream of each held viewing key, each tag answered by `keys`.
+/// Reads every ring stream of each held viewing key, each tag answered by `keys`.
 #[must_use]
 pub struct AnonymousSync<'a, K: ?Sized> {
     keys: &'a K,
     assets: &'a RingAssets,
     config: Option<IndexerRpcConfig>,
-    deposit_payload: DepositPayload,
     from: ScanFrom,
     full_ring: Option<Address>,
     page_budget: usize,
@@ -217,7 +207,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             keys,
             assets,
             config: None,
-            deposit_payload,
             from: ScanFrom::Watermark,
             full_ring: None,
             page_budget: 32,
@@ -234,12 +223,6 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
 
     pub fn with_indexer_config(mut self, config: IndexerRpcConfig) -> Self {
         self.config = Some(config);
-        self
-    }
-
-    /// A framing of the deposit ciphertexts other than the audit capsule.
-    pub fn with_deposit_payload(mut self, deposit_payload: DepositPayload) -> Self {
-        self.deposit_payload = deposit_payload;
         self
     }
 
@@ -345,23 +328,6 @@ struct RingRead {
     ring: Address,
     position: HistoryPosition,
     entries: Vec<usize>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum Stream {
-    Sender,
-    Request,
-}
-
-impl Stream {
-    fn view_tag(self, index: u64) -> ViewTagStream {
-        match self {
-            Self::Sender => ViewTagStream::Sender { tx_count: index },
-            Self::Request => ViewTagStream::Request {
-                request_count: index,
-            },
-        }
-    }
 }
 
 struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
@@ -621,25 +587,6 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             }
         }
         Ok(())
-    }
-
-    fn tags(
-        &self,
-        viewing_pubkey: X25519Pubkey,
-        stream: Stream,
-        counters: &[u64],
-    ) -> Result<Vec<ViewTag>, AnonymousError> {
-        let requests: Vec<ViewTagRequest> = counters
-            .iter()
-            .map(|counter| ViewTagRequest {
-                viewing_pubkey,
-                stream: stream.view_tag(*counter),
-            })
-            .collect();
-        Ok(exactly_one_each(
-            self.sync.keys.view_tags(&requests)?,
-            requests.len(),
-        )?)
     }
 
     /// The transaction key of each transaction the entry's key sent, keyed by its first nullifier.
@@ -907,36 +854,6 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
         self.found.push(utxo);
     }
 
-    fn open_deposit(
-        &mut self,
-        index: usize,
-        deposit: &ShieldedTransaction,
-        position: usize,
-        found: AnonymousStream,
-    ) -> Result<(), AnonymousError> {
-        if self.is_found(&deposit.output_slots[position].output_context.hash) {
-            return Ok(());
-        }
-        let viewing_pubkey = self.history.entries()[index].viewing_pubkey();
-        let opener = DepositOpener {
-            keys: self.sync.keys,
-            address: &self.address,
-            assets: self.sync.assets.registry(),
-            deposit_payload: self.sync.deposit_payload,
-        };
-        let opened = opener.open(DepositSlot {
-            deposit,
-            position,
-            viewing_pubkey,
-        })?;
-        match opened {
-            Some(OpenedDeposit::Note(utxo)) => self.keep(*utxo, viewing_pubkey, found),
-            Some(OpenedDeposit::UnknownMint(utxo)) => self.hold_back_note(*utxo),
-            None => {}
-        }
-        Ok(())
-    }
-
     /// Keeps each merge output the wallet's keys rebuild, except a note the caller passed.
     fn open_ring_merges(&mut self, rows: Vec<ShieldedTransaction>) -> Result<(), AnonymousError> {
         let viewing_pubkey = self.address.viewing_pubkey;
@@ -1028,14 +945,6 @@ impl<I: AsyncRpc + ?Sized, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized
             sent,
             auditor_recovery: AuditorRecovery::default(),
         })
-    }
-
-    fn counter_mut(&mut self, index: usize, stream: Stream) -> &mut StreamCounter {
-        let entry = self.entry_mut(index);
-        match stream {
-            Stream::Sender => entry.tx_stream_mut(),
-            Stream::Request => entry.request_stream_mut(),
-        }
     }
 
     fn entry_mut(&mut self, index: usize) -> &mut ViewingKeyEntry {

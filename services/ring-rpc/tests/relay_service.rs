@@ -22,7 +22,8 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use spr_instruction::instruction::{
-    CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts, TransactSplWithdrawalAccounts,
+    CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
+    TransactSplWithdrawalAccounts,
 };
 use spr_interface::SPL_TOKEN_PROGRAM_ID;
 use spr_keypair::NullifierKey;
@@ -347,6 +348,70 @@ async fn an_unsigned_deposit_reaches_no_prover_and_stores_nothing() {
     );
     assert!(fixture.prover.requests.lock().expect("requests").is_empty());
     assert_eq!(fixture.row_count().await, 0);
+}
+
+/// A deposit frame names one funder that is not the fee payer and rides the deposit rail.
+#[tokio::test]
+async fn a_deposit_frame_off_the_deposit_rail_or_its_one_funder_is_refused() {
+    let fixture = Fixture::new().await;
+    let quote = fixture.quote(RelayOperation::Deposit).await;
+    let depositor = Keypair::new_from_array([41; 32]);
+    let resigned = |inputs: &RelayProofInputs, signer: &Keypair| {
+        let proof_inputs = ProofInputBytes::new(inputs.encode().expect("encode"));
+        let depositor_signature = signer
+            .sign_message(&proof_inputs.deposit_request_digest())
+            .into();
+        PrepareRelayRequest {
+            intent: RelayIntent::Deposit {
+                proof_inputs,
+                depositor_signature,
+            },
+            ..deposit_request(quote.clone(), RING, &depositor, 700)
+        }
+    };
+    let honest = deposit_request(quote.clone(), RING, &depositor, 700);
+    let inputs = RelayProofInputs::decode(honest.intent.proof_inputs().as_bytes()).expect("decode");
+
+    let mut confidential =
+        RelayProofInputs::decode(honest.intent.proof_inputs().as_bytes()).expect("decode");
+    confidential.rail = RelayRail::Confidential;
+    let mut two_funders =
+        RelayProofInputs::decode(honest.intent.proof_inputs().as_bytes()).expect("decode");
+    let second = Keypair::new_from_array([42; 32]);
+    two_funders
+        .external_data
+        .interface_transfers
+        .push(SettlementTransfer::Sol {
+            is_deposit: true,
+            amount: 1,
+            user_sol_account: second.pubkey(),
+        });
+    two_funders
+        .interface_transfer_accounts
+        .push(TransactInterfaceTransferAccounts::Sol(
+            TransactSolTransferAccounts {
+                recipient: second.pubkey(),
+            },
+        ));
+    let fee_payer_funds =
+        deposit_request(quote.clone(), RING, &Keypair::new_from_array([31; 32]), 700);
+
+    for (request, error) in [
+        (
+            resigned(&confidential, &depositor),
+            RelayError::RailMismatch,
+        ),
+        (
+            resigned(&two_funders, &depositor),
+            RelayError::DepositorSignature,
+        ),
+        (fee_payer_funds, RelayError::DepositorIsFeePayer),
+        (resigned(&inputs, &second), RelayError::DepositorSignature),
+    ] {
+        let refused = fixture.prepare(&request).await;
+        assert!(refused_with(&refused, error), "{refused:?}");
+    }
+    assert!(fixture.prover.requests.lock().expect("requests").is_empty());
 }
 
 const TRACKING_REGISTRY: Address = Address::new_from_array([0x71; 32]);

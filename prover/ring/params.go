@@ -292,23 +292,6 @@ type RegisterKeyParams struct {
 	AuditorPk       Bytes `json:"auditorPk"`
 }
 
-type DepositParams struct {
-	RequestHead
-	ContextHash     Field     `json:"contextHash"`
-	Count           uint32    `json:"count"`
-	OwnerPkHashes   []Field   `json:"ownerPkHashes"`
-	OwnerKeys       []Bytes   `json:"ownerKeys"`
-	NullifierPks    []Field   `json:"nullifierPks"`
-	BlindingSecrets []Field   `json:"blindingSecrets"`
-	EphSk           Bytes     `json:"ephSk"`
-	AuditorPk       Bytes     `json:"auditorPk"`
-	Assets          []Field   `json:"assets"`
-	Amounts         []Field   `json:"amounts"`
-	MintChunks      [][]Field `json:"mintChunks"`
-	TrackingParams
-	PolicyParams
-}
-
 // TrackingLeaf mirrors registry.TrackingRecord field for field.
 type TrackingLeaf struct {
 	Member      Field `json:"member"`

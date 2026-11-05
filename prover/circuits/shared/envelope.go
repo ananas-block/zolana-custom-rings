@@ -38,7 +38,7 @@
 //  3. Auditor and Eph hold the packed keys that schedule read.
 //
 // Read after shared/disclosure.go, ringgadget/bytes.go, shared/derivation.go.
-// Read before audit/audit.go, deposit.go, merge.go, registry/register_key.go.
+// Read before audit/audit.go, merge.go, registry/register_key.go.
 
 package shared
 

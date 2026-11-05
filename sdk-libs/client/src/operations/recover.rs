@@ -8,21 +8,18 @@ use std::{
 use custom_ring_interface::RingMode;
 use solana_address::Address;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
-use spr_event::EncryptedRingDepositOutput;
-use spr_event_parser::decode_encrypted_ring_deposit_output_data;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{hash::owner_hash, NullifierKey, ShieldedAddress, X25519Keypair};
 use spr_transaction::{
     instructions::merge::{
         merge_circuit_width, merge_output_blinding, merge_output_key, MergeOutputPlaintext,
     },
-    Data, OutputContext, OutputSlot, ShieldedTransaction, TransactionError, Utxo, WalletUtxo,
+    Data, OutputContext, ShieldedTransaction, TransactionError, Utxo, WalletUtxo,
 };
 use zolana_ring_transaction::RingAssets;
 
 use crate::{
     confirmed_merge,
-    created::DepositSlot,
     decrypt::TransactionAudit,
     history::HistoryCursor,
     merge_audit::RingMergeBody,
@@ -85,8 +82,6 @@ pub struct RecoveredNotes {
     pub utxos: Vec<WalletUtxo>,
     /// Commitments that cannot yet become spendable notes, including unknown mints.
     pub unopened: Vec<[u8; 32]>,
-    /// Tagged deposits whose ownership and spentness are unknown.
-    pub unsupported_deposits: Vec<[u8; 32]>,
     /// Verified merge mints the asset registry lacks, their notes stay unresolved.
     pub unknown_mints: BTreeSet<Address>,
     /// First unmatched nullifiers, limited by `RECOVERY_INPUT_SAMPLE_LIMIT`.
@@ -235,7 +230,6 @@ struct Found {
 #[derive(Clone, Default)]
 struct RecoveryState {
     found: Found,
-    unsupported_deposits: Vec<[u8; 32]>,
     unseen_inputs: Vec<[u8; 32]>,
     unseen_input_count: u64,
     unopened_merges: Vec<[u8; 32]>,
@@ -259,7 +253,6 @@ impl RecoveryState {
     fn finish(self) -> RecoveredNotes {
         let Self {
             found,
-            unsupported_deposits,
             unseen_inputs,
             unseen_input_count,
             unopened_merges,
@@ -273,7 +266,6 @@ impl RecoveryState {
                 .map(|(commitment, _)| commitment)
                 .chain(unopened_merges)
                 .collect(),
-            unsupported_deposits,
             unknown_mints: found.unknown_mints,
             unseen_inputs,
             unseen_input_count,
@@ -332,11 +324,7 @@ impl<'a> MemberRecovery<'a> {
             // 1. One page at a time, the cursor names the last row read and the next call starts after it.
             let page = RingHistory {
                 ring: ring_program_id,
-                kinds: &[
-                    ConfirmedEventKind::Deposit,
-                    ConfirmedEventKind::Merge,
-                    ConfirmedEventKind::Transfer,
-                ],
+                kinds: &[ConfirmedEventKind::Merge, ConfirmedEventKind::Transfer],
                 cursor,
                 page_size,
                 max_pages: NonZeroUsize::MIN,
@@ -376,7 +364,6 @@ impl<'a> MemberRecovery<'a> {
         let recovery = &self.recovery;
         let RecoveryState {
             found,
-            unsupported_deposits,
             unseen_inputs,
             unseen_input_count,
             unopened_merges,
@@ -397,7 +384,6 @@ impl<'a> MemberRecovery<'a> {
             }
         }
         // 2. Outputs before spends, the batch's merges and inputs need the notes they consume.
-        unsupported_deposits.extend(self.deposited_utxos(rows, assets, found)?);
         for row in rows {
             if row.1.requires_audit() {
                 self.audited_utxos(row, assets, found)?;
@@ -516,83 +502,6 @@ impl<'a> MemberRecovery<'a> {
             }
         }
         Ok(())
-    }
-
-    /// Disclosed deposits are found without trusting their recipient view tags.
-    fn deposited_utxos(
-        &self,
-        history: &[HistoryRow],
-        assets: &RingAssets,
-        found: &mut Found,
-    ) -> Result<Vec<[u8; 32]>, AuditError> {
-        let ring = self.recovery.ring_program_id;
-        let mut processed = HashSet::new();
-        let mut unsupported = Vec::new();
-        let deposits = history
-            .iter()
-            .filter(|(_, confirmed)| confirmed.event.kind() == ConfirmedEventKind::Deposit);
-        for (transaction, confirmed) in deposits {
-            for (slot_index, slot) in (0u32..).zip(&transaction.output_slots) {
-                let Some(output) = deposit_output(slot, ring) else {
-                    continue;
-                };
-                let context = &slot.output_context;
-                if !processed.insert(context.hash) || found.seen.contains(&context.hash) {
-                    continue;
-                }
-                let opened = DepositSlot {
-                    output: &output,
-                    bindings: &confirmed.deposits,
-                    slot_index,
-                }
-                .open(self.recovery.auditor);
-                let Ok(Some(opening)) = opened else {
-                    unsupported.push(context.hash);
-                    continue;
-                };
-                let Some(nullifier_pk) = self.source.nullifier_pk_of(opening.owner_hash)? else {
-                    continue;
-                };
-                let asset = Address::new_from_array(output.asset);
-                // The deposit proof binds the raw mint, the commitment needs no registry id.
-                let mint = match assets.registry().mint(&asset) {
-                    Ok(mint) => Some(mint),
-                    Err(TransactionError::UnknownMint(_)) => None,
-                    Err(error) => return Err(error.into()),
-                };
-                let utxo = Utxo {
-                    ring_program_id: Some(ring),
-                    ..self.source.utxo(
-                        mint.unwrap_or_else(|| spr_transaction::Mint::new(asset, 0)),
-                        output.amount,
-                        *opening.blinding,
-                    )
-                };
-                let hashes = UtxoDataHashes {
-                    data_hash: output.data_hash,
-                    ring_data_hash: Some(output.ring_data_hash),
-                };
-                let (held, opens) = self.source.wallet_utxo(
-                    utxo,
-                    nullifier_pk,
-                    context,
-                    hashes,
-                    transaction,
-                    slot_index,
-                )?;
-                if !opens {
-                    return Err(AuditError::DepositOpeningMismatch);
-                }
-                found.seen.insert(context.hash);
-                if mint.is_some() {
-                    found.candidates.push(held);
-                } else {
-                    found.unknown_mints.insert(asset);
-                    found.unresolved.push((context.hash, held.nullifier));
-                }
-            }
-        }
-        Ok(unsupported)
     }
 }
 
@@ -718,15 +627,6 @@ fn refuse_skipped(skipped: Vec<SkippedRow>) -> Result<(), AuditError> {
         Some(row) => Err(row.error),
         None => Ok(()),
     }
-}
-
-pub(crate) fn deposit_output(
-    slot: &OutputSlot,
-    ring: Address,
-) -> Option<EncryptedRingDepositOutput> {
-    decode_encrypted_ring_deposit_output_data(&slot.payload)
-        .ok()
-        .filter(|output| output.ring_program_id == ring.to_bytes())
 }
 
 /// A temporary asset id verifies the commitment before the registry lookup.

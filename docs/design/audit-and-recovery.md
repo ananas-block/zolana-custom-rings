@@ -82,8 +82,7 @@ History-only calls do not preserve a wallet recovery session. A paused Rust `fet
 
 ## Deposits and merges
 
-- A deposit seals one opening record per occupied slot, a transfer's record followed by the blinding, since no envelope key derives a deposit blinding.
-- The deposit proof binds each commitment SPP receives to its record, and each nonzero nullifier key to its owner's tracking row.
+- A deposit is a transfer that spends no note, and its outputs open through the auditor stream.
 - A merge seals one opening record of the output, followed by the seed. The auditor rebuilds the published hash from that record and the first nullifier.
 - SPP's proof ties every merge input to that owner, asset and sum. The ring proof therefore opens no inputs, and one ring key serves every width.
 - SPP's merge publishes no auditor message, and no external data hash covers the record. The auditor reads the ciphertext from the ring instruction, and the statement alone binds those bytes.

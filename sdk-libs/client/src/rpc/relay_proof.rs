@@ -4,7 +4,10 @@ use spr_instruction::instruction::{
     CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
     TransactSplDepositAccounts, TransactSplWithdrawalAccounts,
 };
-use spr_interface::{instruction::instruction_data::transact::TransactOutput, pda, MAX_OUTPUTS};
+use spr_interface::{
+    instruction::{instruction_data::transact::TransactOutput, InterfaceTransfer},
+    pda, MAX_OUTPUTS,
+};
 use spr_keypair::{
     constants::BLINDING_LEN, KeypairError, NullifierKey, ShieldedAddress, ViewingKey,
     X25519Keypair, X25519Pubkey, SHIELDED_ADDRESS_LEN,
@@ -70,6 +73,11 @@ pub enum RelayRail {
         /// Present exactly on an anonymous ring, the frame's sender bundle reads it.
         plan: Option<Box<AnonymousPlan>>,
     },
+    /// Spends only dummies, the funder signs the returned message.
+    Deposit {
+        /// Present exactly on an anonymous ring.
+        plan: Option<Box<AnonymousPlan>>,
+    },
 }
 
 /// Ring RPC derives the merged note from the nullifier key.
@@ -117,11 +125,37 @@ impl RelayRail {
             Self::Anonymous { .. } => RelayOperation::Anonymous,
             Self::Confidential => RelayOperation::Confidential,
             Self::Delegate { .. } => RelayOperation::Delegate,
+            Self::Deposit { .. } => RelayOperation::Deposit,
         }
     }
 }
 
+/// The key signing for a deposit leg, a withdrawal names none.
+pub fn deposit_funder(
+    transfer: &InterfaceTransfer,
+    accounts: &TransactInterfaceTransferAccounts,
+) -> Option<Address> {
+    match accounts {
+        TransactInterfaceTransferAccounts::Sol(sol) => {
+            transfer.is_deposit().then_some(sol.recipient)
+        }
+        TransactInterfaceTransferAccounts::SplDeposit(spl) => Some(spl.token_authority),
+        TransactInterfaceTransferAccounts::SplWithdrawal(_) => None,
+    }
+}
+
 impl RelayProofInputs {
+    /// In leg order.
+    pub fn deposit_funders(&self) -> impl Iterator<Item = Address> + '_ {
+        self.external_data
+            .interface_transfers
+            .iter()
+            .zip(&self.interface_transfer_accounts)
+            .filter_map(|(transfer, accounts)| {
+                deposit_funder(&transfer.interface_transfer(), accounts)
+            })
+    }
+
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, RelayProofInputsError> {
         let wire = ProofInputsWire::of(self)?;
         Ok(Zeroizing::new(wincode::serialize(&wire)?))
@@ -301,6 +335,9 @@ enum RailWire {
     Confidential,
     Delegate {
         delegate: Address,
+        plan: Option<Box<PlanWire>>,
+    },
+    Deposit {
         plan: Option<Box<PlanWire>>,
     },
 }
@@ -550,6 +587,9 @@ impl RailWire {
                 delegate: *delegate,
                 plan: plan.as_deref().map(|plan| Box::new(PlanWire::of(plan))),
             },
+            RelayRail::Deposit { plan } => Self::Deposit {
+                plan: plan.as_deref().map(|plan| Box::new(PlanWire::of(plan))),
+            },
         }
     }
 
@@ -565,6 +605,12 @@ impl RailWire {
             Self::Confidential => RelayRail::Confidential,
             Self::Delegate { delegate, plan } => RelayRail::Delegate {
                 delegate: *delegate,
+                plan: plan
+                    .as_deref()
+                    .map(|plan| plan.plan().map(Box::new))
+                    .transpose()?,
+            },
+            Self::Deposit { plan } => RelayRail::Deposit {
                 plan: plan
                     .as_deref()
                     .map(|plan| plan.plan().map(Box::new))

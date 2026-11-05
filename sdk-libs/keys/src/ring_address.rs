@@ -7,10 +7,7 @@ use sha2::{Digest, Sha256};
 use solana_address::Address;
 use spr_hasher::primitives::is_canonical_bn254_scalar_be;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
-use spr_keypair::{
-    shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
-    viewing_key::ViewTag,
-};
+use spr_keypair::shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN};
 use spr_transaction::ShieldedKeys;
 
 use crate::{ListSaltHolder, RingKeyError};
@@ -144,12 +141,10 @@ fn checksum(body: &[u8]) -> [u8; CHECKSUM_LEN] {
     core::array::from_fn(|i| digest[i])
 }
 
-/// `zolana:<address>?deposit_tag=&amount=&mint=&label=`, the query part is unauthenticated.
+/// `zolana:<address>?amount=&mint=&label=`, the query part is unauthenticated.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RingPaymentRequest {
     pub address: RingAddress,
-    /// The recipient's `recipient_request_view_tag`, read by a deposit and never by a transfer.
-    pub deposit_tag: Option<ViewTag>,
     pub amount: Option<u64>,
     pub mint: Option<Address>,
     pub label: Option<String>,
@@ -170,7 +165,6 @@ impl RingPaymentRequest {
     pub fn new(address: RingAddress) -> Self {
         Self {
             address,
-            deposit_tag: None,
             amount: None,
             mint: None,
             label: None,
@@ -188,9 +182,6 @@ impl fmt::Display for RingPaymentRequest {
             separator = '&';
             Ok(())
         };
-        if let Some(tag) = &self.deposit_tag {
-            write("deposit_tag", format_args!("{}", hex::encode(tag)))?;
-        }
         if let Some(amount) = self.amount {
             write("amount", format_args!("{amount}"))?;
         }
@@ -220,11 +211,10 @@ impl FromStr for RingPaymentRequest {
             None => (rest, None),
         };
         let address = RingAddress::from_base58(address)?;
-        let (mut tag, mut amount, mut mint, mut label) = (None, None, None, None);
+        let (mut amount, mut mint, mut label) = (None, None, None);
         for part in query.into_iter().flat_map(|query| query.split('&')) {
             let (key, value) = part.split_once('=').unwrap_or((part, ""));
             match key {
-                "deposit_tag" => replace_once(&mut tag, parse_tag(value)?)?,
                 "amount" => replace_once(&mut amount, parse_amount(value)?)?,
                 "mint" => replace_once(&mut mint, parse_mint(value)?)?,
                 "label" => replace_once(&mut label, parse_label(value)?)?,
@@ -233,7 +223,6 @@ impl FromStr for RingPaymentRequest {
         }
         Ok(Self {
             address,
-            deposit_tag: tag,
             amount,
             mint,
             label,
@@ -246,16 +235,6 @@ fn replace_once<T>(slot: &mut Option<T>, value: T) -> Result<(), RingKeyError> {
         return Err(RingKeyError::DuplicateRingPaymentKey);
     }
     Ok(())
-}
-
-/// Lowercase hex led by a zero byte, the one form a derived request tag takes.
-fn parse_tag(value: &str) -> Result<ViewTag, RingKeyError> {
-    let mut tag = ViewTag::default();
-    hex::decode_to_slice(value, &mut tag).map_err(|_| RingKeyError::InvalidRingPaymentTag)?;
-    match tag[0] == 0 && hex::encode(tag) == value {
-        true => Ok(tag),
-        false => Err(RingKeyError::InvalidRingPaymentTag),
-    }
 }
 
 fn parse_amount(value: &str) -> Result<u64, RingKeyError> {

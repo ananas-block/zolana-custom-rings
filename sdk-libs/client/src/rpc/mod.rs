@@ -10,7 +10,6 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
-use solana_signature::Signature;
 use solana_signer::{Signer, SignerError};
 use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::{
@@ -32,7 +31,6 @@ mod policy_authority;
 mod reader_grant;
 mod record_update;
 mod relay;
-mod relay_deposit;
 mod relay_enroll;
 mod relay_proof;
 mod spend_coverage;
@@ -48,7 +46,6 @@ pub use policy_authority::*;
 pub use reader_grant::*;
 pub use record_update::*;
 pub use relay::*;
-pub use relay_deposit::*;
 pub use relay_enroll::*;
 pub use relay_proof::*;
 pub use spend_coverage::*;
@@ -65,7 +62,6 @@ use crate::{
 pub const HEALTH: &str = "health";
 pub const CREATE_AUDITOR_KEY: &str = "createAuditorKey";
 pub const RING_STATUS: &str = "ringStatus";
-pub const RING_DEPOSITS: &str = "ringDeposits";
 pub const GET_DECRYPTED_TRANSACTIONS: &str = "getDecryptedTransactions";
 pub const GET_WALLET_ACTIVITY: &str = "getWalletActivity";
 pub const GET_AUDITED_MERGES: &str = "getAuditedMerges";
@@ -86,8 +82,6 @@ pub const CREATE_RECORDS_REGISTRY: &str = "createRecordsRegistry";
 pub const AUDITED_UTXOS_LIMIT: usize = 100;
 pub const AUDIT_CURSOR_LIMIT: usize = 256;
 pub const AUDIT_PAGE_LIMIT: u64 = 100;
-pub const DEPOSITS_PAGE_LIMIT: u32 = 50;
-pub const MAX_DEPOSITS_PAGE_LIMIT: u32 = 200;
 pub const PENDING_LIST_APPROVALS_PAGE_LIMIT: usize = 100;
 const ATTESTATION_DOMAIN: &[u8] = b"zolana/ring-auditor-key";
 const READ_DOMAIN: &str = "zolana/ring-rpc-read";
@@ -150,42 +144,6 @@ pub struct CreateAuditorKeyResponse {
     pub auditor_view_tag: Hash,
     pub service_pubkey: SerializablePubkey,
     pub signature: SerializableSignature,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingDepositsRequest {
-    pub ring_program_id: SerializablePubkey,
-    /// Signatures examined, not deposits found.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    /// Opaque, taken from the previous page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Base64String>,
-}
-
-/// A deposit publishes its asset and amount, reading it takes no auditor key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct DepositRecord {
-    pub signature: SerializableSignature,
-    pub slot: u64,
-    /// The owner tag of the note the deposit created.
-    pub depositor: Hash,
-    pub asset: SerializablePubkey,
-    pub amount: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RingDepositsResponse {
-    pub deposits: Vec<DepositRecord>,
-    /// Absent once the ring has no older history.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<Base64String>,
-    /// Slot of the oldest signature examined, absent when the page examined nothing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub oldest_slot: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,11 +464,7 @@ pub struct DecryptedUtxo {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DecryptedKnownUtxo {
     pub owner_key: SerializablePubkey,
-    /// Exactly one of `nullifier_pk` and `owner_hash`, the latter for a deposited note.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nullifier_pk: Option<Hash>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_hash: Option<Hash>,
+    pub nullifier_pk: Hash,
     pub asset: Hash,
     /// Absent while the asset registry does not know the asset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -684,26 +638,6 @@ impl AuditorKeyStatement<'_> {
     }
 }
 
-impl RingDepositsRequest {
-    pub fn page_limit(&self) -> usize {
-        self.limit
-            .unwrap_or(DEPOSITS_PAGE_LIMIT)
-            .clamp(1, MAX_DEPOSITS_PAGE_LIMIT) as usize
-    }
-
-    /// The Solana `before` bound the cursor carries.
-    pub fn before(&self) -> Result<Option<Signature>, ReadBuildError> {
-        self.cursor
-            .as_ref()
-            .map(|cursor| {
-                <[u8; 64]>::try_from(cursor.0.as_slice())
-                    .map(Signature::from)
-                    .map_err(|_| ReadBuildError::Cursor)
-            })
-            .transpose()
-    }
-}
-
 impl From<ConfirmedAudit> for DecryptedTransaction {
     fn from(confirmed: ConfirmedAudit) -> Self {
         let ConfirmedAudit {
@@ -802,14 +736,10 @@ impl From<AuditedUtxo> for DecryptedUtxo {
 
 impl From<KnownUtxo> for DecryptedKnownUtxo {
     fn from(utxo: KnownUtxo) -> Self {
-        let (nullifier_pk, owner_hash) = match utxo.owner {
-            UtxoOwner::Keyed { nullifier_pk } => (Some(nullifier_pk.into()), None),
-            UtxoOwner::Deposited { owner_hash } => (None, Some(owner_hash.into())),
-        };
+        let UtxoOwner::Keyed { nullifier_pk } = utxo.owner;
         Self {
             owner_key: utxo.owner_key.into(),
-            nullifier_pk,
-            owner_hash,
+            nullifier_pk: nullifier_pk.into(),
             asset: utxo.asset.into(),
             mint: utxo.mint.map(Into::into),
             amount: utxo.amount,
@@ -825,18 +755,11 @@ impl TryFrom<&DecryptedKnownUtxo> for KnownUtxo {
     type Error = AuditError;
 
     fn try_from(utxo: &DecryptedKnownUtxo) -> Result<Self, AuditError> {
-        let owner = match (&utxo.nullifier_pk, &utxo.owner_hash) {
-            (Some(nullifier_pk), None) => UtxoOwner::Keyed {
-                nullifier_pk: nullifier_pk.0,
-            },
-            (None, Some(owner_hash)) => UtxoOwner::Deposited {
-                owner_hash: owner_hash.0,
-            },
-            _ => return Err(AuditError::AuditedUtxoOwner),
-        };
         Ok(Self {
             owner_key: utxo.owner_key.0.to_bytes(),
-            owner,
+            owner: UtxoOwner::Keyed {
+                nullifier_pk: utxo.nullifier_pk.0,
+            },
             asset: utxo.asset.0,
             mint: utxo.mint.map(|mint| mint.0),
             amount: utxo.amount,

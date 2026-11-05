@@ -18,8 +18,7 @@ def variant(k):
     disclosure = 'SingleAssetPayout' if k['SingleAssetPayout'] else 'Standard'
     return [f'Transfer {{ outputs: {o}, inputs: {i}, withdrawals: {w}, owners: {s}, entry: {e}, wide: {d}, format: crate::DisclosureFormat::{disclosure} }}',
             f'ApplyRecords {{ writes: {i}, mode: key_catalog::ApplyMode::{mode} }}',
-            f'ApplyEnrollments {{ writes: {i} }}', 'RegisterKey', f'Deposit {{ capacity: {i} }}',
-            'Merge'][k['Family']]
+            f'ApplyEnrollments {{ writes: {i} }}', 'RegisterKey', 'Merge'][k['Family']]
 
 def main():
     parser = argparse.ArgumentParser()

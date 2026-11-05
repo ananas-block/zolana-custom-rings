@@ -8,8 +8,6 @@ def verifier_relative_path(module: str) -> Path:
     file = f"{name}.rs"
     if name.startswith("transfer_"):
         return Path("transfer") / file
-    if name.startswith("deposit_"):
-        return Path("deposit") / file
     if name.startswith("merge_"):
         return Path("merge") / file
     if name.startswith(("apply_records_", "apply_enrollments_", "register_key_")):

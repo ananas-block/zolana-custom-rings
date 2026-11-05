@@ -11,7 +11,7 @@
 //! Invariants
 //! 1. `policy_hash` hashes `rules` and `sources`, and `set_policy` is the one write and validates the whole table first. The circuit holds its table to the hash, so a table the program refused never reaches a proof.
 //! 2. A nonzero `records` names a registry of the ring's own `ring_id`, and `tracking` the registry `Initialize` created, and it never moves. `RegistrySlots::load` compares each account it reads to these addresses.
-//! 3. `RootRead` fixes the registries a frame reads. Every transfer and deposit and a hidden owner's merge read the tracking root, a delegate transfer and a merge read no policy root, so a policy update fails neither in flight.
+//! 3. `RootRead` fixes the registries a frame reads. Every transfer and a hidden owner's merge read the tracking root, a delegate transfer and a merge read no policy root, so a policy update fails neither in flight.
 //! 4. `LiveRoots` reads each root at the frame's revision and slot. The frame names a revision and never a root.
 
 use core::ops::BitOr;
@@ -141,7 +141,7 @@ le_getters! {
     RingPolicy { created_slot: u64, generation: u32, generation_slot: u64 }
 }
 
-/// One per ring, every transfer, deposit, merge and role write passes it.
+/// One per ring, every transfer, merge and role write passes it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct RingPolicy {
@@ -440,13 +440,6 @@ impl RootRead {
             (true, _, _) | (false, false, false) => Self::None,
             (false, true, _) => Self::Policy,
             (false, false, true) => Self::Own,
-        }
-    }
-
-    pub fn deposit(ring: &RingPolicy) -> Self {
-        match ring.has_policy() {
-            true => Self::Policy,
-            false => Self::None,
         }
     }
 

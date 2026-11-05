@@ -1,7 +1,5 @@
 //! Audits of synthetic ring transfers built as the ring program publishes them.
 
-#[path = "common/deposit.rs"]
-mod deposit_fixture;
 #[path = "common/history_page.rs"]
 pub mod history_page;
 #[path = "common/origin.rs"]
@@ -18,9 +16,7 @@ use std::{
     },
 };
 
-use custom_ring_interface::{
-    AuditRecord, AuditStreamLayout, OpeningRecord, RecordKind, RingDepositAuditCapsule, RingMode,
-};
+use custom_ring_interface::{AuditRecord, AuditStreamLayout, OpeningRecord, RecordKind, RingMode};
 use solana_address::Address;
 use solana_signature::Signature;
 use spr_client::{
@@ -28,22 +24,20 @@ use spr_client::{
     PaginationToken, ShieldedTransaction,
 };
 use spr_event::{
-    encode_encrypted_ring_deposit_output, encode_merge_output_data, EncryptedRingDepositData,
-    EncryptedRingDepositOutput, MergeCiphertextBinding, MergeOutputDataRef, MessageData,
+    encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef, MessageData,
 };
 use spr_hasher::primitives::hash_bytes;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
 use spr_transaction::instructions::merge::MergeSeed;
-use spr_transaction::{owner_utxo_hash, OutputContext, OutputSlot};
+use spr_transaction::{OutputContext, OutputSlot};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
     history::{HistoryCursor, HistoryQuery, HistoryStream},
-    ring_event_origin_in, seal_deposits, AuditError, AuditStreamSeal, AuditedTransaction,
-    ConfirmedMerge, ConfirmedMergeDisclosure, CreatedUtxo, CreatedUtxoScan, CreatedUtxos,
-    InputOpening, KnownUtxo, MergeAudit, MergeLedger, MergeRecordSeal, OutputOpening,
-    OutputPayloadError, OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan,
-    TransactionAudit, TransactionOrigin, UtxoOwner,
+    AuditError, AuditStreamSeal, AuditedTransaction, ConfirmedMerge, ConfirmedMergeDisclosure,
+    InputOpening, MergeAudit, MergeLedger, MergeRecordSeal, OutputOpening, OutputPayloadError,
+    OutputPayloadErrorKind, RingOrigin, RingOwnerTag, RingScan, TransactionAudit,
+    TransactionOrigin,
 };
 
 use history_page::{position, EventsPage};
@@ -499,21 +493,6 @@ fn an_opened_note_reads_as_its_known_form() {
 #[derive(Clone, Copy)]
 struct Spend {
     utxo: UtxoFields,
-    blinding: [u8; 32],
-}
-
-impl Spend {
-    fn placement(&self, transfer: &Transfer) -> Placement {
-        Placement {
-            blinding: self.blinding,
-            ring: Some(transfer.ring),
-            tree_id: transfer.tree_id,
-        }
-    }
-
-    fn commitment(&self, transfer: &Transfer) -> [u8; 32] {
-        self.utxo.commitment(self.placement(transfer))
-    }
 }
 
 fn anonymous_spend() -> (Transfer, Built, [Spend; 2]) {
@@ -531,65 +510,12 @@ fn anonymous_spend() -> (Transfer, Built, [Spend; 2]) {
     let spent = [
         Spend {
             utxo: utxo(0xb6, MINT, 60),
-            blinding: field(0x6a),
         },
         Spend {
             utxo: utxo(0xb7, MINT, 61),
-            blinding: field(0x6b),
         },
     ];
     (transfer, built, spent)
-}
-
-fn deposited(transfer: &Transfer, spend: &Spend) -> Confirmed {
-    let record = OpeningRecord {
-        record: AuditRecord {
-            kind: RecordKind::Ring,
-            amount: spend.utxo.amount,
-            owner_key: spend.utxo.owner_key,
-            mint: spend.utxo.asset_address.to_bytes(),
-            nullifier_pk: spend.utxo.nullifier_pk,
-        },
-        secret: spend.blinding,
-    };
-    let owner_utxo_hash = owner_utxo_hash(&spend.utxo.owner_hash(), &spend.blinding).unwrap();
-    let sealed = seal_deposits(&[record], &auditor().pubkey()).unwrap();
-    let capsule = RingDepositAuditCapsule {
-        slot_index: 0,
-        eph_pk: sealed.ephemeral_pk.as_bytes(),
-        ciphertext: &sealed.ciphertexts[0],
-        recipient_ciphertext: &[],
-    }
-    .encode();
-    let group = deposit_fixture::group(
-        transfer.ring,
-        true,
-        vec![(owner_utxo_hash, capsule.clone())],
-    );
-    let payload = encode_encrypted_ring_deposit_output(EncryptedRingDepositOutput {
-        owner_utxo_hash,
-        asset: spend.utxo.asset_address.to_bytes(),
-        amount: spend.utxo.amount,
-        data_hash: None,
-        ring_program_id: transfer.ring.to_bytes(),
-        ring_data_hash: [0; 32],
-        encrypted: EncryptedRingDepositData {
-            tx_viewing_pk: [0; 33],
-            salt: [0; 16],
-            ciphertext: capsule,
-        },
-    });
-    let transaction =
-        created_transaction(transfer, spend.commitment(transfer), payload, Vec::new());
-    Confirmed {
-        origin: RingOrigin {
-            deposits: ring_event_origin_in(&[group], 0, transfer.ring)
-                .unwrap()
-                .deposits,
-            ..confirmed(&transaction)
-        },
-        transaction,
-    }
 }
 
 const MERGE_SEED: [u8; 32] = {
@@ -648,15 +574,6 @@ struct Confirmed {
 }
 
 impl Confirmed {
-    fn open(&self, transfer: &Transfer) -> Result<Vec<CreatedUtxo>, AuditError> {
-        CreatedUtxos {
-            transaction: &self.transaction,
-            origin: &self.origin,
-            ring: transfer.ring,
-        }
-        .open(&auditor())
-    }
-
     fn merge(&self) -> Result<Option<ConfirmedMerge>, AuditError> {
         confirmed_merge(
             &self.transaction,
@@ -703,26 +620,14 @@ fn confirmed(transaction: &ShieldedTransaction) -> RingOrigin {
         signers: Vec::new(),
         pool_accounts: Vec::new(),
         withdrawals: Vec::new(),
-        deposits: Vec::new(),
         merge_disclosure: None,
         transact: None,
     }
 }
 
 #[test]
-fn a_deposited_note_opens_and_a_merge_record_resolves_alone_in_the_ledger() {
+fn a_merge_record_resolves_alone_in_the_ledger() {
     let (transfer, _, spent) = anonymous_spend();
-    let deposit = deposited(&transfer, &spent[0]);
-    let created = deposit.open(&transfer).unwrap();
-    assert_eq!(
-        created.iter().map(|note| note.utxo).collect::<Vec<_>>(),
-        [KnownUtxo {
-            owner: UtxoOwner::Deposited {
-                owner_hash: spent[0].utxo.owner_hash(),
-            },
-            ..known_utxo(&spent[0].utxo, spent[0].placement(&transfer))
-        }]
-    );
     let merge = merged(&transfer, &spent[1]);
     let confirmed_merge = merge.merge().unwrap().expect("a record merge");
     let record = confirmed_merge.disclosed();
@@ -798,42 +703,26 @@ impl TransactionOrigin for ConfirmedOrigins {
 }
 
 #[tokio::test]
-async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_every_merge() {
+async fn the_merge_audit_reads_every_merge() {
     let (transfer, built, spent) = anonymous_spend();
-    let deposit = deposited(&transfer, &spent[0]);
     let mut merge = merged(&transfer, &spent[1]);
     merge.transaction.tx_signature = Signature::from([0xd1; 64]);
-    // A ring transfer and a row the ring never invoked open nothing.
-    let mut foreign = deposited(&transfer, &spent[1]);
-    foreign.transaction.tx_signature = Signature::from([0xd2; 64]);
-    foreign.origin.ring_invoked = false;
-    let rows = [&deposit, &merge, &foreign];
-    let mut origins: HashMap<Signature, RingOrigin> = rows
-        .iter()
-        .map(|row| (row.transaction.tx_signature, row.origin.clone()))
-        .collect();
-    origins.insert(
-        built.transaction.tx_signature,
-        confirmed(&built.transaction),
-    );
-    let pages = vec![
-        vec![deposit.transaction.clone(), built.transaction.clone()],
-        vec![merge.transaction.clone(), foreign.transaction.clone()],
-    ];
-    let history = RingHistory(pages.clone());
+    let origins: HashMap<Signature, RingOrigin> = [
+        (merge.transaction.tx_signature, merge.origin.clone()),
+        (
+            built.transaction.tx_signature,
+            confirmed(&built.transaction),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let history = RingHistory(vec![
+        vec![built.transaction.clone()],
+        vec![merge.transaction.clone()],
+    ]);
     let auditor = auditor();
-    let page = CreatedUtxoScan::new(transfer.ring, &auditor)
-        .run(&history, &ConfirmedOrigins(origins.clone()))
-        .await
-        .unwrap();
-    let opened: Vec<[u8; 32]> = page.utxos.iter().map(|utxo| utxo.commitment).collect();
-    assert_eq!(opened, [spent[0].commitment(&transfer)]);
-    assert_eq!(page.next_cursor, None);
-    assert_eq!(page.merges.len(), 1);
-    let merge_hash = merge.transaction.output_slots[0].output_context.hash;
-    assert_eq!(page.merges[0].output_commitment(), merge_hash);
     let merges = MergeAudit::new(transfer.ring, &auditor)
-        .run(&history, &ConfirmedOrigins(origins.clone()))
+        .run(&history, &ConfirmedOrigins(origins))
         .await
         .unwrap();
     assert_eq!(
@@ -841,35 +730,8 @@ async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_eve
             .iter()
             .map(|merge| merge.output_commitment())
             .collect::<Vec<_>>(),
-        [merge_hash]
+        [merge.transaction.output_slots[0].output_context.hash]
     );
-
-    let capped = CreatedUtxoScan::new(transfer.ring, &auditor)
-        .with_max_pages(NonZeroUsize::new(1).unwrap())
-        .run(&history, &ConfirmedOrigins(origins.clone()))
-        .await
-        .unwrap();
-    assert_eq!(capped.utxos.len(), 1);
-    assert_eq!(
-        capped.next_cursor,
-        Some(HistoryCursor {
-            query: HistoryQuery {
-                ring: transfer.ring,
-                stream: HistoryStream::Ring,
-            },
-            token: position(&deposit.transaction),
-        })
-    );
-
-    // An indexed row its confirmed event does not match is refused.
-    let mut altered = pages;
-    altered[0][0].output_slots[0].output_context.hash = field(0x7b);
-    assert!(matches!(
-        CreatedUtxoScan::new(transfer.ring, &auditor)
-            .run(&RingHistory(altered), &ConfirmedOrigins(origins))
-            .await,
-        Err(AuditError::ConfirmedEventMismatch)
-    ));
 }
 
 #[test]
@@ -1039,7 +901,6 @@ impl TransactionOrigin for KnownOrigins {
                 signers: Vec::new(),
                 pool_accounts: Vec::new(),
                 withdrawals: Vec::new(),
-                deposits: Vec::new(),
                 merge_disclosure: None,
                 transact: self.frames.get(&signature).cloned(),
             })
@@ -1406,22 +1267,6 @@ async fn a_cursor_at_the_end_of_history_returns_an_empty_page() {
     assert_eq!(origin.lookups.load(Ordering::Relaxed), 0);
 }
 
-#[tokio::test]
-async fn a_row_of_another_ring_never_reaches_the_created_scan_origin_read() {
-    let (transfer, built, _) = anonymous_spend();
-    let mut outsider = built.transaction.clone();
-    outsider.ring_program_id = None;
-    let auditor = auditor();
-    let page = CreatedUtxoScan::new(transfer.ring, &auditor)
-        .run(
-            &RingHistory(vec![vec![outsider]]),
-            &ConfirmedOrigins(HashMap::new()),
-        )
-        .await
-        .unwrap();
-    assert!(page.utxos.is_empty());
-}
-
 #[test]
 fn a_sender_bundle_under_the_auditor_tag_leaves_the_transfer_open() {
     let (_, built, _) = anonymous_spend();
@@ -1507,35 +1352,6 @@ async fn a_lost_auditor_message_stays_fatal_in_a_local_scan() {
         anonymous_scan().audit(&auditor(), &indexer, &origin).await,
         Err(AuditError::MissingAuditorMessage)
     ));
-}
-
-#[tokio::test]
-async fn the_created_utxo_scan_lists_a_row_it_cannot_open_and_opens_the_next() {
-    let (transfer, _, spent) = anonymous_spend();
-    let mut unopenable = deposited(&transfer, &spent[1]);
-    unopenable.transaction.tx_signature = Signature::from([0xd1; 64]);
-    unopenable.transaction.output_slots[0].output_context.hash = field(0x7c);
-    unopenable.origin.event = origin_fixture::event(&unopenable.transaction);
-    let deposit = deposited(&transfer, &spent[0]);
-    let origins: HashMap<Signature, RingOrigin> = [&unopenable, &deposit]
-        .into_iter()
-        .map(|row| (row.transaction.tx_signature, row.origin.clone()))
-        .collect();
-    let history = RingHistory(vec![vec![
-        unopenable.transaction.clone(),
-        deposit.transaction.clone(),
-    ]]);
-    let auditor = auditor();
-    let page = CreatedUtxoScan::new(transfer.ring, &auditor)
-        .run(&history, &ConfirmedOrigins(origins))
-        .await
-        .expect("scan");
-    let opened: Vec<[u8; 32]> = page.utxos.iter().map(|utxo| utxo.commitment).collect();
-    assert_eq!(opened, [spent[0].commitment(&transfer)]);
-    let [row] = page.skipped.as_slice() else {
-        panic!("one row left unopened");
-    };
-    assert_eq!(row.tx_signature, unopenable.transaction.tx_signature);
 }
 
 /// A tampered disclosure stops the merge audit, a spend it would name stays unread and never unspent.

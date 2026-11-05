@@ -52,7 +52,7 @@ The confidential mode and the anonymous mode differ at the sender and the recipi
 
 ## Who else sees what
 
-- The auditor opens every output record and deposit and merge opening. With an owner's sealed secret it links that owner's spends, see [nullifier secrets](audit-and-recovery.md#nullifier-secrets).
+- The auditor opens every output record and merge opening. With an owner's sealed secret it links that owner's spends, see [nullifier secrets](audit-and-recovery.md#nullifier-secrets).
 - The auditor reads each owner's list salt from the enrollment ciphertext. A curator learns the salt of each owner it writes for.
 - A zero-key note's sender computes its nullifier and sees when the note is spent.
 - A reader sees what its grant covers, blindings included, and keeps it after a revocation.

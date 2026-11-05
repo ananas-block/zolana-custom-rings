@@ -10,7 +10,7 @@
 // policy/outflow.go.
 //
 // Properties:
-// 1. The gates follow from statement values alone, no prover bit clears a section. Screened is a nonzero policy_hash off the authority rail. On a transfer Outflow is a nonzero own root, on a deposit it stays clear.
+// 1. The gates follow from statement values alone, no prover bit clears a section. Screened is a nonzero policy_hash off the authority rail. Outflow is a nonzero own root.
 // 2. Each read goes through a pool under the bound root of its source, own or curator per list, present or proven absent.
 // 3. An enrolled owner reads each private list at the one key its tracking row fixes.
 // 4. An owner proven absent under the tracking root reads off every private list.

@@ -9,7 +9,7 @@ That mode omits TypeScript live tests and keeps the build, lint, unit, package a
 It reports `ci sanity result`, which does not replace the required `ci result` check.
 
 The localnet matrix runs each shape and full capacity sweep of `program-tests/custom-ring/tests/ring_shapes.rs` as its own job.
-Those sweeps prove every catalog key except `custom-ring-deposit-4` and `custom-ring-deposit-8`, which no wallet operation selects.
+Those sweeps prove every catalog key.
 
 Dispatch the final pushed branch after the Zolana pin passes its release source check and the pinned proving keys are public.
 The `prover` and `ring-indexer` workflows have separate manual dispatches.

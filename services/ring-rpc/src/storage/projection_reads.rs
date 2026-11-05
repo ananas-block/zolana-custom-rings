@@ -21,8 +21,6 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum EnrollmentKey {
     Member,
-    /// Tagged on disk, the column names no owner hash.
-    OwnerHash,
     /// Tagged on disk, the column names no list key.
     ListKey,
 }
@@ -139,7 +137,6 @@ impl<C: ConnectionTrait> ProjectionReads<'_, C> {
         let tags = &self.seal.tags;
         let column = match key {
             EnrollmentKey::Member => "member",
-            EnrollmentKey::OwnerHash => "owner_hash_tag",
             EnrollmentKey::ListKey => "list_key_tag",
         };
         let mut found = Vec::new();
@@ -148,7 +145,6 @@ impl<C: ConnectionTrait> ProjectionReads<'_, C> {
                 .iter()
                 .map(|value| match key {
                     EnrollmentKey::Member => Ok(*value),
-                    EnrollmentKey::OwnerHash => tags.owner_hash_tag(value),
                     EnrollmentKey::ListKey => tags.list_key_tag(value),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -204,7 +200,6 @@ impl EnrollmentKey {
     pub(crate) const fn of(self, held: &HeldEnrollment) -> [u8; 32] {
         match self {
             Self::Member => held.member,
-            Self::OwnerHash => held.owner_hash,
             Self::ListKey => held.list_key,
         }
     }

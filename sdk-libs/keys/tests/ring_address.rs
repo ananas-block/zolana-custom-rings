@@ -25,7 +25,6 @@ struct ValidCase {
     recipient: String,
     ring_program_id: String,
     list_salt: String,
-    deposit_tag: Option<String>,
     amount: Option<String>,
     mint: Option<String>,
     label: Option<String>,
@@ -62,15 +61,8 @@ fn fixture_address() -> RingAddress {
     }
 }
 
-fn fixture_tag() -> [u8; 32] {
-    viewing_key().get_recipient_request_view_tag(0).unwrap()
-}
-
 fn fixture_request() -> RingPaymentRequest {
-    RingPaymentRequest {
-        deposit_tag: Some(fixture_tag()),
-        ..RingPaymentRequest::new(fixture_address())
-    }
+    RingPaymentRequest::new(fixture_address())
 }
 
 fn valid_case(name: &str, request: &RingPaymentRequest) -> ValidCase {
@@ -80,7 +72,6 @@ fn valid_case(name: &str, request: &RingPaymentRequest) -> ValidCase {
         recipient: hex::encode(request.address.recipient.to_bytes()),
         ring_program_id: request.address.ring_program_id.to_string(),
         list_salt: hex::encode(request.address.list_salt),
-        deposit_tag: request.deposit_tag.map(hex::encode),
         amount: request.amount.map(|amount| amount.to_string()),
         mint: request.mint.map(|mint| mint.to_string()),
         label: request.label.clone(),
@@ -119,14 +110,7 @@ fn compute() -> RingAddressVectors {
         label: Some("rent".into()),
         ..bare.clone()
     };
-    let untagged = RingPaymentRequest::new(fixture_address());
-    let label_without_tag = RingPaymentRequest {
-        label: Some("rent".into()),
-        ..untagged.clone()
-    };
     let valid = vec![
-        valid_case("no_tag", &untagged),
-        valid_case("label_without_tag", &label_without_tag),
         valid_case("bare", &bare),
         valid_case("amount_mint_label", &full),
         valid_case("label_only", &labelled),
@@ -135,13 +119,8 @@ fn compute() -> RingAddressVectors {
     let address = &bare.address;
     let payload = address.to_bytes().to_vec();
     let base58 = address.to_base58();
-    let tag = hex::encode(fixture_tag());
-    let uri = |payload: &[u8]| {
-        format!(
-            "zolana:{}?deposit_tag={tag}",
-            bs58::encode(payload).into_string()
-        )
-    };
+    let tag = hex::encode([0u8; 32]);
+    let uri = |payload: &[u8]| format!("zolana:{}", bs58::encode(payload).into_string());
     let mut bad_checksum = payload.clone();
     *bad_checksum.last_mut().unwrap() ^= 1;
     let mut bad_viewing_key = payload.clone();
@@ -151,14 +130,9 @@ fn compute() -> RingAddressVectors {
     zero_salt[salt_at..salt_at + 32].fill(0);
     let mut non_canonical_salt = payload.clone();
     non_canonical_salt[salt_at..salt_at + 32].fill(0xff);
-    let mut nonzero_lead = fixture_tag();
-    nonzero_lead[0] = 1;
     let rejected = vec![
-        ("missing_scheme", format!("{base58}?deposit_tag={tag}")),
-        (
-            "non_base58",
-            format!("zolana:0{}?deposit_tag={tag}", &base58[1..]),
-        ),
+        ("missing_scheme", base58.clone()),
+        ("non_base58", format!("zolana:0{}", &base58[1..])),
         ("short_payload", uri(&payload[..payload.len() - 1])),
         ("long_payload", uri(&[payload.as_slice(), &[0]].concat())),
         ("bad_checksum", uri(&bad_checksum)),
@@ -170,23 +144,15 @@ fn compute() -> RingAddressVectors {
         ),
         ("delivery_tag_key", format!("zolana:{base58}?tag={tag}")),
         (
-            "uppercase_tag",
-            format!("zolana:{base58}?deposit_tag={}", tag.to_uppercase()),
+            "deposit_tag_key",
+            format!("zolana:{base58}?deposit_tag={tag}"),
         ),
-        (
-            "short_tag",
-            format!("zolana:{base58}?deposit_tag={}", &tag[2..]),
-        ),
-        (
-            "tag_without_zero_byte",
-            format!("zolana:{base58}?deposit_tag={}", hex::encode(nonzero_lead)),
-        ),
-        ("unknown_query_key", format!("{bare}&memo=hi")),
-        ("duplicate_query_key", format!("{bare}&amount=1&amount=2")),
-        ("fractional_amount", format!("{bare}&amount=1.5")),
-        ("signed_amount", format!("{bare}&amount=+1")),
-        ("bad_mint", format!("{bare}&mint=notAnAddress")),
-        ("bad_label_escape", format!("{bare}&label=%zz")),
+        ("unknown_query_key", format!("{bare}?memo=hi")),
+        ("duplicate_query_key", format!("{bare}?amount=1&amount=2")),
+        ("fractional_amount", format!("{bare}?amount=1.5")),
+        ("signed_amount", format!("{bare}?amount=+1")),
+        ("bad_mint", format!("{bare}?mint=notAnAddress")),
+        ("bad_label_escape", format!("{bare}?label=%zz")),
     ]
     .into_iter()
     .map(|(name, uri)| RejectedCase {
@@ -214,7 +180,6 @@ fn shared_vectors_match() {
             case.ring_program_id
         );
         assert_eq!(hex::encode(request.address.list_salt), case.list_salt);
-        assert_eq!(request.deposit_tag.map(hex::encode), case.deposit_tag);
         assert_eq!(
             request.address,
             RingAddress::from_base58(&request.address.to_base58()).unwrap()
@@ -230,9 +195,7 @@ fn shared_vectors_match() {
         ("zero_salt_on_keyed_address", "InvalidRingAddressListSalt"),
         ("non_canonical_salt", "InvalidRingAddressListSalt"),
         ("delivery_tag_key", "UnknownRingPaymentKey"),
-        ("uppercase_tag", "InvalidRingPaymentTag"),
-        ("short_tag", "InvalidRingPaymentTag"),
-        ("tag_without_zero_byte", "InvalidRingPaymentTag"),
+        ("deposit_tag_key", "UnknownRingPaymentKey"),
         ("unknown_query_key", "UnknownRingPaymentKey"),
         ("duplicate_query_key", "DuplicateRingPaymentKey"),
         ("fractional_amount", "InvalidRingPaymentAmount"),
@@ -285,14 +248,13 @@ fn request_round_trips_every_field() {
 }
 
 #[test]
-fn a_request_prints_neither_its_recipient_keys_nor_its_tag() {
+fn a_request_prints_none_of_its_recipient_keys() {
     let request = fixture_request();
     let address = &request.address;
     for printed in [format!("{address:?}"), format!("{request:?}")] {
         for key in [
             format!("{:?}", address.recipient.viewing_pubkey),
             format!("{:?}", address.recipient.signing_pubkey),
-            format!("{:?}", fixture_tag()),
         ] {
             assert!(!printed.contains(&key), "{printed}");
         }

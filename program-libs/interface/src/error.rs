@@ -44,13 +44,11 @@ ring_errors! {
     UnauthorizedDelegate = 8151 => "the delegate must sign",
     DelegatePublicLeg = 8152 => "a delegate move takes no deposit leg",
     DelegateAlreadySet = 8153 => "the delegate is permanent",
-    InvalidDepositDisclosure = 8166 => "invalid deposit disclosure",
     MissingFundingSigner = 8173 => "forwarded funding account must sign on entry",
     InvalidRingMode = 8174 => "the ring mode is unknown",
     InvalidAnonymousSigner = 8178 => "an anonymous ring transaction takes no signer outside the payer, the owner run, the co-signers and the funders",
     InvalidMergeDisclosure = 8179 =>
         "the merge disclosure's ephemeral key is not tagged",
-    InvalidDepositData = 8180 => "forwarded deposit data is invalid",
     MissingOwnerSigner = 8192 => "forwarded owner signer must sign on entry",
     RingTransactLength = 8200 => "the compact transact data length disagrees with its flags and shape",
     RingShapeUnkeyed = 8201 => "no audit key or SPP rail key serves the shape on the rail",
@@ -76,7 +74,6 @@ ring_errors! {
     UnexpectedApproval = 8241 => "a delegate frame carries no approval bit",
     InvalidSettlementAccounts = 8242 => "settlement accounts do not match the public legs",
     TooManyPublicLegs = 8243 => "too many public legs",
-    InvalidAuditedDeposit = 8244 => "audited deposit does not wrap an SPP deposit",
     AnonymousExitDestinationsDiffer = 8246 =>
         "all withdrawals of an anonymous spend must name the same destination key",
     AnonymousExitTokenAccountShared = 8247 =>
@@ -105,9 +102,6 @@ ring_errors! {
     RingPolicyAlreadyExists = 8301 => "ring policy already exists",
     InvalidStorageRegistry = 8302 => "storage registry account is invalid",
     InvalidAssetLimits = 8390 => "a window cap and its window are not set together",
-    DepositMintAccountMissing = 8410 => "an spl deposit group has no mint account",
-    DepositAssetIndexUnknown = 8411 => "a deposit entry names no asset group",
-    UnexpectedCuratorRevision = 8470 => "the deposit names a curator revision without a curator source",
     ZeroRoleKey = 8471 => "a ring role key is zero",
     DuplicateRoleKey = 8472 => "one key holds two ring roles",
     UnboundRegistry = 8480 => "the registry account is not the one the ring binds",
@@ -118,7 +112,6 @@ ring_errors! {
     SaltedSourceOtherTracking = 8504 => "a salted source pins no tracking registry or another one",
     InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or pass the encoding",
     TooManyAnonymousParties = 8528 => "the co-signers and deposit funders pass the statement's party cells",
-    TooManyDepositsForKey = 8537 => "the deposits outnumber the key's capacity",
 }
 
 impl From<CustomRingError> for ProgramError {

@@ -10,7 +10,6 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/test"
 
-	"github.com/helius-labs/zolana-custom-rings/prover/circuits"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/audit"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/policy"
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
@@ -825,11 +824,6 @@ func TestKeysHoldTheAmountBound(t *testing.T) {
 	for _, shape := range transfer.Shapes {
 		if shape.Inputs >= bound || shape.Outputs+shape.Withdrawals >= bound {
 			t.Fatalf("%s passes the amount bound", shape)
-		}
-	}
-	for _, capacity := range circuits.DepositCapacities {
-		if capacity >= bound {
-			t.Fatalf("deposit capacity %d passes the amount bound", capacity)
 		}
 	}
 }

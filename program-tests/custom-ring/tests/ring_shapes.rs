@@ -118,14 +118,6 @@ impl Column {
         }
     }
 
-    /// A salted read of an enrolled recipient takes a pool row the one slot key lacks.
-    const fn deposit_key(self) -> RingCircuit {
-        match self {
-            Self::Salted => RingCircuit::Deposit { capacity: 2 },
-            _ => RingCircuit::Deposit { capacity: 1 },
-        }
-    }
-
     fn measured(self, spend: Spend, spends_default_ring: bool) -> Measured {
         match spend {
             Spend::Rail(RingRail::Delegate | RingRail::AnonymousDelegate) => Measured::Delegate,
@@ -406,7 +398,7 @@ impl Coverage {
     }
 
     fn assert_column_keys(&self, column: Column) {
-        self.assert_keys(|circuit| key_owner(circuit) == Some(column));
+        self.assert_keys(|circuit| key_owner(circuit) == column);
         assert!(self
             .circuits
             .iter()
@@ -421,17 +413,16 @@ impl Coverage {
     }
 }
 
-/// The one column proving a key, `None` where no wallet operation selects it.
-fn key_owner(circuit: RingCircuit) -> Option<Column> {
-    Some(match circuit {
+/// The one column proving a key.
+fn key_owner(circuit: RingCircuit) -> Column {
+    match circuit {
         RingCircuit::Transfer { entry: true, .. } | RingCircuit::Merge => Column::Anonymous,
         RingCircuit::Transfer {
             wide: true,
             outputs: 16,
             inputs: 5,
             ..
-        }
-        | RingCircuit::Deposit { capacity: 2 } => Column::Salted,
+        } => Column::Salted,
         RingCircuit::ApplyEnrollments { writes: 2.. } => Column::Salted,
         RingCircuit::Transfer {
             wide: true,
@@ -441,11 +432,8 @@ fn key_owner(circuit: RingCircuit) -> Option<Column> {
         | RingCircuit::ApplyRecords { .. } => Column::ConfidentialPolicy,
         RingCircuit::Transfer { .. }
         | RingCircuit::RegisterKey
-        | RingCircuit::Deposit { capacity: 1 }
         | RingCircuit::ApplyEnrollments { .. } => Column::Confidential,
-        // A wallet deposit fills one slot, its pools reach no wider key.
-        RingCircuit::Deposit { .. } => return None,
-    })
+    }
 }
 
 fn keyed_legs(data: &RingTransactData<'_>) -> usize {
@@ -654,7 +642,7 @@ impl ShapeRing<'_> {
             restart_prover()?;
             let transfer = ShapeTransfer {
                 shape,
-                inputs: self.utxos(1, coverage)?,
+                inputs: self.utxos(1)?,
                 spend: Spend::Rail(self.column.rail()),
                 legs: Vec::new(),
             };
@@ -693,7 +681,7 @@ impl ShapeRing<'_> {
             restart_prover()?;
             let inputs = match case.spends_default_ring() {
                 true => self.default_ring_notes(LegKind::Sol, case.notes)?,
-                false => self.utxos(case.notes, coverage)?,
+                false => self.utxos(case.notes)?,
             };
             let transfer = ShapeTransfer {
                 shape: case.shape,
@@ -753,10 +741,10 @@ impl ShapeRing<'_> {
     }
 
     /// No inline transaction reaches sixteen outputs, the catalog keys none.
-    fn sixteen_outputs_refused(&self, coverage: &mut Coverage) -> Result<()> {
+    fn sixteen_outputs_refused(&self) -> Result<()> {
         let transfer = ShapeTransfer {
             shape: Shape::IN1_OUT16,
-            inputs: self.utxos(1, coverage)?,
+            inputs: self.utxos(1)?,
             spend: Spend::Rail(RingRail::Confidential),
             legs: Vec::new(),
         };
@@ -785,7 +773,7 @@ impl ShapeRing<'_> {
             restart_prover()?;
             let transfer = ShapeTransfer {
                 shape: Shape::new(1, wide.outputs.into()),
-                inputs: self.utxos(1, coverage)?,
+                inputs: self.utxos(1)?,
                 spend: Spend::Rail(rail),
                 legs: match rail {
                     RingRail::Anonymous => vec![Leg::Sol(destinations[0]); legs],
@@ -806,7 +794,7 @@ impl ShapeRing<'_> {
         let mint = self.env.usdc_mint;
         let widest = usize::from(the_wide_key()?.withdrawals);
         let token_accounts = self.token_accounts(distinct_targets(rail, widest))?;
-        let inputs = self.usdc_utxos(1, coverage)?;
+        let inputs = self.usdc_utxos(1)?;
         restart_prover()?;
         for legs in (1..=widest).rev() {
             let transfer = ShapeTransfer {
@@ -857,7 +845,7 @@ impl ShapeRing<'_> {
                 for count in [1, usize::from(shape.inputs)] {
                     let notes = match unspent.remove(&(kind, count)) {
                         Some(notes) => notes,
-                        None => self.spendable(family, kind, count, coverage)?,
+                        None => self.spendable(family, kind, count)?,
                     };
                     let mut settled = None;
                     for legs in (fewest..=most).rev() {
@@ -904,7 +892,7 @@ impl ShapeRing<'_> {
             restart_prover()?;
             let transfer = ShapeTransfer {
                 shape: Shape::new(1, outputs),
-                inputs: self.utxos(1, coverage)?,
+                inputs: self.utxos(1)?,
                 spend: Spend::InProofOwner,
                 legs: Vec::new(),
             };
@@ -920,7 +908,7 @@ impl ShapeRing<'_> {
         let mut count = 2;
         for width in MERGE_WIDTHS {
             restart_prover()?;
-            let prepared = CustomRingMerge::new(self.ring, self.utxos(count, coverage)?, None)?
+            let prepared = CustomRingMerge::new(self.ring, self.utxos(count)?, None)?
                 .with_output_tree_id(tree_id)
                 .encrypt(&env.sender.keypair)?;
             assert_eq!(
@@ -974,17 +962,11 @@ impl ShapeRing<'_> {
             .collect()
     }
 
-    fn spendable(
-        &self,
-        family: KeyFamily,
-        kind: LegKind,
-        count: usize,
-        coverage: &mut Coverage,
-    ) -> Result<Vec<WalletUtxo>> {
+    fn spendable(&self, family: KeyFamily, kind: LegKind, count: usize) -> Result<Vec<WalletUtxo>> {
         match (family, kind) {
             (KeyFamily::AnonymousEntry, _) => self.default_ring_notes(kind, count),
-            (_, LegKind::Sol) => self.utxos(count, coverage),
-            (_, LegKind::Spl) => self.usdc_utxos(count, coverage),
+            (_, LegKind::Sol) => self.utxos(count),
+            (_, LegKind::Spl) => self.usdc_utxos(count),
         }
     }
 
@@ -1009,13 +991,13 @@ impl ShapeRing<'_> {
             .collect()
     }
 
-    fn utxos(&self, count: usize, coverage: &mut Coverage) -> Result<Vec<WalletUtxo>> {
-        self.notes(count, DepositAsset::Sol, coverage)
+    fn utxos(&self, count: usize) -> Result<Vec<WalletUtxo>> {
+        self.notes(count, DepositAsset::Sol)
     }
 
-    fn usdc_utxos(&self, count: usize, coverage: &mut Coverage) -> Result<Vec<WalletUtxo>> {
+    fn usdc_utxos(&self, count: usize) -> Result<Vec<WalletUtxo>> {
         let asset = self.usdc_asset(self.env.payer.pubkey(), count)?;
-        self.notes(count, asset, coverage)
+        self.notes(count, asset)
     }
 
     fn usdc_asset(&self, depositor: Address, count: usize) -> Result<DepositAsset> {
@@ -1037,13 +1019,8 @@ impl ShapeRing<'_> {
         }))
     }
 
-    /// Each deposit proves under the deposit key.
-    fn notes(
-        &self,
-        count: usize,
-        asset: DepositAsset,
-        coverage: &mut Coverage,
-    ) -> Result<Vec<WalletUtxo>> {
+    /// Each deposit proves under a transfer key.
+    fn notes(&self, count: usize, asset: DepositAsset) -> Result<Vec<WalletUtxo>> {
         let env = self.env;
         let utxos = RingNotes {
             ring: self.ring,
@@ -1059,7 +1036,6 @@ impl ShapeRing<'_> {
             }
             RingRail::Confidential | RingRail::Delegate => utxos.deposit_from(&env.payer)?,
         };
-        coverage.cover_proved(self.gate, self.column.deposit_key())?;
         deposited
             .into_iter()
             .map(|utxo| indexed_note(utxo, &env.sender.keypair, env, env.tree))
@@ -1437,30 +1413,13 @@ fn anonymous_widest_eight_output_transfer_settles() -> Result<()> {
         ring.settled(
             ShapeTransfer {
                 shape: Shape::IN5_OUT8,
-                inputs: ring.utxos(5, coverage)?,
+                inputs: ring.utxos(5)?,
                 spend: Spend::Rail(RingRail::Anonymous),
                 legs: Vec::new(),
             },
             coverage,
         )
     })
-}
-
-/// A key missing here has no fixture to select it, the catalog must name a column or a reason.
-#[test]
-fn no_wallet_operation_selects_only_the_multi_slot_deposits() {
-    let unreachable: Vec<RingCircuit> = RING_KEYS
-        .iter()
-        .map(|key| key.circuit)
-        .filter(|circuit| key_owner(*circuit).is_none())
-        .collect();
-    assert_eq!(
-        unreachable,
-        [
-            RingCircuit::Deposit { capacity: 4 },
-            RingCircuit::Deposit { capacity: 8 },
-        ]
-    );
 }
 
 #[test]
@@ -1572,7 +1531,7 @@ fn sweep(column: Column) -> Result<()> {
         ring.catalog_keys(coverage)?;
         match column {
             Column::Anonymous | Column::Salted => {}
-            Column::Delegate => ring.sixteen_outputs_refused(coverage)?,
+            Column::Delegate => ring.sixteen_outputs_refused()?,
             Column::Confidential => ring.in_proof_owners(coverage)?,
             Column::ConfidentialPolicy => {
                 ring.in_proof_owners(coverage)?;
@@ -1665,7 +1624,7 @@ fn sanity_in_proof_and_delegate_modes() -> Result<()> {
             ring.settled(
                 ShapeTransfer {
                     shape: Shape::IN2_OUT2,
-                    inputs: ring.utxos(1, coverage)?,
+                    inputs: ring.utxos(1)?,
                     spend,
                     legs: Vec::new(),
                 },
@@ -1683,7 +1642,7 @@ fn sanity_wide_withdrawal_heap_sentinel() -> Result<()> {
         ring.settled(
             ShapeTransfer {
                 shape: Shape::IN1_OUT4,
-                inputs: ring.utxos(1, coverage)?,
+                inputs: ring.utxos(1)?,
                 spend: Spend::Rail(RingRail::Anonymous),
                 legs: vec![Leg::Sol(destination); 32],
             },

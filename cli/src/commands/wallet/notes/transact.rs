@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context as _, Result};
 use custom_ring_interface::{
-    cosign::{ApprovalMask, CoSignDemand, CoSignOperation, CoSignRequirement},
+    cosign::{ApprovalMask, CoSignOperation, CoSignRequirement},
     RingPolicy, RingRail,
 };
 use custom_ring_sdk::{
@@ -25,7 +25,7 @@ use spr_transaction::{
     },
     Data, ShieldedKeys, SpendableDecryptionResult, WalletUtxo, SOL_MINT,
 };
-use zolana_ring_client::{mint_balances, rpc::DecryptedOutputKind, AnonymousWallet, ReaderKey};
+use zolana_ring_client::{mint_balances, rpc::DecryptedOutputKind, ReaderKey};
 use zolana_ring_keys::{
     ring_address::RING_PAYMENT_SCHEME, ListSaltHolder, RingAddress, RingPaymentRequest,
     RotatingRingKeys,
@@ -920,16 +920,17 @@ impl Requirement {
             demand != Demand::Approval || config.co_signers.covered().is_some(),
             "dual control needs a configured co-signer"
         );
-        let spend = |approval| CoSignOperation {
-            spends_note: true,
-            public_legs: CoSignScope::NONE,
+        let operation = |spends_note, public_legs, approval| CoSignOperation {
+            spends_note,
+            public_legs,
             approval,
         };
         let demanded = match demand {
-            Demand::Deposit => CoSignDemand::DEPOSIT,
-            Demand::Transfer => spend(ApprovalMask::default()).demand(),
-            Demand::Approval => spend(ApprovalMask::OUTFLOW).demand(),
-        };
+            Demand::Deposit => operation(false, CoSignScope::DEPOSITS, ApprovalMask::default()),
+            Demand::Transfer => operation(true, CoSignScope::NONE, ApprovalMask::default()),
+            Demand::Approval => operation(true, CoSignScope::NONE, ApprovalMask::OUTFLOW),
+        }
+        .demand();
         Ok(Self {
             demanded: demanded.requirement(config),
         })
@@ -993,18 +994,9 @@ impl AllowListWrite<'_> {
 
 impl Deposit<'_> {
     fn send(self, ctx: &Context) -> Result<RingDepositReceipt> {
-        let store = ctx.anonymous_wallet_store(self.sender.viewing_pubkey());
-        let wallet = match self.config.mode {
-            RingMode::Anonymous => Some(store.load()?),
-            RingMode::Confidential => None,
-        };
-        let history = wallet.as_ref().map(AnonymousWallet::history);
-        let recipient = match history {
-            Some(history) => DepositRecipient::Anonymous {
-                keys: self.held,
-                history,
-            },
-            None => DepositRecipient::Confidential(self.held.address()?),
+        let recipient = match self.config.mode {
+            RingMode::Anonymous => DepositRecipient::Anonymous { keys: self.held },
+            RingMode::Confidential => DepositRecipient::Confidential(self.held.address()?),
         };
         let deposit = RingDeposit {
             ring: ctx.ring,
@@ -1016,10 +1008,6 @@ impl Deposit<'_> {
             cosigner: self.cosigner,
             list_salt: Some(self.sender.list_salt(&ctx.ring.program_id())?),
         };
-        // Stored before it is sent, a sync reads every sender tag the deposit may take.
-        if let (Some(history), Some(advanced)) = (history, deposit.viewing_history()?) {
-            store.commit(history, advanced)?;
-        }
         Ok(ctx.block(deposit.send(ctx.ring_client()))?)
     }
 }

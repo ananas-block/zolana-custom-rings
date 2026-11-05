@@ -73,7 +73,7 @@ pub enum RelayIntent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         token_account_setup: Vec<TokenAccountSetup>,
     },
-    /// `proof_inputs` is a `RelayDepositInputs`, the depositor signs its digest here and the returned message later.
+    /// `proof_inputs` is a deposit rail `RelayProofInputs`, its one funder signs the digest here and the returned message later.
     Deposit {
         proof_inputs: ProofInputBytes,
         depositor_signature: SerializableSignature,

@@ -87,13 +87,7 @@ pub struct KnownUtxo {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UtxoOwner {
-    Keyed {
-        nullifier_pk: [u8; 32],
-    },
-    /// A deposit capsule discloses the owner hash alone.
-    Deposited {
-        owner_hash: [u8; 32],
-    },
+    Keyed { nullifier_pk: [u8; 32] },
 }
 
 /// A note one transaction created, at its slot.
@@ -253,7 +247,6 @@ impl UtxoOwner {
     pub fn nullifier_pk(self) -> Option<[u8; 32]> {
         match self {
             Self::Keyed { nullifier_pk } => Some(nullifier_pk),
-            Self::Deposited { .. } => None,
         }
     }
 
@@ -263,7 +256,6 @@ impl UtxoOwner {
                 &solana_owner_identity(owner_key)?,
                 &nullifier_pk,
             ])?),
-            Self::Deposited { owner_hash } => Ok(owner_hash),
         }
     }
 }

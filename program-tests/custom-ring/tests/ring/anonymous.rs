@@ -30,12 +30,7 @@ fn cli_pays_an_anonymous_ring_address_end_to_end() -> Result<()> {
 
     // 1. Without a fee payer the cli refuses, it never charges the hidden owner or the authority.
     let recipient = ShieldedKeypair::new_ed25519()?;
-    let minted = ViewingHistory::new(recipient.viewing_pubkey(), 0).request_tag(&recipient)?;
-    let request = RingPaymentRequest {
-        deposit_tag: Some(minted.tag),
-        ..RingPaymentRequest::new(ring_address(&recipient, ring.program_id())?)
-    }
-    .to_string();
+    let request = RingPaymentRequest::new(ring_address(&recipient, ring.program_id())?).to_string();
     let amount = PAIR_AMOUNT.to_string();
     let refused = project.output(&["transfer", &request, "--amount", &amount])?;
     assert!(
@@ -130,32 +125,23 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
     let payer = &env.payer;
     let deposit_source = env.funded_keypair()?;
     env.fund(deposit_source.pubkey(), RING_DEPOSIT_A + RING_DEPOSIT_B)?;
-    let mut sender_history = ViewingHistory::new(sender_keys.viewing_pubkey(), 0);
     let mut spendable = Vec::with_capacity(2);
     for amount in [RING_DEPOSIT_A, RING_DEPOSIT_B] {
         let deposit = RingDeposit {
             ring,
             payer: &deposit_source,
-            recipient: DepositRecipient::Anonymous {
-                keys: sender_keys,
-                history: &sender_history,
-            },
+            recipient: DepositRecipient::Anonymous { keys: sender_keys },
             tree: env.tree,
             asset: DepositAsset::Sol,
             amount,
             cosigner: None,
             list_salt: None,
         };
-        let next = deposit
-            .viewing_history()?
-            .context("an anonymous deposit advances its history")?;
         let RingDepositReceipt { signature, utxo } =
             env.run(deposit.send_with_fee_payer(env.client.ring_client(), payer))?;
         custom_ring_cli::wait_for_indexed_transaction(&env.client, signature)?;
-        sender_history = next;
         spendable.push(utxo);
     }
-    assert_eq!(sender_history.current().tx_count(), 2);
 
     // 2. The first payment to the recipient's address takes its bootstrap tag.
     let inputs = spendable
@@ -398,14 +384,12 @@ fn an_anonymous_ring_hides_owners_and_preserves_auditor_access() -> Result<()> {
         sender_wallet.history.current(),
     );
     assert_eq!(rebuilt.tx_count(), stored.tx_count());
-    assert_eq!(rebuilt.request_count(), stored.request_count());
     assert!(rebuilt.known_senders().is_empty());
     let empty_history =
         ViewingHistory::new(sender_keys.viewing_pubkey(), 0).with_ring(ring_program, None);
     let assets = zolana_ring_transaction::RingAssets::new([])?;
     let recovered = env.client.block_on(async {
         zolana_ring_client::AnonymousSync::new(sender_keys, &assets)
-            .with_deposit_payload(zolana_ring_client::deposit_payload)
             .full_scan(
                 env.client.as_async().indexer(),
                 &empty_history,

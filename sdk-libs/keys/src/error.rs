@@ -34,8 +34,6 @@ pub enum RingKeyError {
     UnknownRingPaymentKey,
     #[error("duplicated ring payment query key")]
     DuplicateRingPaymentKey,
-    #[error("ring payment tag is not 32 lowercase hex bytes led by a zero byte")]
-    InvalidRingPaymentTag,
     #[error("ring payment amount is not a u64")]
     InvalidRingPaymentAmount,
     #[error("ring payment mint is not an address")]

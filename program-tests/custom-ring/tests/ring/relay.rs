@@ -43,7 +43,9 @@ fn a_relayed_anonymous_payment_reaches_its_recipient() -> Result<()> {
     .transfer()?;
     let quote = ring_rpc.quote(env, RelayOperation::Anonymous)?;
 
-    let prepared = env.run(transfer.prepare_relay(env.client.as_async(), quote))?;
+    let prepared = env
+        .run(transfer.prepare_relay(env.client.as_async(), quote))?
+        .sign()?;
     let relay_id = env.run(prepared.send(&ring_rpc.relay))?.submitted()?;
 
     ring_rpc.confirmed(env, &relay_id)?;
@@ -80,7 +82,9 @@ fn a_relayed_confidential_transfer_signed_in_the_proof_reaches_its_recipient() -
     .with_in_proof_owner(&sender.signing_key);
     let quote = ring_rpc.quote(env, RelayOperation::Confidential)?;
 
-    let prepared = env.run(transfer.prepare_relay(env.client.as_async(), quote))?;
+    let prepared = env
+        .run(transfer.prepare_relay(env.client.as_async(), quote))?
+        .sign()?;
     let relay_id = env.run(prepared.send(&ring_rpc.relay))?.submitted()?;
 
     let signature = ring_rpc.confirmed(env, &relay_id)?;

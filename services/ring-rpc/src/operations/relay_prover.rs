@@ -7,17 +7,14 @@ use custom_ring_interface::{
 };
 use custom_ring_sdk::{
     AllowedNullifiers, CustomRing, DelegateMove, DelegatePayment, DelegateSource,
-    DelegateWithdrawal, RelayedDeposit, RelayedTransferInput, RingClient, RingIndexerBackend,
-    RingTransfer,
+    DelegateWithdrawal, RelayedTransferInput, RingClient, RingIndexerBackend, RingTransfer,
 };
 use solana_address::Address;
 use solana_instruction::Instruction;
 use spr_client::{AsyncRpc, ComputeBudgetConfig};
 use spr_keypair::{NullifierKey, ShieldedAddress, ViewingKey};
 use spr_transaction::{AssetRegistry, WalletUtxo};
-use zolana_ring_client::rpc::{
-    RelayDepositInputs, RelayEnrollInputs, RelayMergeInputs, RelayProofInputs, RelayRail,
-};
+use zolana_ring_client::rpc::{RelayEnrollInputs, RelayMergeInputs, RelayProofInputs, RelayRail};
 
 use crate::{
     error::RingRpcError,
@@ -68,7 +65,7 @@ pub struct ProvenRelay {
     pub instruction: Instruction,
     pub budget: ComputeBudgetConfig,
     pub co_signers: Vec<Address>,
-    /// The owners, the delegate or the depositor, each signs the returned message.
+    /// The owners, the delegate or the funders, each signs the returned message.
     pub signers: Vec<Address>,
 }
 
@@ -137,8 +134,9 @@ impl<R, I> SdkRelayProver<R, I> {
 impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> RelayProver for SdkRelayProver<R, I> {
     async fn prove(&self, request: RelayProofRequest<'_>) -> Result<ProvenRelay, RingRpcError> {
         match request.payload {
-            RelayPayload::Transfer(proof_inputs) => self.transfer(&request, proof_inputs).await,
-            RelayPayload::Deposit(deposit) => self.deposit(&request, deposit).await,
+            RelayPayload::Transfer(proof_inputs) | RelayPayload::Deposit(proof_inputs) => {
+                self.transfer(&request, proof_inputs).await
+            }
             RelayPayload::Merge(merge) => self.merge(&request, merge).await,
             // `Relay::prepare` builds it, it holds nothing to prove here.
             RelayPayload::Enroll(_) => Err(RelayError::InvalidEnrollment.into()),
@@ -258,32 +256,6 @@ impl<R: AsyncRpc + 'static, I: RingIndexerBackend + 'static> SdkRelayProver<R, I
                         .filter(|funder| *funder != request.parties.fee_payer),
                 )
                 .collect(),
-        })
-    }
-
-    async fn deposit(
-        &self,
-        request: &RelayProofRequest<'_>,
-        deposit: &RelayDepositInputs,
-    ) -> Result<ProvenRelay, RingRpcError> {
-        let prepared = RelayedDeposit {
-            ring: CustomRing::new(request.ring),
-            inputs: deposit,
-            fee_payer: request.parties.fee_payer,
-            // A deposit demands one class, one record covers it.
-            co_signer: request.parties.co_signers.first().copied(),
-        }
-        .prepare(self.client.zolana())
-        .await
-        .map_err(RelayError::proof)?;
-        Ok(ProvenRelay {
-            instruction: prepared
-                .prove(&self.client)
-                .await
-                .map_err(RelayError::proof)?,
-            budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Deposit)),
-            co_signers: prepared.co_signer().into_iter().collect(),
-            signers: vec![prepared.depositor()],
         })
     }
 
