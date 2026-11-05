@@ -41,13 +41,19 @@ fn flow(owner: u8, asset: Address, debit: u64) -> OwnerFlow {
     }
 }
 
-/// The slot moves under a running co-signer, every asset answers the sender cap.
-#[derive(Default)]
+/// The slot and the limits move under a running co-signer, every asset answers the same limits.
 struct Clocked {
     slot: Arc<AtomicU64>,
+    limits: std::sync::Mutex<AssetLimits>,
     frame_reads: AtomicUsize,
     frame: Vec<OwnerFlow>,
 }
+
+const SENDER_LIMITS: AssetLimits = AssetLimits {
+    sender_cap: CAP,
+    sender_window_slots: WINDOW,
+    ..AssetLimits::EMPTY
+};
 
 impl AssetLimitSource for Clocked {
     async fn co_signer_scope(
@@ -67,14 +73,8 @@ impl AssetLimitSource for Clocked {
         _ring: Address,
         assets: &[Address],
     ) -> Result<Vec<Option<MintPolicy>>, RingRpcError> {
-        Ok(vec![
-            Some(capped(AssetLimits {
-                sender_cap: CAP,
-                sender_window_slots: WINDOW,
-                ..AssetLimits::EMPTY
-            }));
-            assets.len()
-        ])
+        let limits = *self.limits.lock().expect("limits");
+        Ok(vec![Some(capped(limits)); assets.len()])
     }
 
     async fn transfer_flows(
@@ -114,8 +114,9 @@ impl Window {
             signer: Keypair::new_from_array([5; 32]),
             limits: Clocked {
                 slot: slot.clone(),
+                limits: std::sync::Mutex::new(SENDER_LIMITS),
+                frame_reads: AtomicUsize::new(0),
                 frame,
-                ..Clocked::default()
             },
             store: Arc::new(store.clone()),
             approval: CoSignerApproval::new([ApproveClass::Transfers, ApproveClass::Deposits]),
@@ -149,24 +150,38 @@ impl Window {
         );
     }
 
-    /// `(owner, slot, debit)` of every reservation, confirmed or not.
+    async fn clear(&self) {
+        self.store
+            .connection()
+            .execute_unprepared("DELETE FROM cosign_usage")
+            .await
+            .expect("empty usage");
+    }
+
+    fn limit(&self, limits: AssetLimits) {
+        *self.co_signer.limits.limits.lock().expect("limits") = limits;
+    }
+
+    /// `(owner, slot, outflow)` of every reservation, confirmed or not.
     async fn rows(&self) -> Vec<(u8, i64, u128)> {
         let connection = self.store.connection();
         let mut rows: Vec<_> = connection
             .query_all(Statement::from_string(
                 connection.get_database_backend(),
-                "SELECT owner, slot, debit FROM cosign_usage",
+                "SELECT owner, slot, outflow_hi, outflow_lo FROM cosign_usage",
             ))
             .await
             .expect("rows")
             .iter()
             .map(|row| {
                 let owner: Vec<u8> = row.try_get("", "owner").expect("owner");
-                let debit: Vec<u8> = row.try_get("", "debit").expect("debit");
+                let half = |column| {
+                    u128::try_from(row.try_get::<i64>("", column).expect("half")).expect("sign")
+                };
                 (
                     owner[0],
                     row.try_get("", "slot").expect("slot"),
-                    u128::from_be_bytes(debit.try_into().expect("debit length")),
+                    (half("outflow_hi") << 32) + half("outflow_lo"),
                 )
             })
             .collect();
@@ -214,83 +229,90 @@ impl Drop for StoreFile {
     }
 }
 
-fn zero_window() -> AssetCheck {
-    AssetCheck {
-        asset: SOL,
-        policy: capped(AssetLimits {
-            sender_cap: CAP,
-            sender_window_slots: 0,
-            ..AssetLimits::EMPTY
-        }),
-    }
+/// A zero window reads no row, the checked transaction alone meets the cap.
+#[tokio::test]
+async fn a_zero_window_counts_the_checked_transaction_alone() {
+    let window = Window::open("sqlite::memory:").await;
+    window.limit(AssetLimits {
+        sender_window_slots: 0,
+        ..SENDER_LIMITS
+    });
+    window.signed(1, vec![flow(7, SOL, CAP)]).await;
+    window.signed(2, vec![flow(7, SOL, CAP)]).await;
+    window.refuses(3, vec![flow(7, SOL, CAP + 1)]).await;
 }
 
-#[test]
-fn a_zero_window_counts_the_checked_transaction_alone() {
-    let signature = Signature::from([1; 64]);
-    let usage = WindowUsage {
-        slot: START_SLOT,
-        reservations: vec![Reservation {
-            owner: *member(7).as_bytes(),
-            slot: START_SLOT,
-            flow: flow(7, SOL, CAP).flow,
-        }],
-    };
-    let decide = |debit| {
-        LimitDecision {
-            flows: &[flow(7, SOL, debit)],
-            assets: &[zero_window()],
-            usage: &usage,
-        }
-        .decide(signature)
-    };
-    assert_eq!(decide(CAP), CoSignDecision::Signed(signature));
-    assert_eq!(
-        decide(CAP + 1),
-        CoSignDecision::Refused(CoSignRefusal::OverLimit)
-    );
+#[tokio::test]
+async fn a_reservation_of_a_slot_past_the_reader_still_counts() {
+    let window = Window::open("sqlite::memory:").await;
+    window.slot.store(START_SLOT + 5, Ordering::Relaxed);
+    window.signed(1, vec![flow(7, SOL, CAP)]).await;
+    window.slot.store(START_SLOT, Ordering::Relaxed);
+    window.refuses(2, vec![flow(7, SOL, 1)]).await;
 }
 
-#[test]
-fn a_reservation_of_a_slot_past_the_reader_still_counts() {
-    let signature = Signature::from([1; 64]);
-    let usage = WindowUsage {
-        slot: START_SLOT,
-        reservations: vec![Reservation {
-            owner: *member(7).as_bytes(),
-            slot: START_SLOT + 5,
-            flow: flow(7, SOL, CAP).flow,
-        }],
+/// Halves sum exactly up to `u64::MAX`, one unit past it refuses.
+async fn assert_ring_total_sums_exactly_to_u64_max(window: &Window) {
+    window.limit(AssetLimits {
+        volume_cap: u64::MAX,
+        volume_window_slots: WINDOW,
+        ..AssetLimits::EMPTY
+    });
+    window.signed(1, vec![flow(7, SOL, u64::MAX - 1)]).await;
+    window.signed(2, vec![flow(8, SOL, 1)]).await;
+    window.refuses(3, vec![flow(9, SOL, 1)]).await;
+}
+
+/// A measure past 2^64 stores capped and still reads past every cap.
+async fn assert_measure_past_u64_reads_past_every_later_cap(window: &Window) {
+    window.limit(SENDER_LIMITS);
+    let deposited = |amount| OwnerFlow {
+        owner: member(7),
+        flow: AssetFlow {
+            deposited: amount,
+            ..flow(7, SOL, 0).flow
+        },
     };
-    let check = [AssetCheck {
-        asset: SOL,
-        policy: capped(AssetLimits {
-            sender_cap: CAP,
-            sender_window_slots: WINDOW,
-            ..AssetLimits::EMPTY
-        }),
-    }];
-    assert_eq!(
-        LimitDecision {
-            flows: &[flow(7, SOL, 1)],
-            assets: &check,
-            usage: &usage,
-        }
-        .decide(signature),
-        CoSignDecision::Refused(CoSignRefusal::OverLimit)
-    );
+    window.signed(1, vec![deposited(u128::MAX)]).await;
+    window.limit(AssetLimits {
+        deposit_cap: u64::MAX,
+        deposit_window_slots: WINDOW,
+        ..AssetLimits::EMPTY
+    });
+    window.refuses(2, vec![deposited(1)]).await;
+}
+
+#[tokio::test]
+async fn a_ring_total_sums_exactly_to_u64_max_and_refuses_one_past() {
+    assert_ring_total_sums_exactly_to_u64_max(&Window::open("sqlite::memory:").await).await;
+}
+
+#[tokio::test]
+async fn a_measure_past_u64_reserved_uncapped_reads_past_every_later_cap() {
+    let window = Window::open("sqlite::memory:").await;
+    assert_measure_past_u64_reads_past_every_later_cap(&window).await;
+}
+
+#[tokio::test]
+#[ignore = "needs RING_RPC_TEST_POSTGRES_URL"]
+async fn the_summed_halves_read_alike_on_postgres() {
+    let url = std::env::var("RING_RPC_TEST_POSTGRES_URL").expect("postgres url");
+    let window = Window::open(&url).await;
+    window.clear().await;
+    assert_ring_total_sums_exactly_to_u64_max(&window).await;
+    window.clear().await;
+    assert_measure_past_u64_reads_past_every_later_cap(&window).await;
 }
 
 #[tokio::test]
 async fn the_ledger_counts_a_reservation_until_its_window_passes() {
     let window = Window::open("sqlite::memory:").await;
     window.signed(1, vec![flow(7, SOL, 60)]).await;
-    window
-        .slot
-        .store(START_SLOT + WINDOW - 1, Ordering::Relaxed);
+    window.slot.store(1_049, Ordering::Relaxed);
     window.refuses(2, vec![flow(7, SOL, 41)]).await;
-    window.slot.store(START_SLOT + WINDOW, Ordering::Relaxed);
-    window.signed(3, vec![flow(7, SOL, CAP)]).await;
+    window.signed(3, vec![flow(8, SOL, CAP)]).await;
+    window.slot.store(1_050, Ordering::Relaxed);
+    window.signed(4, vec![flow(7, SOL, CAP)]).await;
 }
 
 #[tokio::test]
