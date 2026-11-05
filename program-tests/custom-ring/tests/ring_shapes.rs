@@ -366,28 +366,6 @@ fn narrow_key(outputs: u8) -> Option<TransferShape> {
     .shape()
 }
 
-fn shape_of(circuit: RingCircuit) -> Option<TransferShape> {
-    let RingCircuit::Transfer {
-        outputs,
-        inputs,
-        withdrawals,
-        owners,
-        entry,
-        wide,
-    } = circuit
-    else {
-        return None;
-    };
-    Some(TransferShape {
-        outputs,
-        inputs,
-        withdrawals,
-        owners,
-        entry,
-        wide,
-    })
-}
-
 fn the_wide_key() -> Result<TransferShape> {
     TRANSFER_SHAPES
         .into_iter()
@@ -910,7 +888,8 @@ impl ShapeRing<'_> {
         }
         coverage.assert_keys(|circuit| {
             family.column() == self.column
-                && shape_of(circuit).is_some_and(|shape| family.keys(shape) && widens_legs(shape))
+                && TransferShape::of(circuit)
+                    .is_some_and(|shape| family.keys(shape) && widens_legs(shape))
         });
         Ok(())
     }
