@@ -1,28 +1,15 @@
 # Public inputs
 
-Every ring proof has one public input. It is the fold of a statement its verifier rebuilds. The ring program rebuilds the transfer, deposit, merge and register key statements, and the Storage program the apply statement. A prover supplies none of the elements the verifier can derive. Element lists are in order. [Spec](../../spec.md) [Hashing](hashing.md)
+Every ring proof has one public input. It is the fold of a statement its verifier rebuilds. The ring program rebuilds the transfer, deposit and merge statements, and the Storage program the apply and register key statements. A prover supplies none of the elements the verifier can derive. Element lists are in order. [Spec](../../spec.md) [Hashing](hashing.md)
 
 | Statement | Fold | Elements | Verified by |
 |---|---|---|---|
-| Transfer | `HashChain4` | `50 + 2K` | `Transfer`, `AuthorityTransfer` |
-| Apply records | `HashChain4` | 9, or `13 + 2W` on a private key | Storage `Update` |
-| Register key | `HashChain4` | 10 | ring `Enroll` |
-| Deposit | `HashChain4` | `45 + 2K` | `Deposit` |
-| Merge | `HashChain` | 14 | `Merge` |
-
-## Credential roots
-
-`K` is the key's credential opening capacity and `W` the apply key's write width. Every statement that reads a credential carries one run:
-
-```text
-credential_roots = [ credential_owner, address_root, (tree_id_i, root_i) for i in 0..K ]
-```
-
-- `credential_owner` is the SPP owner hash of the ring's credential PDA, which the program derives from its own program id.
-- `address_root` is the tree 0 nullifier tree root at the frame's `address_root_index`. The program reads its append sequence from the tree's history and refuses one below the highest `absence_floor` of the salted sources the frame reads.
-- Each `(tree_id_i, root_i)` is a state root of an SPP tree the frame names, read at its root index, `tree_id` as `tree_id_field`. The frame names `D >= 1` distinct trees in ascending id, and the program pads the table to `K` with copies of the first entry. Only a zero-key merge carries an all zero table.
-- The program accepts only SPP-owned tree accounts, tree 0 as the address tree, and a nonzero root inside the written history. A paused tree stays readable.
-- A public apply proves under the public key and carries no credential run.
+| Transfer | `HashChain4` | 49 | `Transfer`, `AuthorityTransfer` |
+| Apply records | `HashChain4` | 9, or 11 on a private key | Storage `Update` |
+| Apply enrollments | `HashChain4` | 8 | Storage `ApplyEnrollments` |
+| Register key | `HashChain4` | 10 | Storage `Enroll`, first enrollment |
+| Deposit | `HashChain4` | 43 | `Deposit` |
+| Merge | `HashChain` | 12 | `Merge` |
 
 ## Transfer
 
@@ -40,10 +27,10 @@ One statement serves every rail. It covers the audit, the policy and the approva
   input_count, input_nullifier_chain, private_tx_hash, sender,
   party_0 .. party_6,
   signer_count, signer_chain,
-  policy_hash, own_root, curator_root, credential_roots,
+  policy_hash, own_root, curator_root, tracking_root,
   (asset_k, net_k, gross_k) for k in 0..3,
   withdrawal_hash,
-  50 + 2K ]                           the element count, itself included
+  49 ]                                the element count, itself included
 ```
 
 The head has 10 elements:
@@ -73,7 +60,7 @@ The rail bits:
 | Delegate, anonymous ring | 0 | 0 | 1 |
 
 - `in_proof` is set by the frame's `OWNER_IN_PROOF` flag. `hidden` is set on an anonymous ring's `Transfer` without the frame's `PUBLIC_OWNERS` flag. `delegate` is set by the `AuthorityTransfer` tag alone, so a proof made with `delegate = 1` fails under `Transfer`.
-- `approval_mask` is `right_align` of one byte, bit `1` `OUTFLOW` and bit `2` `WITHDRAWAL`. The proof sets `OUTFLOW` when some `outflow(o, a) > cosign_above(a)` with `cosign_above(a) != 0`, and `WITHDRAWAL` when some `gross(a) > withdrawal_threshold(a)` with `withdrawal_threshold(a) != 0`. The mask is zero while `own_root` is zero, and the program refuses a nonzero mask on a delegate frame. The program demands a co-signer for each set bit.
+- `approval_mask` is `right_align` of one byte, bit `1` `OUTFLOW` and bit `2` `WITHDRAWAL`. The proof sets `OUTFLOW` when some [charged outflow](../../spec.md#15-outflow-limits-per-transfer) `charged(o, a) > cosign_above(a)` with `cosign_above(a) != 0`, and `WITHDRAWAL` when some `gross(a) > withdrawal_threshold(a)` with `withdrawal_threshold(a) != 0`. The mask is zero while `own_root` is zero, and the program refuses a nonzero mask on a delegate frame. The program demands a co-signer for each set bit.
 - `approval_totals` is `0` or the [approval totals digest](hashing.md#approval-totals-digest). The proof holds a nonzero value to the totals its outflow section computed.
 - `signer_data_counts` is `right_align` of a `u64`. Entry `k` holds bits `5k .. 5k + 5`, the count of live output slots that the `k`th signer of `signer_chain` owns with a nonzero `data_hash`. It has 12 entries, and a bit above the last entry is refused. The frame carries it under `EXTENSIONS` only when nonzero, and the program supplies `0` when it is absent.
 - `no_spend` is `1` when `R`, the sealed count of spent notes, is `0`. The proof sets it from `R`. The program then demands no owner signer and no `TRANSFERS` co-signer. An address input still needs SPP's authorization.
@@ -82,7 +69,7 @@ The rail bits:
 - `sender` is `solana_owner_identity` of the framed owner key on the in-proof rail, and `0` on every other rail.
 - `party_0` is the payer. `party_1 .. party_5` are the co-signers, then each deposit leg funder not already named. `party_6` is the exit destination of a hidden sender. Each is `solana_owner_identity`, and `0` when absent. Every party is `0` off an anonymous ring. The circuit refuses a hidden owner equal to any nonzero party.
 - `signer_count` is the number of distinct keys in the SPP owner signer run, deduplicated by first occurrence. `signer_chain` is `HashChain4` of their identities in that order, zero-filled to `S`, and `0` when the count is `0`. The delegate rails bind count `0` and chain `0`.
-- `policy_hash` is the ring account's written hash on a policy ring, else `0`. `own_root` is the ring's own registry root at the frame's `own_revision` on a ring with own records, else `0`. `curator_root` is the curator root at the frame's `curator_revision` on a policy ring with a curator, else `0`. The delegate rails read no policy root, so all three are `0` there. `credential_roots` follows [Credential roots](#credential-roots) on every rail.
+- `policy_hash` is the ring account's written hash on a policy ring, else `0`. `own_root` is the ring's own registry root at the frame's `own_revision` on a ring with own records, else `0`. `curator_root` is the curator root at the frame's `curator_revision` on a policy ring with a curator, else `0`. The delegate rails read no policy root, so all three are `0` there. `tracking_root` is the tracking registry root at the frame's `tracking_revision` on every rail. The program refuses a revision below the highest tracking floor of the salted sources the frame reads.
 - A public slot holds SPP's asset field, the signed net and the gross public withdrawal of the asset. The net is `right_align(net)` when positive and `q - |net|` when negative. The gross is `right_align` of a `u128`, deposits excluded. Slots past the used ones are zeros.
 - `withdrawal_hash` is the policy withdrawal hash below. The count closes the chain, so a statement of another length hashes apart.
 
@@ -101,14 +88,23 @@ No zolana ciphertext enters the statement, an exit's scheme 3 body included. The
 ```text
 [ CRAP, old_root, new_root, right_align(old_next_index), right_align(new_next_index),
   chain_start, chain_end, right_align(count), right_align(restrictive),
-  right_align(credential_writes), private_ring_id, credential_roots ]   private key only past restrictive
+  right_align(private_writes), tracking_root ]   private key only past restrictive
 ```
 
 The instruction data carries `restrictive`, and the proof holds it at `1` exactly when an active write meets a condition of [root history](../../design/records-and-roots.md#root-history). A zero bound reads as no bound, and an absent member's old fields read as zero. The Storage program retires every earlier root only when it is `1`.
 
 The Storage program supplies `old_root` as the registry's newest root and `old_next_index`. It folds `chain_end` over the update's writes from [`chain_start(registry, revision)`](hashing.md#record-tree), one chain per `Update`, and supplies `count` as their number. It refuses a `revision` other than the registry's own. Of the roots and indices, only `new_root` and `new_next_index` come from the instruction data.
 
-`credential_writes` is a `u16` bitmap with bit `i` set for write `i` to a private list, except a write an asset entry exempts. The program derives it from the masks, and no caller flag sets it. When it is nonzero, `private_ring_id` is the registry's own. `credential_roots` then carries the credential PDA owner of the ring program the instruction names, checked against `private_ring_id`. The instruction also carries the address root's claimed sequence, and the program refuses it unless it equals the sequence it reads from tree 0. When it is zero, the update proves under the public key, its statement ends at `restrictive`, and the instruction carries no credential account.
+`private_writes` is a `u16` bitmap with bit `i` set for write `i` to a private list, except a write an asset entry exempts. The program derives it from the masks, and no caller flag sets it. When it is nonzero, the instruction names a `tracking_revision` and passes the tracking registry the registry pins. `tracking_root` is that registry's root at the revision, served under grace. The program refuses another tracking account and a registry that pins none. When it is zero, the update proves under the public key and its statement ends at `restrictive`. The instruction then names no revision and passes no tracking account.
+
+## Apply enrollments
+
+```text
+[ CRTA, old_root, new_root, right_align(old_next_index), right_align(new_next_index),
+  chain_start, chain_end, right_align(count) ]
+```
+
+The Storage program supplies `old_root` as the tracking registry's newest root, `old_next_index` and `chain_start = HashChain4([CRTA, hash_bytes(registry), right_align(revision)])`. It supplies `count` as the number of authorization accounts named. It computes each [tracking entry](hashing.md#tracking-tree) from its account and folds `chain = Poseidon(chain, entry)` from `chain_start` to `chain_end`. The applier chooses which accounts to name and never an entry's content. The program refuses a `revision` other than the registry's own. Of the roots and indices, only `new_root` and `new_next_index` come from the instruction data. Both indices are `u64`, and the program refuses a `new_next_index` past `TRACKING_CAPACITY = 2^32`.
 
 ## Register key
 
@@ -117,7 +113,7 @@ The Storage program supplies `old_root` as the registry's newest root and `old_n
   pack_be(auditor_pubkey), pack_be(0x04 || eph_u), hash_bytes(ciphertext) ]
 ```
 
-The statement has 10 elements and no registry root. The ring program takes `ring_id` from its own program id and `auditor_pubkey` from the ring account, and computes `member = solana_owner_identity(owner)` from the signing owner. A proof for another ring, auditor or member fails. `nullifier_pk`, `list_tag`, `eph_u` and the 64-byte `ciphertext` come from the instruction data. The proof shows the ciphertext seals the nullifier secret behind `nullifier_pk` and the list salt behind `list_tag` to the auditor key. The program refuses `nullifier_pk = Poseidon(0)` ahead of the proof. The statement is `HashChain4(elements(CRRG))` of the [audit credential](hashing.md#audit-credential) the program then stores.
+The statement has 10 elements and no registry root. The Storage program takes `ring_id` and `auditor_pubkey` from the tracking registry, which pins both at creation, and computes `member = solana_owner_identity(owner)` from the signing owner. A proof for another ring, auditor or member fails. `nullifier_pk`, `list_tag`, `eph_u` and the 64-byte `ciphertext` come from the instruction data. The proof shows the ciphertext seals the nullifier secret behind `nullifier_pk` and the list salt behind `list_tag` to the auditor key. The program refuses `nullifier_pk = Poseidon(0)` ahead of the proof. A rotation carries no proof and no statement.
 
 ## Deposit
 
@@ -127,18 +123,18 @@ context_hash = HashChain([ hash_bytes(program id), hash_bytes(tree),
 statement    = HashChain4([ CRDP, context_hash, ring_id, right_align(count),
                             (owner_utxo_hash_i, hash_bytes(ciphertext_i)) × 8,
                             pack_be(auditor_pubkey), pack_be(eph_pk),
-                            credential_roots, own_root, curator_root, policy_hash,
+                            tracking_root, own_root, curator_root, policy_hash,
                             (asset_i, right_align(amount_i)) × 8 ])
 ```
 
-`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `ciphertext_i` is slot `i`'s 144-byte opening record, and every slot shares one `eph_pk`. `ring_id` is `hash_bytes` of the executing program id. `credential_roots` follows [Credential roots](#credential-roots) with `K` the deposit capacity, from the prefix's credential read. `own_root` is the own root at the prefix's `own_revision` on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the ring account's written hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
+`spp_data` is the forwarded SPP data from its tag byte `18`. Slots past `count` are zero. `ciphertext_i` is slot `i`'s 144-byte opening record, and every slot shares one `eph_pk`. `ring_id` is `hash_bytes` of the executing program id. `tracking_root` is the tracking root at the prefix's `tracking_revision`. `own_root` is the own root at the prefix's `own_revision` on a policy ring, else `0`. `curator_root` is the curator root at the prefix's `curator_revision` when a policy source names a curator, else `0`. `policy_hash` is the ring account's written hash on a policy ring, else `0`. `asset_i` is the SPP asset field of entry `i`'s group, `SOL_ASSET_FIELD` or `hash_bytes(mint)`, and `amount_i` its amount.
 
 ## Merge
 
 ```text
 [ CRMG, output_utxo_hash, n0, ring_id,
   pack_be(auditor_pubkey), pack_be(eph_pk), hash_bytes(ciphertext),
-  payer, published_owner, credential_owner, tree_id, root ]
+  payer, published_owner, tracking_root ]
 ```
 
-`output_utxo_hash` and `n0` come from the SPP merge data the program forwards. `ciphertext` is the 144-byte opening record of the output. `payer` is `solana_owner_identity` of the SPP payer, and the circuit holds a nonzero-key owner apart from it. Under a nonzero nullifier key, `published_owner` is `0` and `credential_owner` is the credential PDA's owner hash. `(tree_id, root)` is the state root of the one tree the merge names, and the proof opens the owner's credential present. A merge reads no address root. Under the zero key, `published_owner` is `solana_owner_identity` of the owner account SPP makes sign, and the last three elements are `0`. The statement holds no input. SPP's merge proof ties every input to the output's owner, asset and sum.
+`output_utxo_hash` and `n0` come from the SPP merge data the program forwards. `ciphertext` is the 144-byte opening record of the output. `payer` is `solana_owner_identity` of the SPP payer, and the circuit holds a nonzero-key owner apart from it. Under a nonzero nullifier key, `published_owner` is `0` and `tracking_root` is the tracking root at the merge's `tracking_revision`, and the proof opens the owner's row. Under the zero key, `published_owner` is `solana_owner_identity` of the owner account SPP makes sign, and `tracking_root` is `0`. The statement holds no input. SPP's merge proof ties every input to the output's owner, asset and sum.

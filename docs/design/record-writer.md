@@ -1,6 +1,6 @@
 # The record writer
 
-Ring RPC writes a ring's policy records when it holds the storage authority key. It turns signed record updates into storage updates, and its checks gate only the writes it sends. Enrollment takes no part in these writes, apart from the credential proof of a private owner write. [Spec](../spec.md)
+Ring RPC writes a ring's policy records when it holds the storage authority key. It turns signed record updates into storage updates, and its checks gate only the writes it sends. Tracking enrollment takes no part in these writes, apart from the tracking row a private owner write proves. [Spec](../spec.md)
 
 ## A record update
 
@@ -32,8 +32,8 @@ Ring RPC writes a ring's policy records when it holds the storage authority key.
 - The policy authority can refuse it. An update that still waits after its expiry slot is refused, and the expiry has an upper bound.
 - Nothing obliges the authority to answer, and the writer checks no process behind an approval.
 - No cap limits pending updates. Per-client and per-key rate limits bound how fast they arrive.
-- List approval grants lists and differs from [enrollment](records-and-roots.md#audit-credentials), a secret the wallet registers outside the authority's control.
-- A private owner write proves the owner's credential and its tree 0 address. The writer reads the address under the newest tree 0 root. It holds the write for a bounded wait while the address sits in the queue. It refuses the write when the wait ends first.
+- List approval grants lists and differs from [tracking enrollment](records-and-roots.md#tracking), a secret the wallet registers outside the authority's control.
+- A private owner write proves the owner's applied row under one tracking root, and Storage raises the source's tracking floor to that root's revision. A batch whose salted owner has no applied row fails before the proof.
 
 ## Durability
 

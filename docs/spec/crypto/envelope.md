@@ -2,7 +2,7 @@
 
 The envelope seals a secret to the ring's X25519 auditor key. A ring uses it for a transfer's auditor stream, an enrolling owner's nullifier secret and list salt, deposit opening records and a merge's opening record. The stream schedule also keys every recipient body, reply and sender bundle from a slot secret, outside every proof. [Spec](../../spec.md) [Hashing](hashing.md) [Disclosure](disclosure.md)
 
-The ring program verifies the transfer, deposit and merge proofs, and the register key proof in `Enroll`. In each, the ciphertext's hash in the statement fixes the plaintext.
+The ring program verifies the transfer, deposit and merge proofs. The Storage program verifies the register key proof in `Enroll` on an owner's first enrollment. In each, the ciphertext's hash in the statement fixes the plaintext.
 
 ## Key encoding
 

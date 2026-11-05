@@ -16,7 +16,7 @@ A statement element enforces nothing alone. It fixes a value, and a constraint o
 ## The cross-component argument
 
 1. The program builds the statement from the frame it forwards to SPP. The statement hash is the one public input of the ring proof, so the prover picks no element the program derives.
-2. The circuit opens each output through `audit.OpenSlots` and each input through `OpenInputs`, both through `shared.UtxoWires.Open`. Audit, policy and the credential checks read those wires, so no two sections describe different notes.
+2. The circuit opens each output through `audit.OpenSlots` and each input through `OpenInputs`, both through `shared.UtxoWires.Open`. Audit, policy and the tracking checks read those wires, so no two sections describe different notes.
 3. The circuit binds its private nullifiers to `input_nullifier_chain`, which the program hashes from the nullifiers it forwards to SPP. It derives the address chain from those nullifiers and the address selectors. It then reopens `private_tx_hash` over the opened inputs, the opened outputs, the address chain and the blinding. SPP's proof binds the same hash to its nullifiers and outputs, so the opened slots are the slots SPP settles.
 4. The program hands SPP the output hashes that `output_chain` covers. SPP zero-fills past `m`, and the circuit multiplies each cell past `m` by zero. Both sides read one list.
 5. SPP derives every output blinding and `private_tx_blinding` from one seed. The circuit holds each published blinding to the seed the sealed key derives. Slot 0 is always published, so the sealed key fixes SPP's seed.
@@ -64,7 +64,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 ### Every live input has its owner's row
 
 - The circuit holds each live input to a live row, in `AssertInputOwners`. Only a zero-key note on the delegate rail goes without.
-- The circuit holds a ring note's nonzero key to the key of the row's credential, read present under a credential state root. A default-ring note carries a key the ring never enrolled.
+- The circuit holds a ring note's nonzero key to the row's enrolled key under the tracking root. A default-ring note carries a key the ring never enrolled.
 - The circuit refuses a hidden owner's zero-key input, since anyone who holds the opening computes that nullifier.
 - The circuit holds live rows strictly ascending with zero rows last, except on the delegate rail, in `assertRowsAscending`.
 - The tests are `TestInputPredicateOnEveryRail`, `TestZeroKeyInputs`, `TestDelegateInputOwners`, `TestOwnerCapacity`, and `TestRowsAscend` in `prover/circuits/policy`.
@@ -77,13 +77,13 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - The circuit holds each member past the count to zero, and chains zero at a count of zero. It holds the count to zero on the delegate rail.
 - The tests are `TestSignerSetVector` and `TestRailsSolve`.
 
-### Every live ring output under a nonzero key reads its owner's credential
+### Every live ring output reads its owner's row
 
-- The circuit holds a nonzero key to the key of its owner's present credential, in `AssertOutputOwners`. A literal zero is refused.
-- A zero-key output needs no credential for its key. Under a salted payee read the policy still opens the payee's credential or its absence.
+- The circuit holds a nonzero key to its owner's enrolled key under the tracking root, in `AssertOutputOwners`. A literal zero is refused.
+- A zero-key output to an enrolled owner passes only while no salted payee read is active. Under a salted payee read a zero key needs the payee's row absent.
 - An exit reads `Ring = 0`, so it stands outside the rule.
-- A present credential is a state inclusion of the `CRCR` state hash under the credential PDA's owner hash. An absent one is a strict gap in tree 0. Both live in `prover/circuits/registry/credential.go`.
-- The tests are `TestOutputPredicateOnEveryRail`, and `TestCredentialStateInclusionBindsPayload`, `TestCredentialAbsenceRequiresStrictAddressGap` and `TestCredentialPoolAuthenticatesBothBranches` in `prover/ringtest/ringregistry`.
+- A present row opens by its leaf, and an absent owner by the leaf that brackets it, in `prover/circuits/registry/tracking.go`.
+- The tests are `TestOutputPredicateOnEveryRail`, and `TestTrackingOpeningRefusals` and `TestTrackingOpeningResolvesPresentAndAbsentOwners` in `prover/circuits/registry`.
 
 ### Policy sections switch from the rail and two statement values
 
@@ -97,9 +97,9 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 - The circuit answers each query through a pool bound to a root, present or proven absent, in `resolveSubjects`. No prover list bit reaches a rule.
 - `curatorColumns` projects list bits alone, and mint settings read the own pool.
-- The circuit forces a present owner's salt to open its credential's `list_tag`, then reads the record at the forced salted key. An owner proven absent reads off every private list.
-- `RegistrySlots::load` refuses a salted source whose private ring id is not the ring's. `CredentialAccounts::load` refuses an address root below the highest floor of the salted sources.
-- The tests in `programs/custom-ring/tests/rules/storage_root_rules.rs` are `an_address_root_below_the_salted_floor_is_refused_at_load` and `a_private_list_mapped_to_a_curator_on_another_ring_is_refused`.
+- The circuit forces a present owner's salt to open its row's `list_tag`, then reads the record at the forced salted key. An owner proven absent reads off every private list.
+- `RegistrySlots::load` refuses a salted source that pins another tracking registry. `LiveRoots::tracking` refuses a tracking revision below the highest floor of the salted sources.
+- The tests in `programs/custom-ring/tests/rules/storage_root_rules.rs` are `a_tracking_root_below_the_salted_floor_is_refused_at_load` and `a_private_list_mapped_to_a_curator_on_another_tracking_registry_is_refused`.
 - The tests in `prover/circuits/policy` are `TestPooledPolicyBindsSubjectReferences`, `TestRecordPoolBindsEveryActiveQuery`, `TestPublicAndPrivateBlocksAreTwoRules` and `TestPresentRowCannotSkipTheSaltedRead`.
 
 ### Every owner, payment and input asset meets its rules
@@ -112,7 +112,7 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 ### The settled outputs are the audited outputs
 
-- The circuit opens each slot once in `OpenSlots`, then hands one `shared.Output` to the credential checks, the policy and the stream.
+- The circuit opens each slot once in `OpenSlots`, then hands one `shared.Output` to the tracking checks, the policy and the stream.
 - The circuit reopens `private_tx_hash` in `bindTransaction`. A note called an address would leave the input chain SPP hashed.
 - SPP holds each output's ring id to 0 or the ring's in `AssertRingMemberOrFree`. Its authority rail holds it to the ring's in `AssertRingMember`, and its exit selector lets an output leave.
 - The circuit holds both data hashes to zero while `has_data` is clear, and opens them in the tail while it is set.
@@ -149,10 +149,10 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 - No constraint binds a nullifier to an earlier record. The auditor's link is a reader check.
 - The tests in `prover/circuits/audit` are `TestRealInputCountIsSealed`, `TestInputMapsBindAbsolutePositions`, `TestInputMapRefusesWitnessClassChangeWithSealedEvidence`, `TestAddressOnlyInputsSetNoSpend`, `TestNoSpendEqualsAZeroCount`, `TestDefaultInputNeedsEntryCapacity`, `TestDefaultBitsAndEvidenceFollowTheSlots`, `TestEntryEvidenceServesMixedOwners` and `TestReaderRebuildsADefaultInput`.
 
-### Each owner's outflow stays within the asset's limits
+### Each owner's charged outflow stays within the asset's limits
 
-- The circuit computes `debit`, `kept`, `charge` and `outflow` per row and asset in `constrainOutflow`. The rows' order alone fixes each share.
-- The circuit holds each asset's peak outflow to a nonzero `cap`. It consumes the statement's gross and does not rebuild it from legs.
+- The circuit computes `debit`, `kept`, `charge` and the charged outflow per row and asset in `constrainOutflow`. The rows' order alone fixes each share.
+- The circuit holds each asset's peak charged outflow to a nonzero `cap`. It consumes the statement's gross and does not rebuild it from legs.
 - The program folds settled legs into `PublicSlots`, and the gross per asset excludes deposits.
 - The tests in `prover/circuits/policy` are `TestDebitKeepsOwnersApart`, `TestSameOwnerExitCountsAsLeaving`, `TestDepositOffsetsASingleOwnersDebit`, `TestOutflowSettlesAtItselfAndRefusesOneBelow`, `TestOwnerPastTheCapBesideOneUnderIt`, `TestOutflowWithNothingLeaving`, `TestDebitVector` and `TestQuantitiesVector`.
 
@@ -174,25 +174,24 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 ### Roots come from the ring's registries
 
 - The program reads each root live at the frame's revision, from the account the ring binds, through `RootRead`.
-- The program refuses a records registry of another ring at `Initialize`. It refuses a salted source of another ring at `Initialize` and `UpdatePolicy`, before it stores the policy, and again when a frame reads it.
+- The program refuses a records registry of another ring at `Initialize`. It refuses a salted source that pins another tracking registry at `Initialize` and `UpdatePolicy`, before it stores the policy. It refuses one again when a frame reads it.
 - The tests are `programs/custom-ring/tests/rules/storage_root_rules.rs` and `programs/custom-ring/tests/rules/operator_rules.rs`.
 
 ### An enrollment binds its owner and its seal
 
-- The ring program computes the member from the signer. It takes the ring id from its own program id and the auditor key from the ring account.
-- The program builds one `AuditCredential`, verifies `RegisterKey` over its `CRRG` hash, and hands SPP the same value as the credential output. SPP verifies its proof against that output.
+- The Storage program computes the member from the signer. It takes the ring id and the auditor key from the tracking registry the ring created.
 - The circuit holds the nullifier key and the list tag to nonzero secrets, and seals both secrets under `CRING/nfk`, in `RegisterKeyCircuit`.
-- Only `Enroll` signs for the credential PDA, and SPP admits a nonzero data hash only from a signing owner. A state inclusion under that owner therefore proves a verified enrollment.
+- The program computes each applied entry from its account and refuses an applied revision. `ApplyEnrollmentsCircuit` keeps the final fields on a rotation, and keeps the tree sorted.
 - The proof does not show that the secret came from a particular derivation. A wallet that seals another secret harms itself alone.
-- The tests in `prover/circuits/registry` are `TestRegisterKeySealsTheEnrolledSecret` and `TestRegisterKeyRefusals`, with `enrollment_requires_both_proofs_and_the_complete_root_index` and `enrollment_rejects_zero_and_noncanonical_keys` in `program-libs/interface/tests/credentials.rs` and `a_pda_enrolls_its_immutable_credential_on_the_validator` in `program-tests/custom-ring/tests/ring/sanity.rs`.
+- The tests in `prover/circuits/registry` are `TestRegisterKeySealsTheEnrolledSecret`, `TestRegisterKeyRefusals`, `TestApplyEnrollmentsAppliesEntriesInNamedOrder`, `TestApplyEnrollmentsRefusals` and `TestApplyEnrollmentsAtCapacity`. The tests in `programs/storage/tests/lifecycle.rs` are `a_first_enrollment_needs_the_owner_and_a_proof_the_pairing_accepts`, `a_rotation_moves_the_viewing_key_with_no_proof` and `anyone_applies_named_enrollments_with_no_authority_signature`. `a_pda_enrolls_and_applies_its_key_on_the_validator` in `program-tests/custom-ring/tests/ring/sanity.rs` runs both steps on the validator.
 
-### A private owner write proves its owner's credential and raises the floor
+### A private owner write proves its owner's row and raises the floor
 
-- The Storage program classes each write from its masks. A private write needs a credential unless an asset entry names a mint whose hash is the member.
-- Before the proof it checks the claimed ring program against the registry's private ring id. It reads the address checkpoint from tree 0 and refuses a claimed sequence that differs.
-- `ApplyRecordsCircuit` proves that `ListKey(member, salt)` equals the written member and that the salt opens the credential's `list_tag`. It also proves the credential's state and address inclusion under the statement's roots.
-- After the proof the program raises `absence_floor` to the checkpoint's sequence together with the new root. A refusal writes neither.
-- The tests are `TestPrivateWriteBindsCredentialAndAppliedAddress` and `TestPrivateWriteBatchBindsClassification` in `prover/ringtest/ringregistry`, and `a_private_write_refuses_a_false_checkpoint_sequence_before_the_proof` and `private_proof_failure_and_stale_revision_keep_the_root_and_floor` in `programs/storage/tests/lifecycle.rs`.
+- The Storage program classes each write from its masks. A private write needs its owner's row unless an asset entry names a mint whose hash is the member.
+- A batch with a private write proves under the private apply key. Its statement adds the private write bitmap and the tracking root at the revision the update names. The program reads that root from the tracking registry the source pins.
+- `ApplyRecordsCircuit` proves that `ListKey(member, salt)` equals the written member, and that the salt opens the `list_tag` of the owner's row under that root.
+- After the proof the program raises `tracking_floor` to the revision together with the new root. A refusal writes neither.
+- The tests are `TestPrivateWriteOpensTheOwnersTrackingRow` and `TestPrivateKeyRefusesAPublicMask` in `prover/ringtest/ringregistry`, and `a_private_write_refuses_a_missing_or_substituted_tracking_registry` and `private_proof_failure_and_stale_revision_keep_the_root_and_floor` in `programs/storage/tests/lifecycle.rs`.
 
 ### A policy update applies its writes in order
 
@@ -209,19 +208,19 @@ Tests sit under `prover/circuits/transfer` unless the entry names another path.
 
 ### A merge seals its output and keeps one owner
 
-- The program forwards SPP's merge and reads one credential state root under the ring authority alone.
+- The program forwards SPP's merge and reads the tracking root under the ring authority alone.
 - The circuit holds the output hash to the record's fields and the seed's blinding. It seals the record and the seed under `CRING/mrg`.
-- The circuit holds a nonzero key to its owner's credential and refuses that owner as the payer. A zero key reads no credential, and the statement names the owner for SPP's signature.
+- The circuit holds a nonzero key to its owner's row and refuses that owner as the payer. A zero key reads no row, and the statement names the owner for SPP's signature.
 - SPP's proof ties every input to that owner, asset and sum, and refuses a note with a data hash. No list, guard, cap or co-signer rule is proven.
-- The tests are `TestMergeRefusals`, `TestMergeRecordOffItsOpening`, `TestMergeCredential`, `TestMergeModes`, `TestMergeZeroKeyIgnoresEveryRow`, `TestMergePayer` and `TestMergeRecordRebuildsTheOutput` in `prover/circuits`.
+- The tests are `TestMergeRefusals`, `TestMergeRecordOffItsOpening`, `TestMergeTrackingRow`, `TestMergeModes`, `TestMergeZeroKeyIgnoresEveryRow`, `TestMergePayer` and `TestMergeRecordRebuildsTheOutput` in `prover/circuits`.
 
 ### A deposit opens its notes to the auditor
 
 - The program builds `context_hash` over the forwarded SPP data, and supplies each root and `policy_hash` from its accounts.
 - The circuit binds each occupied slot's commitment to its opening record. Blindings stay in the `CRDB` domain.
-- The circuit holds each nonzero key to its owner's present credential, in `AssertOutputOwners`. It screens each recipient and asset through the section a transfer uses. It runs no sender rule.
+- The circuit holds each key to its owner's row as a transfer output does, in `AssertOutputOwners`. It screens each recipient and asset through the section a transfer uses. It runs no sender rule.
 - The path touches no nullifier tree, and a transfer with a deposit leg stays valid beside it.
-- The tests are `TestDepositSlotRefusals`, `TestDepositRecordOffItsOpening`, `TestDepositZeroKeySurvivesEnrollment`, `TestDepositZeroKeyRetainsSaltedPayeeScreening`, `TestDepositAbsenceReadsTheFrameRoot`, `TestDepositScreensEachRecipientOnTheBlockList`, `TestDepositScreensEachAssetOnItsRecord` and `TestDepositReaderRebuildsEachNoteFromItsRecord` in `prover/circuits`.
+- The tests are `TestDepositSlotRefusals`, `TestDepositRecordOffItsOpening`, `TestDepositZeroKeyHoldsAtTheRootTheFrameNames`, `TestDepositAbsenceReadsTheFrameRoot`, `TestDepositScreensEachRecipientOnTheBlockList`, `TestDepositScreensEachAssetOnItsRecord` and `TestDepositReaderRebuildsEachNoteFromItsRecord` in `prover/circuits`.
 
 ## What no proof covers
 

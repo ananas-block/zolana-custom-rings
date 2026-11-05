@@ -1,11 +1,11 @@
 # Records and live roots
 
-A ring reads two kinds of state, each with its own root and its own write path. A policy registry in a Storage program account contains lists, mint settings and reader grants. SPP state trees contain the audit credentials, one per enrolled owner, and SPP tree 0 contains their addresses. [Spec](../spec.md)
+A ring reads two kinds of tree, each in a Storage program account with its own root and its own write path. A policy registry contains lists, mint settings and reader grants. A tracking registry contains enrollments. [Spec](../spec.md)
 
-## Why credentials sit apart from policy
+## Why two trees
 
 - A storage update names a revision, and a proof made against another revision fails. One tree would make enrollment and revocation race on that revision.
-- `Enroll` writes only SPP state, and an authority write touches only a policy root. Enrollment traffic therefore cannot fail or delay a restrictive update.
+- `ApplyEnrollments` touches only the tracking root, and an authority write touches only a policy root. Enrollment traffic therefore cannot fail or delay a restrictive update.
 - An authority cannot gate enrollment. Policy admission stays a separate list write.
 
 ## Records
@@ -29,40 +29,42 @@ A ring reads two kinds of state, each with its own root and its own write path. 
 ## Private lists
 
 - `PrivateAllow`, `PrivateBlock` and `PrivateFrozen` are always salted. A private entry is an ordinary record under `Poseidon(CRPL, owner, list_salt)`, written through the same apply path.
-- The credential contains `list_tag = Poseidon(CRPT, list_salt)`, proven at enrollment and final.
-- While a subject opens its credential, the circuit forces its salt to open that tag, so it forces the key too. A proven absent credential is the one skip.
+- The tracking row contains `list_tag = Poseidon(CRPT, list_salt)`, proven at enrollment and final.
+- While a subject has a tracking row, the circuit forces its salt to open that tag, so it forces the key too. A proven absent row is the one skip.
 - A subject proven absent reads no salted list. A deny rule on a salted list passes, and an allow rule on one fails.
 - To list an unenrolled identity, a curator uses a public list keyed by owner. Later enrollment leaves that entry in force.
 - A public and a private block are two rules. One rule over both would admit a publicly blocked owner with no private entry.
 - The wallet derives its salt per ring from its viewing key, so an auditor that holds the nullifier secret cannot derive another ring's salt.
-- Private lists serve one ring. A source of a salted list must carry the ring's id as its private ring id. A curator that serves several rings therefore keeps one registry per ring.
-- A list writer reads an enrolled owner's salt through `getListSalt`, which checks the salt against the credential's tag and never returns the nullifier secret.
-- A private write proves the owner's credential and its address in tree 0. A write for an owner whose address waits in the tree 0 queue waits too. A write that names an asset whose mint hashes to its member needs no credential.
+- Private lists serve one ring. A source of a salted list must pin the ring's tracking registry, so a curator that serves several rings keeps one registry per ring.
+- A list writer reads an enrolled owner's salt through `getListSalt`, which checks the salt against the row's tag and never returns the nullifier secret.
+- A private write proves the owner's applied row. A write for an owner whose enrollment is still pending fails before the proof. A write that names an asset whose mint hashes to its member needs no row.
 
-## Audit credentials
+## Tracking
 
-- A credential contains one owner's ring id, owner identity, nullifier key and list tag. It also holds the auditor key, an ephemeral key and the ciphertext that seals the nullifier secret and the list salt.
-- It is an SPP data note owned by the ring's credential PDA, `[b"credential"]` under the ring program. Only `Enroll` signs for that PDA, and no instruction spends or replaces the note.
-- Its address derives from `Poseidon(CRCA, ring_id, member)` in tree 0, so one owner has one credential per ring. A key or viewing key change makes no second identity.
+- A tracking leaf contains one owner's nullifier key, ciphertext hash, viewing key, revision and list tag.
+- The tree has 16 levels of four, taller than a policy tree. Anyone can pay to fill it, and no tree replaces a full one. Its next index is a `u64`, and an apply past `TRACKING_CAPACITY` leaves fails.
 - `Enroll` needs the owner's signature, and a program signs its PDA through CPI. Any payer may fund it, and Ring RPC can relay it for a wallet with no SOL.
-- The program builds the credential from the ring account and the signing owner. It verifies `RegisterKey` over that value and refuses the zero nullifier key. A proof for another ring, member or auditor fails.
-- The program passes SPP the same credential as the output, so a valid `RegisterKey` proof authorizes no other note. A second `Enroll` fails on the existing address.
-- A proof reads a credential present by its state inclusion under a root of the SPP tree that holds it. No address proof and no owner-specific account enters the transaction.
-- A proof reads an owner absent by a strict gap around its address in tree 0's nullifier tree, under one address root per proof.
-- A credential is usable once a state root that holds it passes SPP's root rules. Its address enters tree 0's queue at `Enroll` and a root only when a forester applies the batch.
-- A paused or full state tree keeps its last root, so its credentials stay readable.
-- The ciphertext stays in the `Enroll` transaction's plaintext output data. Ring RPC rebuilds every credential from finalized `Enroll` history after a restart.
+- A first enrollment carries a proof. It shows the ciphertext seals the secret of that nullifier key and the salt of that tag to the auditor key.
+- The program supplies the ring id, the member and the auditor key from the signer and the registry. A proof for another ring, member or auditor fails.
+- The program verifies that proof in the same instruction, and refuses the zero nullifier key.
+- `Enroll` only reads the registry, so enrollment traffic takes no write lock on it.
+- `ApplyEnrollments` is permissionless. An applier names the authorization accounts in any order, and the program computes each entry from the account, so no applier can alter one. An applied revision refuses a second apply.
+- An enrollment is complete only when its leaf sits under an accepted tracking root. A pending account grants nothing, because every check reads the root. A recipient is usable from that root on.
+- Ring RPC applies the pending enrollments of the rings its operator names. Any other party can apply the same accounts.
+- A full tree leaves a first enrollment pending, and rotations of enrolled owners still apply, since a rotation takes no new leaf.
+- A ring creates its tracking registry at `Initialize` and pins its address. A forged registry with a matching ring id fails that address check.
 
 ## Viewing keys
 
-- A wallet's current viewing key lives in zolana's user record, one account per wallet across every ring. No ring account holds a viewing key.
-- `UPDATE_KEYS` rotates the viewing key, and the user registry refuses a change of the nullifier key.
-- A sender's SDK reads the record at its canonical address and checks its owner and key encoding. It refuses a record whose nullifier key differs from the credential.
+- The row holds the owner's current viewing key for one ring. No other ring reads it.
+- A rotation is a later `Enroll` with no proof. It moves only the viewing key and the revision. The nullifier key, the list tag and the ciphertext are final.
+- The row takes the new key when an apply lands the new revision.
+- A sender's SDK resolves a recipient address through the verified tracking row and seals to the row's viewing key. An address that names an older viewing key therefore resolves to the current one.
 - A wallet keeps every replaced viewing key in its viewing history, so notes sealed to an older key still open.
 
 ## Root history
 
-A batch is restrictive when one of its writes does any of these:
+A policy batch is restrictive when one of its writes does any of these:
 
 - clears an allow, approval or private-allow bit
 - sets a block, frozen, private-block or private-frozen bit
@@ -77,24 +79,25 @@ The apply proof binds that restrictive bit, reading an absent member's old field
 - A restrictive update retires every earlier root at once, and every proof under them fails and proves again.
 - Any other update keeps the outgoing root valid for the grace period, so a proof in flight under it still lands. Over a full history it evicts the oldest kept root, and that root's proofs prove again.
 - A kept root reads no policy field more permissively than the newest root. Rules are monotone in those fields, so a kept root admits no transfer the newest refuses.
+- A tracking update is always graced, under a program constant. Over a full history it evicts the oldest kept root, and that root's proofs prove again.
 
-## Absence floor
+## Tracking floor
 
-- A private write proves its owner's address under one tree 0 root. The Storage program reads that root's append sequence from tree 0's history. It raises the registry's `absence_floor` to that sequence with the new policy root, in one instruction.
-- The instruction carries the claimed sequence, and the program refuses it when it differs from the root's sequence, before the proof.
-- A frame that reads salted lists names a tree 0 root at or above the highest floor of the sources it reads them through. A lower root fails with `AbsenceRootBelowFloor`.
-- Every owner with a private entry proved its address at or below the floor. Every accepted root therefore holds that address, and no such owner proves absence.
-- An owner whose enrollment waits in the queue has no private entry, so its proven absence hides none.
+- A private write proves its owners' rows under one tracking root, named by its revision. The Storage program raises the registry's `tracking_floor` to that revision with the new policy root, in one instruction.
+- A frame that reads salted lists names a tracking revision at or above the highest floor of the sources it reads them through. A lower revision fails with `TrackingRootBelowFloor`.
+- Rows never leave the tracking tree. Every accepted root therefore holds each owner with a private entry, and no such owner proves absence.
+- An owner with no applied row has no private entry, so its proven absence hides none.
 - A public write leaves the floor unchanged, and the floor never falls.
+- The floor is the one exception to tracking grace.
 
 ## Live roots
 
 - The program checks each registry account against the address the ring account binds, then reads its root live.
 - A proof names a root by its revision, and the program reads that root. The prover picks the revision, never the root.
 - A direct sender that meets a retired root reads the newest root and proves again. Ring RPC never proves a relay again, so a relay that meets a retired root fails and the wallet sends a new request.
-- A delegate transfer and a merge read no policy root, so a policy update cannot fail them. Every transfer and deposit reads tree 0 and at least one credential state tree.
-- An owner-signed merge reads no credential, and a hidden owner's merge reads one state root and no address root.
-- An audit-only ring with no records reads the credential roots alone.
+- A delegate transfer and a merge read no policy root, so a policy update cannot fail them. Every transfer and deposit reads the tracking root.
+- An owner-signed merge reads no tracking root, and a merge under a nonzero key reads one.
+- An audit-only ring with no records reads the tracking root alone.
 
 ## How fast a change binds
 

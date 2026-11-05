@@ -30,9 +30,9 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 
 ## Nullifier secrets
 
-- A wallet has one nullifier secret. Enrollment seals it to the ring's auditor key beside the wallet's list salt, and the program verifies the seal proof, see [audit credentials](records-and-roots.md#audit-credentials).
-- The `Enroll` transaction publishes the credential with its ciphertext as SPP plaintext output data. A restarted auditor rebuilds every credential from finalized history, and checks each against its SPP output hash before it opens the seal.
-- An empty or partial history page is no evidence that an owner is unenrolled.
+- A wallet has one nullifier secret. Enrollment seals it to the ring's auditor key beside the wallet's list salt, and the program verifies the seal proof, see [tracking](records-and-roots.md#tracking).
+- The tracking authorization keeps the ciphertext in an account. A restarted auditor checks each row the ring indexer serves against the tracking root and each seal against the row's `ct_hash`, then opens the seal.
+- A tracking scan that has not reached the root's next index is no evidence that an owner is unenrolled.
 - With a secret the auditor derives the nullifier of any note whose hash and blinding it knows. The derivation reaches every ring and the default pool.
 - One leaked secret therefore exposes that wallet's spends across every ring it enrolled on. A wallet that wants separation uses another keypair per ring.
 - A note under the zero nullifier key carries no secret. Its sender and the auditor both compute its nullifier, see [zero-key notes](owner-rails.md#zero-key-notes).
@@ -47,7 +47,7 @@ The auditor holds one viewing key for the ring's life. Every operation proves a 
 
 A recipient body contains the blinding, the amount and the mint. A note that commits a ring data hash or application data carries them after those fields. The cipher has no authentication, so the commitment a reader rebuilds under its own keys is the only proof of ownership.
 
-The sender's SDK resolves a nonzero-key recipient's credential by its state inclusion, and reads the viewing key from the recipient's zolana user record. It refuses a record whose nullifier key differs from the credential, and an unknown lookup never selects the zero key. That check protects an honest sender and binds nobody else.
+The sender's SDK resolves a nonzero-key recipient through its tracking row under a root it verified, and seals to the row's viewing key. It refuses an owner with no applied row. It also refuses a row whose nullifier key differs from the address, or whose list tag the address's salt does not open. That check protects an honest sender and binds nobody else.
 
 ## Auditor fallback
 
@@ -73,7 +73,7 @@ The sender's SDK resolves a nonzero-key recipient's credential by its state incl
 ## Deposits and merges
 
 - A deposit seals one opening record per occupied slot, a transfer's record followed by the blinding, since no envelope key derives a deposit blinding.
-- The deposit proof binds each commitment SPP receives to its record, and each nonzero nullifier key to its owner's credential.
+- The deposit proof binds each commitment SPP receives to its record, and each nonzero nullifier key to its owner's tracking row.
 - A merge seals one opening record of the output, followed by the seed. The auditor rebuilds the published hash from that record and the first nullifier.
 - SPP's proof ties every merge input to that owner, asset and sum. The ring proof therefore opens no inputs, and one ring key serves every width.
 - SPP's merge publishes no auditor message, and no external data hash covers the record. The auditor reads the ciphertext from the ring instruction, and the statement alone binds those bytes.
