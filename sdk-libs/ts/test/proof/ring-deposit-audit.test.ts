@@ -874,6 +874,7 @@ describe("ring deposit builder", () => {
         params(client, { kind: "anonymous", keys: local, history }, { feePayer: payer.address }),
       );
       expect(submission.viewingHistory?.current().txCount).toBe(1n);
+      submission.prove();
       const signed: string[] = [];
       let polled = 0;
       const result = await submission.send({

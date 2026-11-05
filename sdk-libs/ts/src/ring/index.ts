@@ -261,8 +261,14 @@ export {
   PreparedRelay,
   relayId,
   submittedRelay,
+  UnsignedRelay,
 } from "../rpc/relay.js";
-export type { RelaySent, RingAuthorityRelayClient, RingRelayClient } from "../rpc/relay.js";
+export type {
+  RelayOwnerSigner,
+  RelaySent,
+  RingAuthorityRelayClient,
+  RingRelayClient,
+} from "../rpc/relay.js";
 export {
   CoSignerApproval,
   FunderApproval,

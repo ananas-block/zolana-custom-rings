@@ -1465,6 +1465,7 @@ describe("direct confidential spend", () => {
       recipient,
       amount: 30n,
     });
+    submission.prove();
     let polled = 0;
     const result = await submission.send({
       sign: (transaction) => signTransactionWithSigners([payer], transaction),

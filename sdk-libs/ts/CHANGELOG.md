@@ -16,6 +16,7 @@ Breaking
 - `RingDepositClient` needs `getStorageRecordPool` and `getTrackingRecordPool`, every deposit seals its note to the ring's auditor, and `setRingDepositAuditInstruction` and `fetchRingDepositAudit` are gone → give the deposit client both reads and drop the deposit audit setup.
 - `auditRingTransaction` takes the `layout` of a `ConfirmedRingTransaction`, and `AuditorEncryption`, `encryptTransactionViewingSecret`, `decryptTransactionViewingSecret`, `openAuditOutputDisclosure` and `openRingEscrowedKeys` are gone → implement `confirmedTransaction` in a custom origin and open an auditor stream with `openRingDisclosure`.
 - `syncWallet` no longer opens ring deposits and `recoverRingMemberNotes` returns a `RingRecoveryStep` → sync ring wallets with `syncRingWallet`, drop `depositPayloadDecoder` from the `syncWallet` config, and pass the `progress` of a `paused` step back until a step is `complete`.
+- `prepareRingTransferRelay`, `prepareRingExitRelay`, `prepareRingEntryRelay`, `prepareRingWithdrawalRelay` and the rails' `prepareRelay` return an `UnsignedRelay` whose `chargedOutflows()` lists each owner's charged outflow per asset, and `RingTransactionSubmission.send` raises `RING_SUBMISSION_UNPROVED` until `prove()` returned those charges → read the charges, call `relay.sign()` before `send`, and call `submission.prove()` before the first `send`.
 - `RingRpc` posts each JSON-RPC method beneath its base URL, takes `RingRpcOptions.apiKey` or the URL's `api-key` and leaves the key out of `RingRpc.url`, and every signed read takes a `RingReadTarget` → forward method paths unchanged, supply the key in one place, and pin the Ring RPC service key in each `RingReadTarget`.
 
 Added
@@ -31,4 +32,5 @@ Added
 Fixed
 
 - A ring entry from a default note larger than its amount asked approval for the amount alone while the change also entered the ring, now the `ringEntry` intent and its summary name every unit entering the ring.
+- `PreparedRelay.send` called again after a lost answer asked Ring RPC to prepare the relay a second time, now it reads the relay's status first, returns the relay submitted once Ring RPC sent it and raises `RING_RELAY_FAILED` when Ring RPC failed it.
 - `recoverRingMemberNotes` failed on one output whose mint no registry names, now that commitment stays in `unopened` and recovery goes on.

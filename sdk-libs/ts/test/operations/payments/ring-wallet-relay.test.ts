@@ -3,6 +3,7 @@ import {
   getBase64Decoder,
   getBase64Encoder,
   type Address,
+  type Signature,
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
@@ -29,7 +30,8 @@ import {
 import { buildRuleTable } from "../../../src/protocol/membership/policy.js";
 import { decodeRelayProofInputs } from "../../../src/protocol/ring-rpc/relay-proof-inputs.js";
 import { CustomRingClient } from "../../../src/rpc/client.js";
-import type { PreparedRelay } from "../../../src/rpc/relay.js";
+import type { PreparedRelay, RingRelayClient } from "../../../src/rpc/relay.js";
+import type { RelayStatus } from "../../../src/protocol/ring-rpc/ring-rpc-types.js";
 import { RingRpc } from "../../../src/rpc/ring-rpc.js";
 
 import {
@@ -161,11 +163,11 @@ describe("wallet relay", () => {
           signer: signingKeySpendSigner(sender.signing),
           ...(sealRow === undefined ? {} : { sealRow }),
         },
-      });
+      }).then(({ relay }) => relay.sign());
     const sealedWide = async (sealRow?: "wide") => {
       const sender = owner(fixture, 2);
       const prepared = await prepare(sender, sealRow);
-      const { intent } = prepared.relay.request;
+      const { intent } = prepared.request;
       if (intent.operation !== "confidential") throw new Error("a confidential relay");
       const inputs = await decodeRelayProofInputs(
         new Uint8Array(getBase64Encoder().encode(intent.proofInputs)),
@@ -176,7 +178,7 @@ describe("wallet relay", () => {
     // Ring RPC names the row in its code.
     network.refuse(-32212);
     const unread = await prepare(owner(fixture, 2));
-    const refusal = await unread.relay.send(network.ringRpc).then(
+    const refusal = await unread.send(network.ringRpc).then(
       () => undefined,
       (cause: unknown) => cause,
     );
@@ -205,10 +207,10 @@ describe("wallet relay", () => {
         nullifierKey: sender.keypair.nullifierKey(),
         signer: signingKeySpendSigner(sender.signing),
       },
-    });
+    }).then(({ relay }) => relay.sign());
 
-    expect(prepared.relay.request.intent.operation).toBe("confidential");
-    expect(await network.send(prepared.relay)).toEqual(["prepareRelay"]);
+    expect(prepared.request.intent.operation).toBe("confidential");
+    expect(await network.send(prepared)).toEqual(["prepareRelay"]);
 
     const mint = randomAddress();
     const holder = owner(fixture, 1, mint);
@@ -227,13 +229,108 @@ describe("wallet relay", () => {
         nullifierKey: holder.keypair.nullifierKey(),
         signer: signingKeySpendSigner(holder.signing),
       },
-    });
+    }).then(({ relay }) => relay.sign());
 
-    expect(withdrawal.relay.request.intent).toMatchObject({
+    expect(withdrawal.request.intent).toMatchObject({
       operation: "confidential",
       tokenAccountSetup: [{ owner: recipient, mint }],
     });
-    expect(await exit.send(withdrawal.relay)).toEqual(["prepareRelay"]);
+    expect(await exit.send(withdrawal)).toEqual(["prepareRelay"]);
+  });
+
+  it("holds the owner's signature until the charged outflows were read", async () => {
+    const fixture = await ringFixture({ table: buildRuleTable({ rules: [] }) });
+    const network = walletNetwork(fixture);
+    const sender = owner(fixture, 2);
+    const inner = signingKeySpendSigner(sender.signing);
+    let signed = 0;
+    const unsigned = await prepareRingTransferRelay({
+      client: network.client,
+      ringProgramId: fixture.ringProgramId,
+      wallet: sender.wallet,
+      keys: walletKeys(sender.keypair),
+      amount: 15n,
+      recipient: ShieldedKeypair.generate().shieldedAddress(),
+      confidential: {
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        nullifierKey: sender.keypair.nullifierKey(),
+        signer: {
+          publicKey: () => inner.publicKey(),
+          sign: (message, context) => {
+            signed += 1;
+            return inner.sign(message, context);
+          },
+        },
+      },
+    });
+
+    const charged = unsigned.relay.chargedOutflows();
+    expect(signed).toBe(0);
+    expect(charged).toMatchObject([
+      { owner: sender.keypair.signingPublicKey().ownerProofInputHash(), chargedOutflow: 15n },
+    ]);
+    const prepared = await unsigned.relay.sign();
+    expect(signed).toBe(1);
+    expect(prepared.request.intent).toHaveProperty("ownerSignature");
+    expect(prepared.chargedOutflows()).toEqual(charged);
+  });
+
+  it("reconciles a resent relay by its id and never prepares it twice", async () => {
+    const fixture = await ringFixture({ table: buildRuleTable({ rules: [] }) });
+    const network = walletNetwork(fixture);
+    const relayOf = async () => {
+      const sender = owner(fixture, 2);
+      return (
+        await prepareRingTransferRelay({
+          client: network.client,
+          ringProgramId: fixture.ringProgramId,
+          wallet: sender.wallet,
+          keys: walletKeys(sender.keypair),
+          amount: 15n,
+          recipient: ShieldedKeypair.generate().shieldedAddress(),
+          confidential: {
+            quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+            nullifierKey: sender.keypair.nullifierKey(),
+            signer: signingKeySpendSigner(sender.signing),
+          },
+        })
+      ).relay.sign();
+    };
+    const lostAnswer = (status: RelayStatus) => {
+      const calls: string[] = [];
+      const relay: RingRelayClient = {
+        getRelayQuote: () => Promise.reject(new Error("unread")),
+        submitRelay: () => Promise.reject(new Error("unread")),
+        prepareRelay: async () => {
+          calls.push("prepareRelay");
+          throw new Error("lost answer");
+        },
+        getRelayStatus: async () => {
+          calls.push("getRelayStatus");
+          return status;
+        },
+      };
+      return { relay, calls };
+    };
+
+    const sent = await relayOf();
+    const signature = "1".repeat(64) as Signature;
+    const sentRelay = lostAnswer({ status: "sent", signature });
+    await expect(sent.send(sentRelay.relay)).rejects.toThrow("lost answer");
+    expect(await sent.send(sentRelay.relay)).toEqual({
+      step: "submitted",
+      relayId: sent.relayId(),
+    });
+    expect(sentRelay.calls).toEqual(["prepareRelay", "getRelayStatus"]);
+
+    const failed = await relayOf();
+    const failedRelay = lostAnswer({ status: "failed", reason: "expired" });
+    await expect(failed.send(failedRelay.relay)).rejects.toThrow("lost answer");
+    await expect(failed.send(failedRelay.relay)).rejects.toMatchObject({
+      code: "RING_RELAY_FAILED",
+      details: { reason: "expired" },
+    });
+    expect(failedRelay.calls).toEqual(["prepareRelay", "getRelayStatus"]);
   });
 
   it("relays a deposit into a key escrow ring with no opening request", async () => {

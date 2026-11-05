@@ -58,6 +58,7 @@ import {
   type OutputTotalsOpening,
   type PublicTotalsOpening,
 } from "../protocol/membership/approval-totals.js";
+import type { OwnerDebit } from "../protocol/membership/owner-debits.js";
 import { memberOfAsset } from "../protocol/membership/policy.js";
 import { signerDataCountAt } from "../protocol/membership/signer-data-counts.js";
 import { ringAuthAddress, ringPolicyAddress, STORAGE_PROGRAM_ID } from "../protocol/pda/index.js";
@@ -310,6 +311,7 @@ export interface ExpectedSealed {
   readonly funders?: readonly RelayFunderTerms[];
   /** The opening of the frame's digest, handed to an outside co-signer. */
   readonly approval?: ApprovalOpening;
+  readonly chargedOutflows: readonly OwnerDebit[];
 }
 
 /** An outside co-signer reads the proven bits or the totals, never a slot, Rust `CoSignerRule`. */

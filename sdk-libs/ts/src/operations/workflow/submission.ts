@@ -39,6 +39,7 @@ import { fetchRingPolicy, fetchStorageRegistry } from "../../protocol/membership
 import { RingError, RingProgramError } from "../../protocol/error.js";
 import { fetchTrackingRegistry } from "../../rpc/tracking-resolver.js";
 import { ringComputeUnitLimit } from "../management/admin.js";
+import type { OwnerDebit } from "../../protocol/membership/owner-debits.js";
 import { checkSpendCoverage } from "./selection.js";
 import { TransactionFit } from "./address-ceiling.js";
 import {
@@ -59,6 +60,8 @@ export interface RingSubmissionAttempt extends RingBoundState {
   readonly ringInstructionIndex: number;
   /** The anonymous depositor's viewing history past the attempt's tag, every attempt the same. */
   readonly viewingHistory?: ViewingHistory;
+  /** Absent off a transfer. */
+  readonly chargedOutflows?: readonly OwnerDebit[];
 }
 
 export type RingSubmissionResult =
@@ -136,6 +139,7 @@ export async function provenRingAttempt(
     lastValidBlockHeight: lifetime.lastValidBlockHeight,
     intentHash: input.intentHash,
     ringInstructionIndex: frame.setupInstructions?.length ?? 0,
+    chargedOutflows: proven.chargedOutflows,
     ...boundState(proven),
   });
 }
@@ -161,6 +165,7 @@ export class RingTransactionSubmission {
   /** A record the wallet held and no longer lists was settled by `reconcileRingSubmissions`. */
   #held = false;
   #attempts = 0;
+  #proved = false;
   #terminal = false;
   #busy = false;
 
@@ -253,6 +258,12 @@ export class RingTransactionSubmission {
     return this.send(input.transport, context);
   }
 
+  /** Rust `RingSubmission::prove`, `send` signs only after the charges were read here. */
+  prove(): readonly OwnerDebit[] {
+    this.#proved = true;
+    return this.#attempt.chargedOutflows ?? [];
+  }
+
   cancel(): void {
     if (this.#busy || this.#signed !== undefined) throw new RingError("RING_SUBMISSION_PENDING");
     this.#terminal = true;
@@ -265,6 +276,8 @@ export class RingTransactionSubmission {
     context?: RequestContext,
   ): Promise<RingSubmissionResult> {
     if (this.#busy || this.#terminal) throw new RingError("RING_SUBMISSION_PENDING");
+    // A reproof keeps the operation's amounts, so its charges are the ones `prove` showed.
+    if (!this.#proved) throw new RingError("RING_SUBMISSION_UNPROVED");
     this.#busy = true;
     try {
       await this.#save();

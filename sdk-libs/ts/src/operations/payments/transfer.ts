@@ -61,7 +61,6 @@ import {
   type RingTransferApproval,
 } from "./transfer-rails.js";
 import type { RelayQuote, TokenAccountSetup } from "../../protocol/ring-rpc/ring-rpc-types.js";
-import type { PreparedRelay } from "../../rpc/relay.js";
 import { isZeroKeyNote } from "../../state/exposed-notes.js";
 import {
   ringIntentMismatch,
@@ -167,12 +166,8 @@ export type RingRelaySpendParams<
   R extends RingRelayRail = RingRelayRail,
 > = Omit<P, "feePayer" | "cosigner" | "priorityFeeLamports"> & R;
 
-export type PreparedSpendRelay<R extends RingRelayRail> =
-  R extends Readonly<{
-    anonymous: AnonymousRingSpend;
-  }>
-    ? PreparedRingRelay
-    : Readonly<{ relay: PreparedRelay }>;
+/** The owner signs after reading `relay.chargedOutflows()`. */
+export type PreparedSpendRelay = PreparedRingRelay;
 
 export interface RingTransferTransactionParams extends RingSpendParams {
   /** A ring address or payment request on an anonymous ring, a shielded address or a registered owner on any other. */
@@ -308,14 +303,14 @@ export function createRingWithdrawalSubmission(
 export function prepareRingTransferRelay<R extends RingRelayRail>(
   input: RingRelaySpendParams<RingTransferTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedSpendRelay<R>> {
+): Promise<PreparedSpendRelay> {
   return relayRingSpend({ params: input, strategy: sendStrategy(input, "ring") }, context);
 }
 
 export function prepareRingExitRelay<R extends RingRelayRail>(
   input: RingRelaySpendParams<RingExitTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedSpendRelay<R>> {
+): Promise<PreparedSpendRelay> {
   return relayRingSpend({ params: input, strategy: sendStrategy(input, "default") }, context);
 }
 
@@ -330,7 +325,7 @@ export function prepareRingEntryRelay(
 export function prepareRingWithdrawalRelay<R extends RingRelayRail>(
   input: RingRelaySpendParams<RingWithdrawalTransactionParams, R>,
   context?: RequestContext,
-): Promise<PreparedSpendRelay<R>> {
+): Promise<PreparedSpendRelay> {
   return relayRingSpend(
     {
       params: input,
@@ -695,7 +690,7 @@ async function relayRingSpend<S, R extends RingRelayRail>(
     strategy: RingSpendStrategy<S>;
   }>,
   context: RequestContext | undefined,
-): Promise<PreparedSpendRelay<R>> {
+): Promise<PreparedSpendRelay> {
   const { params, strategy } = input;
   const spend = relaySpend(params);
   const { anonymous } = params;
@@ -733,13 +728,13 @@ async function relayRingSpend<S, R extends RingRelayRail>(
         relay: await staged.rail
           .withInProofOwner(spend.signer)
           .prepareRelayApproved(params.client, relayInput, approval, context),
-      }) as PreparedSpendRelay<R>;
+      }) as PreparedSpendRelay;
     return (await anonymousTransfer(staged, anonymous).prepareRelayApproved(
       params.client,
       relayInput,
       approval,
       context,
-    )) as PreparedSpendRelay<R>;
+    )) as PreparedSpendRelay;
   } catch (cause) {
     if (retry.reservation !== undefined) params.wallet._releaseReservation(retry.reservation.id);
     throw wrapRingError(strategy.errorCode, cause);

@@ -1,5 +1,5 @@
 /** The rails of a ring transfer, Rust `RingTransfer<Owner>`, `<Anonymous>`, `<PublicOwners>` and `<Delegated>`. */
-import { getBase58Decoder, getBase64Decoder, type Signature } from "@solana/kit";
+import { getBase64Decoder } from "@solana/kit";
 
 import {
   encodeBase58,
@@ -52,7 +52,7 @@ import type {
   RelayQuote,
   TokenAccountSetup,
 } from "../../protocol/ring-rpc/ring-rpc-types.js";
-import { PreparedRelay } from "../../rpc/relay.js";
+import { UnsignedRelay } from "../../rpc/relay.js";
 
 import {
   anonymousExitTokenOwner,
@@ -72,7 +72,7 @@ import {
   type FrameExtensions,
 } from "../../protocol/transaction/transact.js";
 import { RingError } from "../../protocol/error.js";
-import { relayListSalts, type RingListSalt } from "../../proof/policy-proof.js";
+import { chargedOutflowsOf, relayListSalts, type RingListSalt } from "../../proof/policy-proof.js";
 import { ownerDataCounts, transferApprovalOf } from "../../proof/transfer-proof.js";
 import { isDefaultRingNote } from "../../proof/audit-proof.js";
 import { anonymousPartyIdentities } from "../../protocol/membership/parties.js";
@@ -100,7 +100,6 @@ import {
   type CoOwner,
 } from "./ring-spend.js";
 
-const base58 = getBase58Decoder();
 const base64 = getBase64Decoder();
 
 /** Notes SPP reads from a cache account instead of proving their inclusion, Rust `ReadCache`. */
@@ -235,12 +234,12 @@ export class CustomRingTransfer {
     return this.#prove(client, approval, context);
   }
 
-  /** Rust `prepare_relay`, the in-proof owner signs the message hash, the wallet reads no Merkle path and no record. */
+  /** Rust `prepare_relay`, the wallet reads no Merkle path and no record. */
   prepareRelay(
     client: Pick<RingProvingClient, "getAccount">,
     input: RingRelayInput,
     context?: RequestContext,
-  ): Promise<PreparedRelay> {
+  ): Promise<UnsignedRelay> {
     return this.#prepareRelay(client, input, undefined, context);
   }
 
@@ -250,7 +249,7 @@ export class CustomRingTransfer {
     input: RingRelayInput,
     approval: RingTransferApproval,
     context?: RequestContext,
-  ): Promise<PreparedRelay> {
+  ): Promise<UnsignedRelay> {
     return this.#prepareRelay(client, input, approval, context);
   }
 
@@ -259,7 +258,7 @@ export class CustomRingTransfer {
     input: RingRelayInput,
     approval: RingTransferApproval | undefined,
     context: RequestContext | undefined,
-  ): Promise<PreparedRelay> {
+  ): Promise<UnsignedRelay> {
     const { ringProgramId, keys } = this.#input;
     const signer = this.#inProofOwner;
     if (signer === undefined) throw new RingError("RING_IN_PROOF_OWNER_MISMATCH");
@@ -281,7 +280,6 @@ export class CustomRingTransfer {
       let payload: Uint8Array | undefined;
       try {
         const { proofInputs } = sealed;
-        const ownerSignature = await signer.sign(proofInputs.messageHash(), context);
         payload = encodeRelayProofInputs({
           rail: { kind: "confidential" },
           ringProgramId,
@@ -309,22 +307,23 @@ export class CustomRingTransfer {
           ownerSigners: staged.ownerSigners,
           setup: await tokenAccountCreates(input.tokenAccountSetup, staged.withdrawal),
         });
-        return new PreparedRelay(
-          {
+        return new UnsignedRelay({
+          signer,
+          messageHash: proofInputs.messageHash(),
+          request: {
             ring: ringProgramId,
             quote,
             ...(coSigners.length === 0 ? {} : { coSigners }),
             intent: {
               operation: "confidential",
               proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
-              ownerSignature: base58.decode(ownerSignature) as Signature,
               ...(input.tokenAccountSetup === undefined
                 ? {}
                 : { tokenAccountSetup: input.tokenAccountSetup }),
             },
           },
-          sealedExpectation(terms, approvalBlinder, sealed),
-        );
+          expected: sealedExpectation(terms, approvalBlinder, sealed),
+        });
       } finally {
         payload?.fill(0);
         sealed.sealed.ephemeralSecret.fill(0);
@@ -699,7 +698,6 @@ export class AnonymousTransfer {
       let payload: Uint8Array | undefined;
       try {
         const { proofInputs } = sealed;
-        const ownerSignature = await this.#signer.sign(proofInputs.messageHash(), context);
         const plan = staged.rail.delivery;
         if (plan.kind !== "anonymous") throw new RingError("RING_NOT_ANONYMOUS");
         payload = encodeRelayProofInputs({
@@ -734,22 +732,23 @@ export class AnonymousTransfer {
           setup: await tokenAccountCreates(input.tokenAccountSetup, staged.withdrawal),
         });
         return Object.freeze({
-          relay: new PreparedRelay(
-            {
+          relay: new UnsignedRelay({
+            signer: this.#signer,
+            messageHash: proofInputs.messageHash(),
+            request: {
               ring: ringProgramId,
               quote,
               ...(coSigners.length === 0 ? {} : { coSigners }),
               intent: {
                 operation: "anonymous",
                 proofInputs: base64.decode(payload) as RelayIntent["proofInputs"],
-                ownerSignature: base58.decode(ownerSignature) as Signature,
                 ...(input.tokenAccountSetup === undefined
                   ? {}
                   : { tokenAccountSetup: input.tokenAccountSetup }),
               },
             },
-            sealedExpectation(terms, approvalBlinder, sealed),
-          ),
+            expected: sealedExpectation(terms, approvalBlinder, sealed),
+          }),
         });
       } finally {
         payload?.fill(0);
@@ -1373,6 +1372,7 @@ function sealedExpectation(
   return Object.freeze({
     kind: "sealed",
     terms,
+    chargedOutflows: chargedOutflowsOf(sealed.proofInputs),
     ...(blinder === undefined
       ? {}
       : {
@@ -1501,7 +1501,7 @@ export interface RingRelayInput {
 }
 
 export interface PreparedRingRelay {
-  readonly relay: PreparedRelay;
+  readonly relay: UnsignedRelay;
 }
 
 /** A padding slot names no leaf. */

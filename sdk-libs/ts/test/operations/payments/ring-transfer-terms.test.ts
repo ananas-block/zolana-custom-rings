@@ -30,6 +30,7 @@ import { ringSpendTransfer } from "../../../src/operations/payments/ring-spend.j
 import {
   CustomRingTransfer,
   type AnonymousTransfer,
+  type PreparedRingRelay,
 } from "../../../src/operations/payments/transfer-rails.js";
 import { publishedOutputs } from "../../../src/operations/payments/output-rail.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
@@ -112,9 +113,11 @@ function messageOf(
   return new Uint8Array(messageBytes);
 }
 
-const pendingOf = async (
-  relay: Awaited<ReturnType<AnonymousTransfer["prepareRelay"]>>["relay"],
-) => {
+/** The owner signs once the charges were read. */
+const signed = async (prepared: Promise<PreparedRingRelay>): Promise<PreparedRelay> =>
+  (await prepared).relay.sign();
+
+const pendingOf = async (relay: PreparedRelay) => {
   const sent = await relay.send(relayClient(relay.relayId()));
   if (!(sent instanceof PendingRelaySignature)) throw new Error("the relay asks a signature");
   return sent;
@@ -206,11 +209,13 @@ async function paid(): Promise<Paid> {
     };
   };
   const { input, rail } = payTo(payee);
-  const { relay } = await rail.prepareRelay(fixture.client, {
-    quote: { feePayer: fixture.authority, validUntilSlot: 100n },
-    nullifierKey: sender.nullifierKey(),
-    notes: [noteOf(input, 0)],
-  });
+  const relay = await signed(
+    rail.prepareRelay(fixture.client, {
+      quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+      nullifierKey: sender.nullifierKey(),
+      notes: [noteOf(input, 0)],
+    }),
+  );
   const payeeAddress = payee.shieldedAddress().solanaAddress();
   const sealedTerms = (await pendingOf(relay)).transferTerms(payeeAddress);
   if (sealedTerms === undefined) throw new Error("the sealing wallet holds the payee's terms");
@@ -348,13 +353,15 @@ describe("relay transfer terms", () => {
     fixture.enroll(sender.shieldedAddress());
     fixture.enroll(payee.shieldedAddress());
     const input = noteInput(sender, 10n, fixture.ringProgramId);
-    const { relay } = await railOf(fixture, signing, [input])
-      .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null })
-      .prepareRelay(fixture.client, {
-        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
-        nullifierKey: sender.nullifierKey(),
-        notes: [noteOf(input, 0)],
-      });
+    const relay = await signed(
+      railOf(fixture, signing, [input])
+        .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null })
+        .prepareRelay(fixture.client, {
+          quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+          nullifierKey: sender.nullifierKey(),
+          notes: [noteOf(input, 0)],
+        }),
+    );
     const held = await pendingOf(relay);
     expect(held.transferTerms(coSigner)).toBeUndefined();
     expect(refusal(() => held.verify(coSigner))).toBe("Unrequested");
@@ -369,17 +376,19 @@ describe("relay transfer terms", () => {
     const payee = ShieldedKeypair.generate();
     for (const owner of [sender, idle, payee]) fixture.enroll(owner.shieldedAddress());
     const input = noteInput(sender, 10n, fixture.ringProgramId);
-    const { relay } = await railOf(fixture, signing, [input])
-      .withCoOwner({
-        owner: idle.shieldedAddress().solanaAddress(),
-        nullifierKey: idle.nullifierKey(),
-      })
-      .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null })
-      .prepareRelay(fixture.client, {
-        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
-        nullifierKey: sender.nullifierKey(),
-        notes: [noteOf(input, 0)],
-      });
+    const relay = await signed(
+      railOf(fixture, signing, [input])
+        .withCoOwner({
+          owner: idle.shieldedAddress().solanaAddress(),
+          nullifierKey: idle.nullifierKey(),
+        })
+        .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null })
+        .prepareRelay(fixture.client, {
+          quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+          nullifierKey: sender.nullifierKey(),
+          notes: [noteOf(input, 0)],
+        }),
+    );
     const { intent } = relay.request;
     if (intent.operation !== "anonymous") throw new Error("an anonymous relay");
     const decoded = await decodeRelayProofInputs(
@@ -429,15 +438,24 @@ describe("relay transfer terms", () => {
         .withCoOwner(coOwnerOf(spending));
       let relay;
       if (mode === "anonymous") {
-        ({ relay } = await confidential
-          .withAnonymousSigner(signingKeySpendSigner(signing))
-          .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null })
-          .prepareRelay(fixture.client, relayInput));
+        relay = await signed(
+          confidential
+            .withAnonymousSigner(signingKeySpendSigner(signing))
+            .withPayment({
+              to: addressOf(fixture, payee),
+              asset: SOL_MINT,
+              amount: 4n,
+              reply: null,
+            })
+            .prepareRelay(fixture.client, relayInput),
+        );
       } else {
         transfer.send(payee.shieldedAddress(), SOL_MINT, 4n);
-        relay = await confidential
-          .withInProofOwner(signingKeySpendSigner(signing))
-          .prepareRelay(fixture.client, relayInput);
+        relay = await (
+          await confidential
+            .withInProofOwner(signingKeySpendSigner(signing))
+            .prepareRelay(fixture.client, relayInput)
+        ).sign();
       }
       const { intent } = relay.request;
       if (intent.operation !== mode) throw new Error(`a ${mode} relay`);
@@ -464,11 +482,13 @@ describe("relay transfer terms", () => {
     const rail = railOf(fixture, signing, notes)
       .withCoOwner({ owner, nullifierKey: coOwner.nullifierKey() })
       .withPayment({ to: addressOf(fixture, payee), asset: SOL_MINT, amount: 4n, reply: null });
-    const { relay } = await rail.prepareRelay(fixture.client, {
-      quote: { feePayer: fixture.authority, validUntilSlot: 100n },
-      nullifierKey: sender.nullifierKey(),
-      notes: notes.map(noteOf),
-    });
+    const relay = await signed(
+      rail.prepareRelay(fixture.client, {
+        quote: { feePayer: fixture.authority, validUntilSlot: 100n },
+        nullifierKey: sender.nullifierKey(),
+        notes: notes.map(noteOf),
+      }),
+    );
     const terms = (await pendingOf(relay)).transferTerms(owner);
     if (terms === undefined) throw new Error("the sealing wallet holds the co-owner's terms");
     expect(terms.nullifiers).toEqual([notes[1]?.nullifier()]);

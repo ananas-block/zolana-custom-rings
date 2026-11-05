@@ -208,6 +208,8 @@ export const RING_ERROR_CODES = [
   "RING_VIEWING_KEY_UNVERIFIED",
   "RING_OWNER_GRANT_INVALID",
   "RING_RECOVERY_PROGRESS_MISMATCH",
+  "RING_RELAY_FAILED",
+  "RING_SUBMISSION_UNPROVED",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

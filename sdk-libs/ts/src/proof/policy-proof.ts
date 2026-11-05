@@ -1045,6 +1045,20 @@ export function approvalTotalsOf(proofInputs: SppProofInputs, outputSlots: numbe
   });
 }
 
+/** Rust `charged_outflows_of`, the rows the relay reads from the same inputs. */
+export function chargedOutflowsOf(proofInputs: SppProofInputs): readonly OwnerDebit[] {
+  const inputs = spentNotes(proofInputs);
+  const outputs = slotOutputs(proofInputs);
+  const publicGross = grossOf(publicSlots(proofInputs.externalData.interfaceTransfers));
+  return ownerDebits({
+    senders: inputs.map((note) => note.owner),
+    assets: [...outputs, ...inputs, ...publicGross].map((entry) => entry.asset),
+    inputs,
+    outputs,
+    publicGross,
+  });
+}
+
 function grossOf(slots: PublicSlots): readonly PublicGross[] {
   return slots.assets.flatMap((asset, slot) => {
     const gross = slots.gross[slot] ?? 0n;

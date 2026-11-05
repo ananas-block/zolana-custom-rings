@@ -305,6 +305,7 @@ export async function settleWithTransport(
   transport: RingSubmissionTransport,
 ) {
   const deadline = Date.now() + 180_000;
+  submission.prove();
   for (;;) {
     const result = await submission.send(transport);
     if (result.kind === "confirmed") return result;

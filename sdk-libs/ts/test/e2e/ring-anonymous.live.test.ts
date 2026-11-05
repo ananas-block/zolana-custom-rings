@@ -142,7 +142,10 @@ const relayed: Payment = async (ring, sender, to) => {
     ...request,
     anonymous: { ...anonymous, quote, nullifierKey: sender.keypair.nullifierKey() },
   });
-  return confirmedRelay(ring, submittedRelay(await prepared.relay.send(ring.ringRpc)));
+  return confirmedRelay(
+    ring,
+    submittedRelay(await (await prepared.relay.sign()).send(ring.ringRpc)),
+  );
 };
 
 /** The wallet proves the spend, the funder sends it. */

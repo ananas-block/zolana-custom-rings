@@ -127,6 +127,7 @@ async function fixture(
     build,
     reservation: { release, extend },
   });
+  submission.prove();
   const send = vi.fn(async (): Promise<RingSubmissionStatus | undefined> => undefined);
   const sign = vi.fn(async (transaction: RingSubmissionAttempt["transaction"]) =>
     signTransactionWithSigners([payer], transaction),
@@ -135,6 +136,23 @@ async function fixture(
 }
 
 describe("ring submission ownership", () => {
+  it("signs only an attempt its charged outflows were read from", async () => {
+    const f = await fixture();
+    const submission = new RingTransactionSubmission({ first: await f.build(), build: f.build });
+    const transport = {
+      sign: f.sign,
+      send: f.send,
+      status: async (): Promise<RingSubmissionStatus> => ({ kind: "confirmed", slot: 1n }),
+    };
+    await expect(submission.send(transport)).rejects.toMatchObject({
+      code: "RING_SUBMISSION_UNPROVED",
+    });
+    expect(f.sign).not.toHaveBeenCalled();
+    expect(submission.prove()).toEqual([]);
+    expect((await submission.send(transport)).kind).toBe("confirmed");
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a signer that returns a different message before broadcasting", async () => {
     const f = await fixture();
     const another = await f.build();
@@ -294,6 +312,7 @@ describe("ring submission ownership", () => {
         reservation: { release: f.release, extend: f.extend },
         registry,
       });
+      submission.prove();
       const result = await submission.send({
         sign: f.sign,
         send: f.send,
@@ -328,6 +347,7 @@ describe("ring submission ownership", () => {
         reservation: { release: f.release, extend: f.extend },
         registry,
       });
+      submission.prove();
       const result = await submission.send({
         sign: f.sign,
         send: f.send,
@@ -363,6 +383,7 @@ describe("ring submission ownership", () => {
         reservation: { release: f.release, extend: f.extend },
         registry,
       });
+      submission.prove();
       const transport = {
         sign: f.sign,
         send: f.send,
