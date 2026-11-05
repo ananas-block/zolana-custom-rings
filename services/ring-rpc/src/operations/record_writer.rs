@@ -49,9 +49,8 @@ use crate::{
     keyed_tasks::{KeyedTasks, MAX_CONCURRENT_KEYED_TASKS},
     landing::{Attempt, ChainOutcome, Landing},
     record_update::{
-        limits_within_bounds, ApplyInputsCheck, BatchPlan, CheckedUpdate, ListApproval,
-        QueuedCheck, QueuedState, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal,
-        UpdateContext,
+        limits_within_bounds, ApplyInputsCheck, CheckedUpdate, ListApproval, QueuedCheck,
+        QueuedState, QueuedUpdate, RecordUpdateCheck, RecordUpdateRefusal, UpdateContext,
     },
     storage_chain::StorageChain,
     update_queue::{
@@ -225,9 +224,7 @@ impl RecordWriter {
             });
         }
         // An expired pending update joins no approval.
-        queue
-            .expire_pending_approvals(request.registry.0, slot)
-            .await?;
+        queue.expire(request.registry.0, slot).await?;
         let approves = ListApproval {
             update: &update,
             pending: &queue
@@ -361,48 +358,50 @@ impl RecordWriter {
         if let Some(batch) = queue.open_batch(registry).await? {
             return self.settle(batch).await;
         }
-        // 2. Each live update is within its valid until slot, a joined pending update's own included, and its signer holds the role it signed as.
+        // 2. Expiry is one indexed update, an approval expires with the earliest update it joined.
         let slot = self.chain.slot().await?;
-        queue.expire_pending_approvals(registry, slot).await?;
-        let queued = queue.queued(registry).await?;
-        let mut policies = HashMap::new();
-        for update in &queued {
-            if let Entry::Vacant(ring) = policies.entry(update.ring) {
-                ring.insert(self.ring_policy(update.ring).await?);
-            }
-        }
-        let mut live = Vec::new();
-        let mut deferred = false;
-        for update in queued {
-            let check = QueuedCheck {
-                update: &update,
-                slot,
-                policy_authority: policies
-                    .get(&update.ring)
-                    .and_then(Option::as_ref)
-                    .map(|policy| policy.roles.policy),
+        queue.expire(registry, slot).await?;
+        // 3. One batch per flush, the next starts from the root the sent batch lands. A refused
+        //    update leaves the queue and the plan reads the heads again.
+        loop {
+            let Some(batch) = queue.plan(registry, slot).await? else {
+                return Ok(());
             };
-            match check.check() {
-                Ok(QueuedState::Live) => live.push(update),
-                Ok(QueuedState::Deferred) => deferred = true,
-                Err(refusal) => queue.refuse(&update.id, refusal).await?,
+            // 4. Only the planned updates read their ring's policy, each signer must still hold
+            //    the role it signed as. An unread ring account holds the registry.
+            let mut policies = HashMap::new();
+            let mut refused = false;
+            for update in &batch {
+                if let Entry::Vacant(ring) = policies.entry(update.ring) {
+                    ring.insert(self.ring_policy(update.ring).await?);
+                }
+                let check = QueuedCheck {
+                    update,
+                    slot,
+                    policy_authority: policies
+                        .get(&update.ring)
+                        .and_then(Option::as_ref)
+                        .map(|policy| policy.roles.policy),
+                };
+                match check.check() {
+                    Ok(QueuedState::Live) => {}
+                    Ok(QueuedState::Deferred) => return Ok(()),
+                    Err(refusal) => {
+                        queue.refuse(&update.id, refusal).await?;
+                        refused = true;
+                    }
+                }
+            }
+            if !refused {
+                return self.prove_and_send(registry, &batch).await;
             }
         }
-        // An unread ring account holds the whole registry, so each record keeps its write order.
-        if deferred {
-            return Ok(());
-        }
-        // 3. One batch per flush, the next starts from the root the sent batch lands.
-        let Some(plan) = (BatchPlan { queue: &live, slot }).decide()? else {
-            return Ok(());
-        };
-        self.prove_and_send(registry, plan.updates.as_slice()).await
     }
 
     async fn prove_and_send(
         &self,
         registry: Address,
-        batch: &[&QueuedUpdate],
+        batch: &[QueuedUpdate],
     ) -> Result<(), RingRpcError> {
         // 1. The proof starts at the registry's current root and covers the batch in order.
         let writes: Vec<_> = batch
