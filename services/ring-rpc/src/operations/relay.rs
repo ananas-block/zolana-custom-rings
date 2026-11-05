@@ -2,8 +2,7 @@ use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
-    compute_unit_limit, storage_instruction, tracking::TrackingAuthorization, InstructionTag,
-    FRAME_BUFFER_HEADER_LEN,
+    compute_unit_limit, tag, EnrollRequest, InstructionTag, FRAME_BUFFER_HEADER_LEN,
 };
 use custom_ring_sdk::{
     close_frame_buffer, BufferedFrame, FitError, FitSigners, FitTransport, RingError,
@@ -30,7 +29,7 @@ use spl_token_2022_interface::{
 use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::{Base64String, SerializablePubkey};
 use spr_instruction::instruction::CreateAssociatedTokenAccount;
-use spr_interface::{SPL_TOKEN_ACCOUNT_LEN, SPL_TOKEN_PROGRAM_ID};
+use spr_interface::{state::MAX_FEE_PER_NULLIFIER, SPL_TOKEN_ACCOUNT_LEN, SPL_TOKEN_PROGRAM_ID};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use zeroize::Zeroizing;
@@ -38,7 +37,7 @@ use zolana_ring_client::rpc::{
     GetRelayQuoteRequest, GetRelayStatusRequest, PrepareRelayRequest, RelayDepositInputs,
     RelayEnrollInputs, RelayId, RelayIntent, RelayMergeInputs, RelayProofInputs,
     RelayProofInputsError, RelayQuote, RelayRail, RelayStatus, RelayStep, SubmitRelayRequest,
-    TokenAccountSetupError, ENROLL_COMPUTE_UNITS,
+    TokenAccountSetupError,
 };
 use zolana_ring_policy::Member;
 
@@ -113,7 +112,7 @@ pub enum RelayError {
     TokenAccountSetup(#[from] TokenAccountSetupError),
     #[error("the depositor is the relay fee payer")]
     DepositorIsFeePayer,
-    #[error("the enrollment is no tag 6 of a ring's tracking registry under its own owner")]
+    #[error("the enrollment is no ring Enroll request the owner proved for itself")]
     InvalidEnrollment,
     #[error("the relay budget has no room for the request")]
     Budget,
@@ -133,6 +132,8 @@ pub enum RelayError {
         "the relay budget is unset, the operator funds no enrollment, buffer or token account"
     )]
     BudgetUnset,
+    #[error("an enrollment already reserves the owner's credential address")]
+    AlreadyEnrolled,
 }
 
 pub enum RelayPayload {
@@ -146,9 +147,6 @@ pub enum RelayPayload {
 #[async_trait]
 pub trait ServedRings: Send + Sync {
     async fn check(&self, ring: Address) -> Result<(), RingRpcError>;
-
-    /// The tracking registry the ring pins, the relay pays for no other enrollment.
-    async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError>;
 
     async fn delegate(&self, ring: Address) -> Result<Option<Address>, RingRpcError>;
 }
@@ -264,6 +262,7 @@ impl RelayError {
             Self::LiveAttempt => -32208,
             Self::DepositorSignature => -32209,
             Self::BudgetUnset => -32210,
+            Self::AlreadyEnrolled => -32211,
         }
     }
 
@@ -290,10 +289,6 @@ impl ServedRings for NoRings {
     }
 
     async fn check(&self, _ring: Address) -> Result<(), RingRpcError> {
-        Err(RelayError::RingNotServed.into())
-    }
-
-    async fn tracking_registry(&self, _ring: Address) -> Result<Address, RingRpcError> {
         Err(RelayError::RingNotServed.into())
     }
 }
@@ -365,13 +360,10 @@ impl Relay {
         let ring = request.ring.0;
         self.rings.check(ring).await?;
         let payload = RelayPayload::decode(&request.intent).map_err(RelayError::from)?;
-        if let RelayPayload::Enroll(enrollment) = &payload {
+        if let RelayPayload::Enroll(_) = &payload {
             // Every enrollment spends the operator's lamports, a disabled budget refuses before the
             // admission and the proof check.
             self.require_budget()?;
-            if enrollment.tracking_registry != self.rings.tracking_registry(ring).await? {
-                return Err(RelayError::InvalidEnrollment.into());
-            }
         }
         if let RelayPayload::Transfer(RelayProofInputs {
             rail: RelayRail::Delegate { delegate, .. },
@@ -418,7 +410,7 @@ impl Relay {
                 // The wallet proved its seal, the relay only pays.
                 (RelayPayload::Enroll(enrollment), None) => {
                     self.prover.check_enrollment(enrollment).await?;
-                    enrollment_step(enrollment, parties.fee_payer)
+                    enrollment_step(enrollment, parties.fee_payer)?
                 }
                 (_, None) => {
                     let _proof = self
@@ -675,13 +667,13 @@ impl Relay {
         } = proven;
         let mut proven = proven;
         // 1. Every lamport the message and its upload can cost is held before the first send. The rent
-        // of a missing setup account and of the account the message creates stays charged once it lands.
+        // of a missing setup account and an enrollment's forester fee stay charged once it lands.
         let MissingSetup {
             mut instructions,
             rent: setup_rent,
         } = self.missing_setup(&setup).await?;
-        let landing_rent = match self.created_rent(&payload).await? {
-            Some(created) => Some(setup_rent.saturating_add(created)),
+        let landing_rent = match landing_cost(&payload) {
+            Some(cost) => Some(setup_rent.saturating_add(cost)),
             None => (setup_rent > 0).then_some(setup_rent),
         };
         self.reserve_and_upload(RelaySpend {
@@ -932,30 +924,6 @@ impl Relay {
             rent = rent.saturating_add(self.chain.rent_exempt_lamports(data_len).await?);
         }
         Ok(MissingSetup { instructions, rent })
-    }
-
-    /// Every enrollment holds its fee, only a first enrollment reserves the tracking authorization rent.
-    /// No storage instruction closes the account, a rotation found enrolled lands with no create.
-    async fn created_rent(&self, payload: &RelayPayload) -> Result<Option<u64>, RingRpcError> {
-        let RelayPayload::Enroll(enrollment) = payload else {
-            return Ok(None);
-        };
-        let (authorization, _) =
-            TrackingAuthorization::find_address(&enrollment.tracking_registry, &enrollment.owner);
-        // The same read as the proof check, an account with no data still takes the create.
-        let enrolled = self
-            .chain
-            .account_data(authorization)
-            .await?
-            .is_some_and(|data| !data.is_empty());
-        Ok(Some(match enrolled {
-            true => 0,
-            false => {
-                self.chain
-                    .rent_exempt_lamports(TrackingAuthorization::SIZE)
-                    .await?
-            }
-        }))
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
@@ -2117,24 +2085,34 @@ impl StoredProof {
     }
 }
 
-/// The relay pays for no owner's account but the owner's own, and for no other storage instruction.
+/// The relay pays only a ring `Enroll` whose exact request parses, never one the payer owns.
 fn check_enrollment(enrollment: &RelayEnrollInputs, fee_payer: Address) -> Result<(), RelayError> {
-    let refused = enrollment.owner == fee_payer
-        || enrollment.instruction_data.first() != Some(&storage_instruction::tag::ENROLL)
-        || enrollment.instruction_data.len() > solana_message::v1::MAX_TRANSACTION_SIZE;
-    match refused {
-        true => Err(RelayError::InvalidEnrollment),
-        false => Ok(()),
+    let parsed = match enrollment.instruction_data.split_first() {
+        Some((&tag::ENROLL, request)) => EnrollRequest::parse(request).is_ok(),
+        _ => false,
+    };
+    match parsed && enrollment.owner != fee_payer {
+        true => Ok(()),
+        false => Err(RelayError::InvalidEnrollment),
     }
 }
 
-fn enrollment_step(enrollment: &RelayEnrollInputs, fee_payer: Address) -> ProvenRelay {
-    ProvenRelay {
-        instruction: enrollment.instruction(fee_payer),
-        budget: ComputeBudgetConfig::new(ENROLL_COMPUTE_UNITS),
+fn enrollment_step(
+    enrollment: &RelayEnrollInputs,
+    fee_payer: Address,
+) -> Result<ProvenRelay, RelayError> {
+    Ok(ProvenRelay {
+        instruction: enrollment.instruction(fee_payer)?,
+        budget: ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::Enroll)),
         co_signers: Vec::new(),
         signers: vec![enrollment.owner],
-    }
+    })
+}
+
+/// SPP charges the payer one tree 0 forester fee for the reserved address, the tree funds the
+/// nullifier PDA rent. The cap is the most a fee raise between quote and landing can charge.
+fn landing_cost(payload: &RelayPayload) -> Option<u64> {
+    matches!(payload, RelayPayload::Enroll(_)).then_some(MAX_FEE_PER_NULLIFIER)
 }
 
 fn refused_fit(error: FitError) -> RingRpcError {

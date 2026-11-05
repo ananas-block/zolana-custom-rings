@@ -391,7 +391,7 @@ impl Upload {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     Unknown,
     Confirmed {
         slot: u64,
@@ -762,7 +762,7 @@ impl RingOperation<'_> {
 }
 
 /// Past expiry only the ledger's absent answer releases the attempt and a failed lookup surfaces.
-async fn outcome(
+pub(crate) async fn outcome(
     client: &(impl AsyncRpc + ?Sized),
     signature: Signature,
     last_valid_block_height: u64,
@@ -822,7 +822,7 @@ async fn observe(
     Ok(decode_status(statuses))
 }
 
-fn transaction_error(error: ClientError) -> Option<TransactionError> {
+pub(crate) fn transaction_error(error: ClientError) -> Option<TransactionError> {
     match error {
         ClientError::SolanaRpcTransaction { source, .. } => source.get_transaction_error(),
         _ => None,

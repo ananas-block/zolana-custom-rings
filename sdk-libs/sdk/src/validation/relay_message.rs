@@ -7,7 +7,7 @@ use custom_ring_interface::{
     compute_unit_limit, frame_digest, funder_account_position, settle_buffered_data,
     stream::confidential_slot_tag, tag, AuditRecord, DepositPrefix, FrameBuffer, InstructionTag,
     ParsedTransact, RecordKind, RingMode, RingRail, RingTransactData,
-    RING_TRANSACT_RING_CONFIG_INDEX, STORAGE_PROGRAM_ID,
+    RING_TRANSACT_RING_CONFIG_INDEX,
 };
 use serde::{Deserialize, Serialize};
 use solana_address::Address;
@@ -25,7 +25,6 @@ use thiserror::Error;
 use zolana_ring_client::{
     rpc::{
         PrepareAuthorityTransferRequest, RelayEnrollInputs, RelayId, RelayQuote, TxViewingSecret,
-        ENROLL_COMPUTE_UNITS,
     },
     AuditEnvelope, OpenedAudit,
 };
@@ -534,18 +533,21 @@ impl ExpectedDeposit {
 }
 
 impl ExpectedEnroll {
-    /// A swapped registry or authorization reads the owner's key into another account.
+    /// A swapped output tree, credential PDA or nullifier PDA fails the proof the owner signed for.
     pub fn check(&self, message: &[u8]) -> Result<VerifiedMessage, MessageMismatch> {
         let envelope = Envelope {
             ring: CustomRing::new(self.inputs.ring_program_id),
-            program: STORAGE_PROGRAM_ID,
-            units: ENROLL_COMPUTE_UNITS,
+            program: self.inputs.ring_program_id,
+            units: compute_unit_limit(InstructionTag::Enroll),
             fee_payer: self.fee_payer,
             signer: self.inputs.owner,
             setup: Vec::new(),
         };
         let instruction = envelope.open(message)?;
-        let expected = self.inputs.instruction(self.fee_payer);
+        let expected = self
+            .inputs
+            .instruction(self.fee_payer)
+            .map_err(|_| MessageMismatch::Accounts)?;
         if instruction.accounts != expected.accounts {
             return Err(MessageMismatch::Accounts);
         }

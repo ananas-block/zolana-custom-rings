@@ -17,6 +17,8 @@ mod co_signer;
 mod delegate_source;
 #[path = "operations/deposit.rs"]
 mod deposit;
+#[path = "operations/enrollment.rs"]
+pub mod enrollment;
 mod error;
 #[path = "state/heap.rs"]
 mod heap;
@@ -99,7 +101,7 @@ pub use crate::{
         AuthorityRecordUpdate, MemberRecords, OwnerSaltCheck, RecordUpdateService,
         RecordUpdateTarget, SaltedOwnerCheck, WalletRecordUpdate,
     },
-    register_key::{Enroll, EnrollInstruction, EnrollRelay, WriteOwnerGrant},
+    register_key::{Enroll, EnrollInstruction, WriteOwnerGrant},
     relay::{PendingSignature, PreparedAuthorityTransfer, PreparedRelay, RelaySent, RingRelay},
     relay_message::{
         ApprovalLimit, ApprovalOpening, CoSignerApproval, CoSignerRule, ExactApproval, FundedLeg,

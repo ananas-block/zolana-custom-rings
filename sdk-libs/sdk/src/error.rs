@@ -317,6 +317,26 @@ pub enum RingError {
         signature: Signature,
         error: solana_transaction_error::TransactionError,
     },
+    #[error(transparent)]
+    CompressedAccount(#[from] spr_program::program::CompressedAccountError),
+    #[error("an enrollment holds the credential address of {owner}, a credential never changes")]
+    AlreadyEnrolled { owner: Address },
+    #[error("the proven SPP transaction differs from the one the ring program builds")]
+    EnrollmentMismatch,
+    #[error("the journal did not record the enrollment attempt, nothing was sent")]
+    AttemptNotRecorded(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("preflight refused the enrollment with {0}")]
+    EnrollmentRefused(solana_transaction_error::TransactionError),
+    #[error("the user record of {owner} holds another nullifier key, no enrollment can match it")]
+    UserRecordKeyMismatch { owner: Address },
+    #[error(transparent)]
+    UserRecord(#[from] zolana_ring_client::ViewingKeyError),
+    #[error("{owner} holds no user record, a relayed enrollment carries no REGISTER")]
+    RelayNeedsUserRecord { owner: Address },
+    #[error("the recorded enrollment attempt does not decode")]
+    AttemptUnreadable,
+    #[error("the enrollment attempt reconciles to {0:?}, only an expired attempt goes again")]
+    AttemptNotExpired(crate::enrollment::EnrollmentOutcome),
 }
 
 impl From<RingIndexerError> for RingError {
