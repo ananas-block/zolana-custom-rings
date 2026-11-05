@@ -142,7 +142,7 @@ export function ownerDataCounts(
   return counts;
 }
 
-/** The cached selector of the slots a rail marked. Reads alone, a cached write refuses at staging. */
+/** Reads alone, a cached write refuses at staging. */
 export function cacheAccessOf(proofInputs: SppProofInputs): CacheAccess | undefined {
   const readBitmap = proofInputs.inputUtxos.reduce(
     (bits, input) =>

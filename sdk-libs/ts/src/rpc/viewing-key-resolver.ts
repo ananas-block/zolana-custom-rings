@@ -28,7 +28,7 @@ export async function resolveViewingKey(
   input: Readonly<{
     client: ViewingKeyClient;
     owner: Address;
-    /** The enrolled credential's key, the record must hold the same one. */
+    /** The enrolled nullifier key, the record must hold the same one. */
     nullifierPublicKey?: Bytes32;
   }>,
   context?: RequestContext,

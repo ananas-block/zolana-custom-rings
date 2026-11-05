@@ -289,7 +289,7 @@ function applyRows(
     if (slot !== undefined && opening !== undefined)
       keepSourceNote(input, found, opening, slot.outputContext);
   }
-  // 3. A later batch never creates a note this one spends, the spent notes leave the state.
+  // 3. A later batch never creates a note an earlier batch spends, the spent notes leave the state.
   found.spend(history.flatMap(({ transaction }) => transaction.nullifiers));
   return found;
 }

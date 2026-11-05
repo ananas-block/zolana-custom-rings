@@ -1,4 +1,4 @@
-/** Each public signer's count of data-bearing outputs, mirror Rust `SignerDataCounts`. */
+/** Each public signer's count of data-bearing outputs, Rust `SignerDataCounts`. */
 import { equalBytes, isZero } from "@heliuslabs/zolana/internal";
 import type { Bytes32 } from "@heliuslabs/zolana/interface";
 
