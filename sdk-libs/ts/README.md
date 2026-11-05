@@ -74,9 +74,9 @@ Through the relay the wallet reads no Merkle path and no record.
 and `prepareRingWithdrawalRelay` take the quote of `RingRpc.getRelayQuote`,
 the nullifier key and the sender's signer, as `anonymous` on an anonymous Ring
 and as `confidential` on any other, and `relay.send` hands the spend to Ring
-RPC. `PreparedRingDeposit.prepareRelay` relays a deposit, whose message the
-depositor signs, and `prepareRingMergeRelay` relays a merge of the wallet's
-smallest notes. `RingRpc` reads
+RPC. `PreparedRingDeposit.prepareRelay` relays a deposit, whose request and
+message the depositor signs, and `prepareRingMergeRelay` relays a merge of the
+wallet's smallest notes under the owner's signed request. `RingRpc` reads
 decrypted Ring transactions for a granted reader.
 
 Without Ring RPC the `CustomRingClient` reads the records and Merkle paths

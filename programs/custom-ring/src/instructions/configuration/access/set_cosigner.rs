@@ -1,3 +1,15 @@
+//! Adds, moves and removes the co-signer records a ring's operations demand.
+//!
+//! SPP reads no co-signer. An optional class demands a signer only while a record covers it, so the
+//! ring's counts decide whether the class is on. An approval class stays demanded with no record, and a frame proving its bit then fails.
+//!
+//! The instructions guarantee:
+//!
+//! 1. Only the co-signer admin writes, and each write moves the counts with the record.
+//! 2. A record sits at its signer's canonical PDA, so one signer holds one record.
+//!
+//! Read after `instructions/transfer/accounts.rs`. Read before `program-libs/interface/src/instructions/cosign.rs`.
+
 use custom_ring_interface::{CoSigner, RingAccount, RingRole, SetCoSignerRecordIxData, CO_SIGNER};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;

@@ -119,7 +119,7 @@ pub struct RecordUpdateStatement {
     pub genesis_hash: [u8; 32],
     pub ring: Address,
     pub registry: Address,
-    /// The queue chain of the entries from zero.
+    /// The chain of the entries from zero.
     pub entries_hash: [u8; 32],
     pub valid_until_slot: u64,
     pub awaited_lists: u64,

@@ -1,3 +1,10 @@
+//! Builds the deposit statement from the entries SPP reads and verifies the ring proof over it.
+//!
+//! Each owner commitment and ciphertext comes out of SPP's own data, so the proof speaks of the notes
+//! SPP appends. The roots, the auditor key and the assets come from accounts, and the frame's key capacity selects only the width.
+//!
+//! Read after `instructions/settlement/forward.rs`. Read before `prover/circuits/deposit.go`.
+
 use custom_ring_interface::{
     key_catalog::RingCircuit, storage::Revision, tag, CustomRingError, CustomRingProof,
     DepositContext, DepositPrefix, DepositPublicInput, DepositRegistry, DepositedAsset,
@@ -45,7 +52,6 @@ pub(crate) struct DepositVerification<'a> {
     pub program_id: &'a Address,
     pub tree: &'a Address,
     pub auditor_pubkey: &'a [u8; TAGGED_X25519_KEY_LEN],
-    pub anonymous: bool,
     pub tracking_root: &'a [u8; 32],
     pub registry: Option<DepositRegistry<'a>>,
     pub assets: &'a [DepositedAsset],
@@ -56,7 +62,8 @@ pub(crate) struct DepositVerification<'a> {
 impl DepositVerification<'_> {
     #[inline(never)]
     pub fn verify(self) -> ProgramResult {
-        // One capsule per output at its own index, all under one ephemeral key.
+        // 1. One capsule per output at its own index, all under one ephemeral key. The circuit seals
+        // every record in the one stream that key opens.
         let invalid = CustomRingError::InvalidDepositDisclosure;
         let count = self.deposit.deposits.len();
         if !(1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).contains(&count) {
@@ -78,6 +85,8 @@ impl DepositVerification<'_> {
             owners[slot] = *entry.owner_utxo_hash;
             ciphertexts[slot] = *capsule.ciphertext;
         }
+        // 2. The context hash covers the SPP data and the asset cells bind each mint, the proof speaks of
+        // no other amount, asset or owner.
         let context_hash = DepositContext {
             program_id: self.program_id.as_array(),
             tree: self.tree.as_array(),
@@ -87,7 +96,6 @@ impl DepositVerification<'_> {
         .map_err(CustomRingError::from)?;
         let public_input = DepositPublicInput {
             context_hash: &context_hash,
-            anonymous: self.anonymous,
             owner_utxo_hashes: &owners[..count],
             ciphertexts: &ciphertexts[..count],
             assets: self.assets,
@@ -98,7 +106,7 @@ impl DepositVerification<'_> {
         }
         .hash()
         .map_err(CustomRingError::from)?;
-        // The auditor can recover the opening of each deposited owner commitment.
+        // 3. The auditor can recover the opening of each deposited owner commitment.
         RingProof {
             proof: &self.audited.proof,
             statement: public_input,

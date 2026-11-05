@@ -103,8 +103,6 @@ pub enum RingError {
     UnreferencedList(ListId),
     #[error("the shared sources name the list {0:?} twice")]
     DuplicateSharedSource(ListId),
-    #[error("curator registry {address} is not an initialized member registry")]
-    InvalidCuratorRegistry { address: Address },
     #[error("the write changes no list")]
     EmptyListWrite,
     #[error(transparent)]
@@ -225,8 +223,6 @@ pub enum RingError {
     OutflowOverflow,
     #[error("the payments' total overflows")]
     PaymentOverflow,
-    #[error("a public deposit of {asset:?} exceeds what leaves the sender")]
-    DepositAboveOutflow { asset: [u8; 32] },
     #[error("the compact transfer expands to external data the SPP proof does not bind")]
     ExternalDataMismatch,
     #[error("a ring merge of {width} slots is no width SPP keys")]
@@ -239,6 +235,8 @@ pub enum RingError {
     NotAnonymousRing,
     #[error("an anonymous ring spends only through the hidden owner's proof")]
     MissingAnonymousSigner,
+    #[error("a deposit leg of a relayed transfer names the relay's fee payer as its funder")]
+    RelayFeePayerFundsDeposit,
     #[error("a default-ring spend of {inputs} inputs fits no entry key, split the transfer")]
     DefaultRingSpendTooWide { inputs: usize },
     #[error("input {index} is a ring note beside the hidden owner's default-ring note, use the public-owner rail")]
@@ -290,8 +288,6 @@ pub enum RingError {
     InputTreeMismatch,
     #[error("the member's nullifier key does not derive its address")]
     NullifierKeyMismatch,
-    #[error("the enrollment key disagrees with the member's record, the first key is permanent")]
-    EnrollmentKeyMismatch,
     #[error("the member record is not included under the requested root")]
     InvalidRecordOpening,
     #[error("the ring key set has no verifying key for {0:?}")]

@@ -1,3 +1,5 @@
+// Refusals of the guard totals and the outflow quantities at the cap and one below, rows out of order, and the shared vector pinning them to Rust.
+
 package policy_test
 
 import (

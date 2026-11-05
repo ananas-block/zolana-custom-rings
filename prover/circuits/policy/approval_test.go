@@ -1,3 +1,5 @@
+// Refusals of the approval mask, a bit that follows the gross, thresholds off a policy, and a delegate that clears both bits.
+
 package policy_test
 
 import (

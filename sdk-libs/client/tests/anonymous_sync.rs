@@ -1386,6 +1386,7 @@ enum HolderCall {
     Decrypt,
     TagMatches,
     DeliverySecrets,
+    MergeSeeds,
 }
 
 /// A remote holder whose first call of one kind fails.
@@ -1439,6 +1440,9 @@ impl ShieldedKeys for FlakyHolder {
 
 impl MergeSeedHolder for FlakyHolder {
     fn merge_seeds(&self, requests: &[MergeSeedRequest]) -> Result<Vec<MergeSeed>, RingKeyError> {
+        if self.fails(HolderCall::MergeSeeds) {
+            return Err(RingKeyError::UnknownViewingKey);
+        }
         self.keys.merge_seeds(requests)
     }
 }
@@ -1855,7 +1859,7 @@ fn a_wallet_document_round_trips_and_refuses_an_unknown_field() {
     let wallet = AnonymousWallet::new(rotated);
     let json = wallet.to_json();
     assert_eq!(AnonymousWallet::from_json(&json).unwrap(), wallet);
-    let other = json.replacen('{', r#"{"version":6,"#, 1);
+    let other = json.replacen('{', r#"{"other":6,"#, 1);
     assert!(matches!(
         AnonymousWallet::from_json(&other),
         Err(AnonymousError::WalletDocument(_))
@@ -2055,6 +2059,18 @@ fn own_seed(wallet: &Wallet, viewing_pubkey: X25519Pubkey, first: [u8; 32]) -> M
         }])
         .unwrap()
         .remove(0)
+}
+
+#[tokio::test]
+async fn a_holder_failure_on_a_merge_seed_leaves_the_position_and_the_retry_finds_the_note() {
+    let indexer = Indexer::default();
+    let bob = Wallet::new(2);
+    let first = [0x11; 32];
+    let seed = own_seed(&bob, bob.keys.viewing_key.pubkey(), first);
+    let hash = publish_owner_merge(&indexer, &bob.address(), &seed, first);
+    let holder = FlakyHolder::new(2, HolderCall::MergeSeeds);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    a_failed_holder_moves_nothing(&indexer, &holder, &mut wallet, hash).await;
 }
 
 #[tokio::test]

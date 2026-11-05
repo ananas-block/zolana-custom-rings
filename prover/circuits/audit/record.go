@@ -1,4 +1,29 @@
-// A dummy's plaintext is all zero, the auditor skips it by one byte under a proof.
+// Encodes the plaintext the auditor reads, one record and one tail per output slot and the evidence
+// about spent inputs.
+//
+// SPP's output hash commits the owner key and the mint only as hashes, and no reader inverts a hash. A
+// record therefore carries the raw key and the raw mint with the proof holding each to its hash, so the
+// auditor names an owner and an asset with no directory. Its amount and nullifier key are the slot's
+// own wires. The record omits the blinding, since the sealed key derives it, and the tail holds the
+// two data hashes. The reader rebuilds the published hash from these fields and the frame's tree id,
+// so a record of another slot rebuilds nothing and the reader refuses it.
+//
+// A dummy's plaintext is all zero, the auditor knows it by one byte under a proof and rebuilds its
+// hash from the blinding and the frame's tree id. That byte is no prover choice. Kind derives from the
+// domain and ring id the slot's hash commits, a note called a dummy would need another hash. Exit
+// marks a note of the default ring, its recipient body is SPP's.
+//
+// The file proves the following.
+//  1. A live record's kind, amount, owner key, mint and nullifier key are the opened slot's, with the
+//     amount below 2^64 and the nullifier key the one canonical encoding.
+//  2. Every other record is all zero.
+//  3. A live tail holds the slot's data hash and ring data hash, a clear has_data holds both to zero.
+//  4. An opening record is a record followed by the secret that rebuilds its blinding.
+//  5. R is the count of spent notes, and a key with no entry capacity refuses a default-ring input.
+//  6. On an entry key each default-ring input opens in full, with its bit set, and every other entry is zero.
+//
+// Read after audit/audit.go, audit/layout.go, shared/utxo.go.
+// Read before audit/signer_data.go, transfer/transfer.go, deposit.go, merge.go.
 
 package audit
 
@@ -27,6 +52,14 @@ type OutputWires struct {
 	MintChunks [2]frontend.Variable
 }
 
+func (o OutputWires) record(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {
+	return RecordOpening{
+		Live: slot.Utxo, Kind: api.Add(api.Mul(slot.Ring, KindRing), api.Mul(slot.Exit, KindExit)),
+		Amount: slot.Amount, OwnerPkHash: slot.OwnerPkHash, NullifierPk: slot.NullifierPk, Asset: slot.Asset,
+		OwnerKey: o.OwnerKey, MintChunks: o.MintChunks,
+	}.Encode(api, rc)
+}
+
 // Live clear masks every byte but Kind, a dummy's Kind derives to zero.
 type RecordOpening struct {
 	Live, Kind, Amount, OwnerPkHash, NullifierPk, Asset frontend.Variable
@@ -40,22 +73,6 @@ func (r RecordOpening) Encode(api frontend.API, rc frontend.Rangechecker) []fron
 	// FieldToBytesBEWith holds the one be32 below q, UintBytesBE fails a live amount at or above 2^64.
 	nullifierPk := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(r.Live, r.NullifierPk))
 	return slices.Concat([]frontend.Variable{r.Kind}, ringgadget.UintBytesBE(api, api.Mul(r.Live, r.Amount), amountLen), raw.ownerKey, raw.mint, nullifierPk[:], shared.Zeros(RecordStride-RecordLen))
-}
-
-// OpeningRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
-const OpeningRecordLen = RecordStride + fieldLen
-
-// OpeningRecord is the one plaintext of a deposit slot and a merge output. No envelope key derives their blinding, so a record seals the secret that rebuilds it.
-type OpeningRecord struct {
-	RecordOpening
-	// Secret is the deposit's blinding or the merge's seed, a clear Live seals zero.
-	Secret frontend.Variable
-}
-
-// Encode mirrors OpeningRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
-func (o OpeningRecord) Encode(api frontend.API, rc frontend.Rangechecker) []frontend.Variable {
-	secret := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(o.Live, o.Secret))
-	return slices.Concat(o.RecordOpening.Encode(api, rc), secret[:])
 }
 
 // identityOpening is a slot's owner and asset beside the raw key and mint the auditor reads.
@@ -77,18 +94,26 @@ func (o identityOpening) open(api frontend.API) rawIdentity {
 	return rawIdentity{ownerKey: masked(api, o.Live, o.OwnerKey[:]), mint: masked(api, o.Live, mint)}
 }
 
-func (o OutputWires) record(api frontend.API, rc frontend.Rangechecker, slot shared.Output) []frontend.Variable {
-	return RecordOpening{
-		Live: slot.Utxo, Kind: api.Add(api.Mul(slot.Ring, KindRing), api.Mul(slot.Exit, KindExit)),
-		Amount: slot.Amount, OwnerPkHash: slot.OwnerPkHash, NullifierPk: slot.NullifierPk, Asset: slot.Asset,
-		OwnerKey: o.OwnerKey, MintChunks: o.MintChunks,
-	}.Encode(api, rc)
-}
-
 // assertMint holds a live asset to the raw mint the record carries, the auditor needs no mint registry.
 func assertMint(api frontend.API, live, asset frontend.Variable, chunks [2]frontend.Variable) []frontend.Variable {
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: live, A: asset, B: gadget.HashChain(api, chunks[:])})
 	return slices.Concat(ringgadget.UintBytesBE(api, chunks[0], 31), ringgadget.UintBytesBE(api, chunks[1], 1))
+}
+
+// OpeningRecordLen mirrors OPENING_RECORD_LEN in program-libs/interface/src/proof/audit_stream.rs.
+const OpeningRecordLen = RecordStride + fieldLen
+
+// OpeningRecord is the one plaintext of a deposit slot and a merge output. No envelope key derives their blinding, so a record seals the secret that rebuilds it.
+type OpeningRecord struct {
+	RecordOpening
+	// Secret is the deposit's blinding or the merge's seed, a clear Live seals zero.
+	Secret frontend.Variable
+}
+
+// Encode mirrors OpeningRecord::encode in program-libs/interface/src/proof/audit_stream.rs.
+func (o OpeningRecord) Encode(api frontend.API, rc frontend.Rangechecker) []frontend.Variable {
+	secret := ringgadget.FieldToBytesBEWith(api, rc, api.Mul(o.Live, o.Secret))
+	return slices.Concat(o.RecordOpening.Encode(api, rc), secret[:])
 }
 
 // assertNoData holds both data hashes to zero while has_data is clear, no tail would open them.
@@ -113,8 +138,9 @@ type EntryWires struct {
 // A ring input gets no record, the stream seals R alone. The auditor links a spent ring note by
 // recomputing its nullifier from the opening an earlier record gave and the owner's escrowed secret,
 // then matching SPP's published list. No constraint here binds a nullifier to a record, a note the
-// auditor never opened stays unlinked. A default-ring input has no earlier record, so an entry key's
-// evidence opens it in the same stream.
+// auditor never opened stays unlinked. R is what separates that unlinked spend from padding, SPP's
+// published nullifiers read alike and a position at or past R is a dummy or an address. A default-ring
+// input has no earlier record, so an entry key's evidence opens it in the same stream.
 type SpentInputs struct {
 	Slots []shared.Output
 	// The published n, R may sit below it.

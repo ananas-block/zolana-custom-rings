@@ -382,7 +382,7 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
   const { layout, auditor, transaction } = input;
   const unsealed = (reason: string): RingError =>
     new RingError("RING_AUDIT_UNSEALED", {
-      details: { reason, signature: transaction.txSignature },
+      details: { reason, transactionId: transaction.txSignature },
     });
   const txViewingPublicKey = transaction.txViewingPublicKey;
   if (txViewingPublicKey === undefined) throw unsealed("txViewingPk");
@@ -422,7 +422,7 @@ export function openRingTransfer(input: TransactionAuditInput): OpenedRingAudit 
     // The proof binds the envelope to the published key, a mismatch is a forged message.
     if (!txKey.publicKey().equals(txViewingPublicKey))
       throw new RingError("RING_AUDIT_KEY_MISMATCH", {
-        details: { signature: transaction.txSignature },
+        details: { transactionId: transaction.txSignature },
       });
     blindingSeed = ringBlindingSeed(envelope.txViewingSecret, salt);
     const seed = blindingSeed;

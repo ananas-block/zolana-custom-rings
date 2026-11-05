@@ -31,9 +31,9 @@ struct Application {
     name: String,
     /// `apply_records` or `authority_write_records`.
     instruction: String,
-    /// Queued by earlier instructions, in queue order.
+    /// Folded first, in chain order.
     pending: Vec<QueuedWrite>,
-    /// Queued by the instruction itself behind the pending writes.
+    /// Folded behind the pending writes.
     authority_writes: Vec<QueuedWrite>,
     old_root: String,
     new_root: String,
@@ -43,7 +43,7 @@ struct Application {
     chain_end: String,
     count: u64,
     statement_hash: String,
-    /// Proof inputs per write, queue order.
+    /// Proof inputs per write, chain order.
     writes: Vec<WriteInput>,
 }
 
@@ -368,8 +368,7 @@ fn compute_vectors() -> RecordVectors {
     .map(|member| registry.opening(member))
     .collect();
     RecordVectors {
-        description: "Record queue writes as the ring program receives them and the \
-                      applications that fold them into the 4-ary member record tree. A \
+        description: "Record writes and the applications that fold them into the 4-ary member record tree. A \
                       member write's member is owner_identity(signer), an entry \
                       hash is Poseidon(CRQW, member, mask, value, mint_policy_write, withdrawal_threshold, limits_0, limits_1, limits_2) and chain(p) = \
                       Poseidon(chain(p - 1), entry_p) from chain(-1) = 0. The writes of an \

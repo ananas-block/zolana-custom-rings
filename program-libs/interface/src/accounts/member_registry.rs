@@ -1,5 +1,13 @@
 //! Record tree constants and the record writes an apply proof chains, the tree
 //! lives in `zolana-ring-member-registry`.
+//!
+//! A record holds one member's list bits and, on an asset, its mint settings. A transfer proof opens
+//! a present member by its leaf and an absent member by the leaf bracketing it, so no prover can leave
+//! out the record that convicts its subject. The sentinel and the strict member range make that
+//! bracket exist for every member.
+//!
+//! Read after `docs/design/records-and-roots.md`. Read before `program-libs/interface/src/accounts/storage.rs`,
+//! `program-libs/member-registry/src/tree.rs`, `prover/circuits/registry/apply_records.go`.
 
 use spr_hasher::{
     primitives::{right_align, BN254_SCALAR_MODULUS_BE},
@@ -32,17 +40,19 @@ pub const MEMBER_REGISTRY_EMPTY_ROOT: [u8; 32] = [
 
 /// The sentinel `(0, q - 1)` brackets every member in `[1, q - 2]` strictly.
 pub fn check_member(member: &[u8; 32]) -> Result<(), CustomRingError> {
+    // Big endian bytes compare as the field values do.
     if *member == [0; 32] || *member >= FIELD_MAX {
         return Err(CustomRingError::MemberOutOfRange);
     }
     Ok(())
 }
 
-/// One queued masked write, `lists' = (lists & !mask) | value`.
+/// One masked write, `lists' = (lists & !mask) | value`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueEntry {
     pub member: [u8; 32],
     pub mask: u64,
+    /// `RecordWriteData::storage_entry` keeps it inside `mask`, the apply circuit takes it as given.
     pub value: u64,
     /// Only authority writes replace mint settings, list writes preserve them.
     pub mint_policy: Option<MintPolicy>,
@@ -68,6 +78,9 @@ impl QueueEntry {
     }
 
     /// Bit 192 distinguishes a replacement (including clearing) from no change.
+    ///
+    /// Byte 7 of the big endian field, above the three amounts `MintPolicy::field` packs. The apply
+    /// circuit decomposes the field into 193 bits and reads the flag at the top.
     pub fn mint_policy_field(&self) -> [u8; 32] {
         self.mint_policy.map_or([0; 32], |policy| {
             let mut field = policy.field();
@@ -77,7 +90,7 @@ impl QueueEntry {
     }
 }
 
-/// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain(-1) = 0`.
+/// `chain(p) = Poseidon(chain(p - 1), entry_p)` from `chain_start` of the registry and revision.
 pub fn queue_chain(previous: &[u8; 32], entry: &QueueEntry) -> Result<[u8; 32], HasherError> {
     Poseidon::hashv(&[previous, &entry.hash()?])
 }

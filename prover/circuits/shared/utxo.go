@@ -1,6 +1,17 @@
 // Rebuilds each note's commitment exactly as the shielded pool does. Ring
 // proofs tie to the pool's transfer through these commitments, so any
 // difference breaks the link.
+//
+// The file proves the following.
+//  1. Hash is SPP's commitment of the wires, a dummy's included.
+//  2. Utxo is set on SPP's note domain alone, its owner field is Poseidon(OwnerPkHash, NullifierPk).
+//  3. Ring and Exit split a note by its ring id, and SPP holds a nonzero ring id to the signing ring.
+//  4. A spent slot is one of a note, a dummy or an address, and a spent dummy carries nothing but its blinding.
+//
+// SPP holds a published output to a note or to a dummy with zero fields, so the file repeats no output
+// check. A proof that opens a slot SPP does not publish fails where its statement chains the hash.
+//
+// Read first. Read before audit/audit.go, audit/record.go, transfer/input.go.
 
 package shared
 

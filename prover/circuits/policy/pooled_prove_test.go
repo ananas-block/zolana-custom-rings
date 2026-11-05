@@ -1,3 +1,5 @@
+// One real Groth16 proof over a pooled policy.
+
 package policy_test
 
 import (

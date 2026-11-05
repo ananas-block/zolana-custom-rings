@@ -509,10 +509,17 @@ mod tests {
         }
     }
 
-    /// Answers as its keypair does, except a merge key derivation failing with the error a bad published value raises.
-    struct PoseidonFailingHolder(ShieldedKeypair);
+    #[derive(PartialEq)]
+    enum HolderFailure {
+        /// The error a bad published value raises.
+        MergeOutputKey,
+        MergeSeed,
+    }
 
-    impl ShieldedKeys for PoseidonFailingHolder {
+    /// Answers as its keypair does, except the call it fails.
+    struct FailingHolder(ShieldedKeypair, HolderFailure);
+
+    impl ShieldedKeys for FailingHolder {
         fn address(&self) -> Result<ShieldedAddress, TransactionError> {
             self.0.address()
         }
@@ -529,9 +536,10 @@ mod tests {
         }
 
         fn derive(&self, requests: &[DeriveRequest]) -> Result<Vec<[u8; 32]>, TransactionError> {
-            if requests
-                .iter()
-                .any(|request| matches!(request, DeriveRequest::MergeOutputKey { .. }))
+            if self.1 == HolderFailure::MergeOutputKey
+                && requests
+                    .iter()
+                    .any(|request| matches!(request, DeriveRequest::MergeOutputKey { .. }))
             {
                 return Err(TransactionError::Keypair(KeypairError::Poseidon(1)));
             }
@@ -546,16 +554,19 @@ mod tests {
         }
     }
 
-    impl MergeSeedHolder for PoseidonFailingHolder {
+    impl MergeSeedHolder for FailingHolder {
         fn merge_seeds(
             &self,
             requests: &[MergeSeedRequest],
         ) -> Result<Vec<MergeSeed>, RingKeyError> {
+            if self.1 == HolderFailure::MergeSeed {
+                return Err(RingKeyError::UnknownViewingKey);
+            }
             self.0.merge_seeds(requests)
         }
     }
 
-    impl RingKeys for PoseidonFailingHolder {
+    impl RingKeys for FailingHolder {
         fn ring_delivery_secrets(
             &self,
             requests: &[RingDeliveryRequest],
@@ -878,7 +889,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_poseidon_error_from_the_holder_fails_fetch_and_full_scan() {
-        let holder = PoseidonFailingHolder(wallet(7));
+        let holder = FailingHolder(wallet(7), HolderFailure::MergeOutputKey);
         let address = holder.address().unwrap();
         let blinding = [0x12; 32];
         let deposit = ring_row(deposit_under(&address, &address.nullifier_pubkey, blinding));
@@ -907,6 +918,19 @@ mod tests {
                 .unwrap()
         ));
         assert!(refused(scan.full_scan(&indexer, RING).await.err().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn a_merge_seed_failure_from_the_holder_fails_fetch_and_full_scan() {
+        let holder = FailingHolder(wallet(7), HolderFailure::MergeSeed);
+        let address = holder.address().unwrap();
+        let first = [0x14; 32];
+        let (_, row) = seeded_merge(&address, &own_seed(&holder.0, first), first);
+        let indexer = Rows::of(vec![row]);
+        let assets = assets();
+        let scan = RingConfidentialScan::new(&holder, &assets);
+        assert!(scan.fetch(&indexer, &[]).await.is_err());
+        assert!(scan.full_scan(&indexer, RING).await.is_err());
     }
 
     #[test]

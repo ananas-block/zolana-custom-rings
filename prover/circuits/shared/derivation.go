@@ -1,4 +1,10 @@
-// Each hash starts with its own tag, a value made for one purpose cannot pass as another.
+// Holds the hashes ring proofs, the programs and the SDKs compute alike. A value that differs here
+// reaches the chain as a statement no verifier accepts or a note no reader rebuilds.
+//
+// Each hash starts with its own tag, a value made for one purpose cannot pass as another. Ring tags
+// open with CR and no SPP tag does, a ring hash never answers an SPP derivation.
+//
+// Read first. Read before shared/disclosure.go, shared/envelope.go, audit/audit.go.
 
 // Package shared holds the ring derivations, the auditor envelope and the SPP openings two or more ring circuits share.
 package shared
@@ -98,7 +104,8 @@ func ListKey(api frontend.API, owner, listSalt frontend.Variable) frontend.Varia
 const AnonymousParties = 7
 
 // AssertAnonymousParties separates the hidden owner from the public identities
-// reconstructed by the verifier. Zero denotes an absent optional party.
+// reconstructed by the verifier. Zero denotes an absent optional party. An equal party
+// would name the owner the rail hides, SPP asserts the same against its signers.
 func AssertAnonymousParties(api frontend.API, owner frontend.Variable, parties []frontend.Variable) {
 	for _, party := range parties {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: party, V: api.IsZero(api.Sub(owner, party))})

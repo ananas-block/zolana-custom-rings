@@ -1,3 +1,14 @@
+// Defines how enrollments sit in a ring's tracking tree, apart from its policy
+// registry. SPP commits a note to any owner and nullifier key pair. A ring holds an
+// owner to the key it enrolled, the auditor holds the secret behind that key, and the
+// same leaf fixes the owner's list tag. Every circuit that reads an owner's enrolled
+// key opens one of these leaves under the tracking root. The tree stands apart because
+// a storage update names a revision, on one tree enrollment traffic would fail the
+// restrictive policy writes it raced.
+//
+// Read after registry/registry.go, registry/register_key.go. Read before
+// registry/apply_enrollments.go, policy/tracking.go, merge.go.
+
 package registry
 
 import (
@@ -8,6 +19,12 @@ import (
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
+
+// Properties:
+// 1. A leaf carries CRTK and one owner's nullifier key, ciphertext hash, view key, revision and list tag, its domain keeps it apart from a policy leaf.
+// 2. Resolve reads a present owner's own leaf or proves the owner absent by the one link it falls inside, the sort order registry/apply_enrollments.go keeps leaves no third case.
+// 3. An absent owner or an unset cond reads an all zero row.
+// 4. The leaf folds to root while cond is set, and one index below TrackingCapacity names it.
 
 // The tree shape mirrors TRACKING_QUAD_HEIGHT in program-libs/interface/src/accounts/tracking.rs.
 const (
@@ -66,6 +83,7 @@ type TrackingRow struct {
 // Resolve binds the opening to root while the boolean cond is set.
 func (o TrackingOpening) Resolve(api frontend.API, cond, root, member frontend.Variable) TrackingRow {
 	// 1. Present selects exactly one branch below and keeps the row whole or zero.
+	// The caller holds cond boolean, a fraction would scale the row and blend both branches.
 	api.AssertIsBoolean(o.Present)
 	present := api.Mul(cond, o.Present)
 	// 2. A present owner's leaf names it, an absent owner lies strictly inside the opened leaf's link.

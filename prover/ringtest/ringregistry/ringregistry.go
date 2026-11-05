@@ -109,29 +109,7 @@ type Opening struct {
 	Path    Path
 }
 
-// Wires zeroes the unused half.
-func (o Opening) Wires() registry.QuadOpening {
-	w := registry.QuadOpening{Present: 0, RecordBody: Record{}.BodyWires(), Low: Record{}.Wires(), Path: o.Path.Wires()}
-	if o.Present {
-		w.Present, w.RecordBody = 1, o.Record.BodyWires()
-		return w
-	}
-	w.Low = o.Record.Wires()
-	return w
-}
-
-// RecordWires expects a present member.
-func (o Opening) RecordWires() registry.QuadRecordOpening {
-	return registry.QuadRecordOpening{RecordBody: o.Record.BodyWires(), Path: o.Path.Wires()}
-}
-
-// UnreadRecordWires is the zero opening a proof assigns where it reads no record.
-func UnreadRecordWires() registry.QuadRecordOpening {
-	zero := big.NewInt(0)
-	return Opening{Record: Record{Next: zero, Lists: zero}, Path: zeroPath()}.RecordWires()
-}
-
-// Value lies inside Mask, as the program queues an entry.
+// Value lies inside Mask, as the program requires of an entry.
 type Entry struct {
 	Member, Mask, Value, MintPolicy, WithdrawalThreshold *big.Int
 	AssetLimits                                          Limits
@@ -186,9 +164,9 @@ func (r *Registry) Opening(member *big.Int) Opening {
 // Apply mirrors the apply circuit and returns the write's witness.
 func (r *Registry) Apply(t testing.TB, e Entry) Write {
 	t.Helper()
-	// The program queues only members in [1, q-2] and values inside their mask.
+	// The program takes only members in [1, q-2] and values inside their mask.
 	if e.Member.Sign() <= 0 || e.Member.Cmp(fieldMax) >= 0 || new(big.Int).AndNot(e.Value, e.Mask).Sign() != 0 {
-		t.Fatalf("ringregistry: the program never queues %+v", e)
+		t.Fatalf("ringregistry: the program refuses %+v", e)
 	}
 	zero := big.NewInt(0)
 	index, present := r.find(e.Member)

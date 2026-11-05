@@ -341,6 +341,13 @@ mod tests {
 
     #[async_trait]
     impl RelayProver for SealingProver {
+        async fn check_enrollment(
+            &self,
+            _enrollment: &zolana_ring_client::rpc::RelayEnrollInputs,
+        ) -> Result<(), RingRpcError> {
+            Err(RingRpcError::StateUnavailable)
+        }
+
         async fn prove(&self, request: RelayProofRequest<'_>) -> Result<ProvenRelay, RingRpcError> {
             let RelayPayload::Transfer(proof_inputs) = request.payload else {
                 panic!("an authority transfer proves a transfer");

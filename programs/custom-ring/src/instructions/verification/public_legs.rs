@@ -1,3 +1,9 @@
+//! Folds the public legs into the statement's public slots, the fold SPP's `assign_public_amounts_and_assets` runs.
+//!
+//! Both proofs must read the same slots, another order or mint would leave them speaking of different assets.
+//!
+//! Read after `instructions/transfer/accounts.rs`. Read before `instructions/transfer/verify.rs`.
+
 use custom_ring_interface::CustomRingError;
 use custom_ring_interface::{settlement_mints, PublicLeg, PublicSlots};
 use pinocchio::AccountView;

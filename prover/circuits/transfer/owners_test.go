@@ -1,3 +1,5 @@
+// Refusals of the owner predicates, a key off the enrolled row and a zero key for an enrolled owner.
+
 package transfer_test
 
 import (

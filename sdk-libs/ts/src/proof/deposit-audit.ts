@@ -206,8 +206,6 @@ export interface DepositRegistry {
 /** Rust `DepositPublicInput`, the tagged keys as the statement packs them. */
 export interface DepositStatement {
   readonly contextHash: Bytes32;
-  /** Set by the program from the ring's mode. */
-  readonly anonymous: boolean;
   readonly ownerUtxoHashes: readonly Bytes32[];
   readonly ciphertexts: readonly Uint8Array[];
   readonly assets: readonly DepositedAsset[];
@@ -232,7 +230,6 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
   if (
     !isCanonicalField(input.contextHash) ||
     !isCanonicalField(input.trackingRoot) ||
-    typeof input.anonymous !== "boolean" ||
     !input.ownerUtxoHashes.every(isCanonicalField) ||
     !input.assets.every(
       ({ asset, amount }) => isCanonicalField(asset) && amount >= 0n && amount <= U64_MAX,
@@ -244,7 +241,6 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     domainField(RingDomain.depositStatement),
     input.contextHash,
     bigIntBytes(BigInt(count)) as Bytes32,
-    bigIntBytes(input.anonymous ? 1n : 0n) as Bytes32,
     ...Array.from({ length: RING_DEPOSIT_AUDIT_SLOTS }, (_, slot) => {
       const owner = input.ownerUtxoHashes[slot];
       const ciphertext = input.ciphertexts[slot];
@@ -271,7 +267,6 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
 export function ringDepositPublicInputHash(
   input: Readonly<{
     contextHash: Bytes32;
-    anonymous: boolean;
     ownerCommitments: readonly Bytes32[];
     capsules: readonly RingDepositCapsule[];
     assets: readonly DepositedAsset[];
@@ -295,7 +290,6 @@ export function ringDepositPublicInputHash(
   return hashChain4(
     depositStatementElements({
       contextHash: input.contextHash,
-      anonymous: input.anonymous,
       ownerUtxoHashes: input.ownerCommitments,
       ciphertexts: input.capsules.map((capsule) => capsule.ciphertext),
       assets: input.assets,

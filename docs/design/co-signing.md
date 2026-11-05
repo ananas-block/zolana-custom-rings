@@ -1,50 +1,66 @@
 # Co-signing and limits
 
-A ring bounds what moves with three mechanisms: co-signer approval in the ring program, outflow limits in the transfer proof, and window limits in Ring RPC. [Spec](../spec.md)
+A ring bounds what moves in three places. The ring program checks co-signer approval, the transfer proof enforces caps and sets approval bits, and Ring RPC enforces window limits. [Spec](../spec.md)
 
 ## Who must co-sign
 
-- An operation demands each of its classes that some co-signer account covers.
-- The transfers class covers every transfer, delegate move and merge. The deposits class covers a deposit and a transfer with a deposit leg. The withdrawals class covers a transfer with a withdrawal leg.
-- The frame's exempt flag waives the withdrawals class. The program folds the legs into each public slot's gross withdrawal. The transfer proof then holds that gross at or below the asset record's withdrawal threshold. A mint without a record admits no exempt withdrawal.
-- One co-signer whose scope covers every demanded class signs. A transfer that only crosses a co-sign bound takes any co-signer. With no co-signer account, that transfer fails.
-- The co-signer differs from every owner signer, the in-proof owner, the hidden owner and the delegate. A public co-owner signs as an owner and counts as an owner signer.
-- Ring RPC co-signs only with its own key. Where the demanded co-signer is an outside key, a wallet sends its transfer, deposit or merge itself, and a managed merge cannot run.
+- A `CoSigner` record contains a signer and a scope over five classes. `TRANSFERS`, `DEPOSITS` and `WITHDRAWALS` are optional, and `APPROVE_OUTFLOW` and `APPROVE_WITHDRAWAL` are approvals.
+- An operation demands a class from what it does. A note spend demands `TRANSFERS`, a deposit leg demands `DEPOSITS` and a withdrawal leg demands `WITHDRAWALS`.
+- A frame with `no_spend` demands no `TRANSFERS`. A merge and a delegate transfer demand nothing.
+- An optional class with no configured record demands nothing, so a ring with no co-signers settles those operations with none.
+- An approval class stays demanded with or without a record. A proven bit with no signer of that scope is refused.
+- Each signer must cover a class the earlier signers left. An unrelated record covers nothing and is refused.
+- One record may cover several classes, and separate signers may cover separate classes.
+- A co-signer differs from every owner in the run and from the in-proof owner. The party check refuses a hidden owner as its own approver.
+- Ring RPC co-signs only with its own key and only for classes its `approve` set names. An empty set refuses every operation but a delegate frame.
 
-## Outflow limits, in the transfer proof
+## Limits in the transfer proof
 
-- One owner's debit of an asset is what its spent notes held of the asset, less what ring outputs return to it. A debit never falls below zero.
-- An exit counts as leaving, whoever receives it. A credit never moves between owners.
-- One owner's notes add up across nullifier keys, because the debit keys on owner identity.
-- Each debit stays at or below the asset's cap. A zero cap or co-sign bound turns that check off.
-- A debit above the asset's co-sign bound sets the approval bit, and the program then demands a co-signer.
-- A key screens a fixed number of owners under a policy, and a transfer with more distinct owners is refused.
-- A transfer spending notes of two owners cannot carry a positive public net of an asset either owner spends. An unrelated asset stays allowed.
+The limits bind on every ring with its own registry, with or without a policy hash, except on the delegate rail.
+
+- `debit` is the amount of an asset in an owner's inputs, less what same-ring outputs return to that owner. It never falls below zero.
+- `kept` is the rest of the owner's input amount. An owner's notes add up across nullifier keys, because rows key on owner identity.
+- `leaving` is the exits of the asset plus its statement-bound gross withdrawal. An exit counts whoever receives it.
+- `displaced` is what leaves beyond the debits, capped at the rows' input amount. It arises only when a deposit funds a same-owner return.
+- `charge` splits `displaced` over the kept funds by running floors over the ascending rows. It conserves amounts, and no prover input selects a share.
+- `outflow` is `debit` plus `charge`. The peak outflow of each asset stays at or below its `cap`, and a zero cap turns the check off.
+- A peak above `cosign_above` sets the `OUTFLOW` bit. A gross withdrawal above `withdrawal_threshold` sets the `WITHDRAWAL` bit, with no deposit subtracted.
+- A zero threshold and an asset with no record set no threshold in the proof.
+- The program demands the approval class of each proven bit, and refuses a bit on the delegate rail.
+
+As an example, S spends 1000, deposits 1000, returns 1000 to S and exits 1000 to X. S has a zero debit and a charge of 1000, so a cap of 100 refuses the transfer.
+
+## Exact approval totals
+
+- A co-signer that needs exact amounts opens one digest off chain. The digest covers each output and public asset's identifier, peak outflow and total outflow, and each public asset's gross.
+- The proof binds the digest over the values the outflow section computes, under a fresh blinder independent of the transaction key.
+- A frame carries the digest only under exact approval, and a zero digest discloses nothing. Every key carries the digest constraints.
+- The opening names no sender. Exact amounts and asset combinations can still identify a sender through outside information.
 
 ## Window limits, in Ring RPC
 
 - Each asset's record holds a sender cap, a volume cap, a deposit cap and a withdrawal cap, each with its own window in slots. A zero cap is no cap.
-- The sender cap counts one owner's debit. The volume cap counts what the ring transfers, deposits and withdraws.
+- The sender cap counts one owner's outflow. The volume cap counts what the ring moves.
 - Ring RPC checks them when it decides whether to co-sign, and the program checks only the co-signature.
-- Ring RPC derives a transfer's debits from the frame it signs, with the auditor key. An input it cannot name refuses with `LimitsUnavailable`, and the wallet retries after ingestion. A ring whose auditor key it does not hold refuses the limited co-signer.
-- A message co-signed from its frame holds one ring transfer, and a second relevant instruction refuses. The check covers the complete account list, and a message with lookup table accounts refuses.
-- `owner_debits` in `program-libs/policy/src/debit.rs` is the Rust computation, and the TypeScript SDK and the circuit mirror it. Reservations key on ring, owner and asset. One message signature holds one row per nonzero debit or public leg, each owner and asset once.
-- Ring RPC reserves flows when it co-signs and fails closed, see [Flow 9](../spec.md#9-co-signer-limits-configuration). A deposit or a delegate move reserves only once its other signers sign, so an unsigned relay holds no allowance. Ring RPC's store serializes admission, so no allowance is granted twice.
+- Ring RPC derives each row from the frame it signs. It refuses an input it cannot name with `LimitsUnavailable`, and it refuses an asset without a record.
+- A co-signed message contains one ring instruction, and Ring RPC refuses a second relevant instruction. It also refuses a message that is not version 1.
+- `owner_debits` in `program-libs/policy/src/quantities.rs` is the Rust computation. A shared vector pins it to the circuit.
+- The window read and the reservation commit in one database transaction, so no allowance is granted twice.
+- A delegate frame reads no limit and reserves nothing.
 
 ## What passes them
 
 - Window limits apply only to operations that demand a co-signer and that Ring RPC co-signs.
-- The limits bind every operation of a class, such as transfers, only when Ring RPC is the one co-signer that covers that class.
-- With no co-signer for its classes, a transfer below the co-sign bound never counts.
+- The limits bind every operation of a class only when Ring RPC is the one co-signer that covers that class.
 - A co-signer key outside Ring RPC whose scope covers the demanded classes signs with no window limit.
 - Each signing key is its own sender, so one person with many keys passes a sender cap once per key.
-- Outflow limits and amount guards sum one transfer. A payment split across transfers passes each part.
-- A deposit leg can fund what returns to an owner, so it lowers that owner's debit. The debit stops at zero.
-- The delegate rail runs no debit check.
+- Outflow caps and amount guards sum one transfer. A payment split across transfers passes each part.
+- A deposit-funded payment to another ring owner, where nothing leaves, keeps `outflow` at `debit`.
+- The delegate rail runs no cap, no amount guard and no approval.
 
 ## Real-world controls
 
-- A cap per transfer and asset holds.
-- Dual control above an amount holds on owner transfers, and the transfer publishes the approval bit. A delegate move sets no approval bit.
-- A cap per customer per window holds only on co-signed operations.
-- A cap per person across keys does not hold.
+- A cap per transfer and asset applies on every rail but the delegate's.
+- Dual control above an amount applies on owner transfers, and the transfer publishes the approval bits.
+- A cap per customer per window applies only on operations Ring RPC co-signs.
+- A cap per person across keys does not apply.

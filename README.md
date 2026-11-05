@@ -26,7 +26,7 @@ A ring may enforce a policy over member records or only require an audit proof.
 The owner rail uses the note owner's signature, the anonymous rail proves the
 owner's signature without publishing the owner, and the delegate rail lets an
 authorized delegate move a member's notes. See the [spec](docs/spec.md),
-[owner rails](docs/design/owner-rails.md) and [audit and key escrow](docs/design/audit-and-escrow.md).
+[owner rails](docs/design/owner-rails.md) and [audit and recovery](docs/design/audit-and-recovery.md).
 
 ## Roles
 

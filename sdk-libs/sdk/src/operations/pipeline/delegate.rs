@@ -501,8 +501,10 @@ impl Delegated<'_> {
         };
         let delivery = match ring_rail.anonymous_frame() {
             true => RingDelivery::Anonymous(Box::new(
+                // An output back to the source reads as change and takes no payment slot.
                 self.outputs
                     .iter()
+                    .filter(|output| output.recipient != self.source)
                     .fold(AnonymousPlan::new(), |plan, output| {
                         plan.with_payment(output.recipient.viewing_pubkey)
                     }),

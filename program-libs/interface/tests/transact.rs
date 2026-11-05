@@ -584,12 +584,19 @@ fn counts_outside_the_keyed_shapes_are_refused() {
         RingTransactData::parse(&excess, RingRail::Confidential),
         Err(CustomRingError::RingTransactLength)
     );
-    let mut wide = fixture.anonymous().encode().unwrap();
-    wide[1] = shape_index(8, 16) | (wide[1] & !0b0011_1111);
-    wide[2] = wide[2] & !0b0011_1111 | 6;
-    wide[OUTPUT_COUNT_BYTE] |= output_flag::WIDE_OWNERS;
+    let mut narrow = fixture.anonymous().encode().unwrap();
+    narrow[1] = shape_index(8, 16) | (narrow[1] & !0b0011_1111);
+    narrow[2] = narrow[2] & !0b0011_1111 | 6;
     assert_eq!(
-        RingTransactData::parse(&wide, RingRail::Anonymous),
+        RingTransactData::parse(&narrow, RingRail::Anonymous),
+        Err(CustomRingError::RingShapeUnkeyed)
+    );
+    let mut wide_entry = fixture.anonymous_entry().encode().unwrap();
+    wide_entry[1] = shape_index(32, 2) | (wide_entry[1] & !0b0011_1111);
+    wide_entry[2] = wide_entry[2] & !0b0011_1111 | 25;
+    wide_entry[OUTPUT_COUNT_BYTE] |= output_flag::WIDE_OWNERS;
+    assert_eq!(
+        RingTransactData::parse(&wide_entry, RingRail::Anonymous),
         Err(CustomRingError::RingShapeUnkeyed)
     );
 }

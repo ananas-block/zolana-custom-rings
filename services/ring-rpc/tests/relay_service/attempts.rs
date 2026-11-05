@@ -1,6 +1,7 @@
 //! One signed request, one row, every message of it charged until settlement or proven expiry.
 
 use custom_ring_interface::tag::{CLOSE_FRAME_BUFFER, TRANSFER};
+use jsonrpsee::types::ErrorCode;
 use zolana_ring_rpc::ChainOutcome;
 
 use super::*;
@@ -96,6 +97,30 @@ async fn a_fresh_quote_while_the_old_message_can_land_refuses_and_the_old_stays_
     fixture.relay.sweep_abandoned().await.expect("sweep");
     assert_eq!(fixture.outstanding().await, 0);
     assert_eq!(fixture.committed().await, ENROLLMENT_LAMPORTS as i64);
+}
+
+#[tokio::test]
+async fn a_fresh_quote_while_a_sent_message_can_land_refuses_and_sends_nothing() {
+    let fixture = Fixture::new().await;
+    let quote = fixture.quote(RelayOperation::Anonymous).await;
+    let inputs = proof_inputs(RING, anonymous_rail());
+    pending_answer(&fixture, Some(None));
+    let step = fixture
+        .prepare(&signed_request(quote.clone(), &inputs))
+        .await
+        .expect("the first relay");
+    assert!(matches!(step, RelayStep::Submitted { .. }), "{step:?}");
+
+    let retried = fixture
+        .prepare(&signed_request(fresh(&quote), &inputs))
+        .await;
+
+    assert!(
+        refused_with(&retried, RelayError::LiveAttempt),
+        "{retried:?}"
+    );
+    assert_eq!(fixture.sent().len(), 1);
+    assert_eq!(fixture.prover.requests.lock().expect("requests").len(), 1);
 }
 
 #[tokio::test]
@@ -209,7 +234,14 @@ async fn a_crash_with_a_pending_write_blocks_cleanup_and_the_retry_until_the_cha
     let charged = fixture.outstanding().await;
 
     let retried = fixture.prepare(&request).await;
-    assert!(retried.is_err(), "the write can still land");
+    assert!(
+        matches!(
+            &retried,
+            Err(jsonrpsee::MethodsError::JsonRpc(object))
+                if object.code() == ErrorCode::ServerIsBusy.code()
+        ),
+        "the write can still land, got {retried:?}"
+    );
     assert_eq!(fixture.sent().len(), 1);
 
     past_window(&fixture);
@@ -299,6 +331,45 @@ async fn a_failed_close_stays_held_and_a_later_sweep_retries_it() {
     fixture.relay.sweep_abandoned().await.expect("sweep");
     assert_eq!(fixture.outstanding().await, 0);
     assert_eq!(fixture.committed().await, 3 * 5_000);
+}
+
+#[tokio::test]
+async fn a_close_waiting_on_finality_stops_no_other_relay() {
+    let fixture = Fixture::with_budget(FRAME_BUDGET).await;
+    let quote = fixture.quote(RelayOperation::Anonymous).await;
+    let wide = wide_request(&fixture, quote.clone());
+    fixture.chain.refuse_at.store(1, Ordering::Relaxed);
+    assert!(fixture.prepare(&wide).await.is_err());
+    let keys = fixture.sent()[0].message.static_account_keys().to_vec();
+    fixture
+        .chain
+        .accounts
+        .lock()
+        .expect("accounts")
+        .extend(keys);
+    let mut inputs = proof_inputs(RING, anonymous_rail());
+    inputs.blinding_seed = [29; 32];
+    let other = signed_request(quote, &inputs);
+    let relay_id = other.relay_id().expect("relay id");
+    fixture.prepare(&other).await.expect("the other relay");
+    let before_close = fixture.sent().len();
+
+    pending_answer(&fixture, Some(None));
+    past_window(&fixture);
+    let relay = fixture.relay.clone();
+    let sweep = tokio::spawn(async move { relay.sweep_abandoned().await });
+    while fixture.sent().len() == before_close {
+        tokio::task::yield_now().await;
+    }
+
+    let status = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fixture.call::<RelayStatus>(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id }),
+    )
+    .await
+    .expect("the close holds no lock over other relays");
+    assert!(matches!(status, RelayStatus::Sent { .. }), "{status:?}");
+    sweep.abort();
 }
 
 /// The failure and its fee commit once, a repeated status read charges nothing more.

@@ -108,7 +108,7 @@ describe("audited merge records", () => {
   it.each<readonly [string, Wire, string]>([
     ["a blinding", { ...opened, blinding: base58Of(3) }, "result.value.opened[0].shape"],
     ["a mint off its asset", { ...opened, mint: addressOf(8) }, "result.value.opened[0].mint"],
-    ["a retired input list", { ...opened, inputCommitments: [] }, "result.value.opened[0].shape"],
+    ["an input list", { ...opened, inputCommitments: [] }, "result.value.opened[0].shape"],
   ])("refuses a record with %s", async (_name, record, path) => {
     await expect(merges([record])).rejects.toMatchObject({ details: { path } });
   });

@@ -415,7 +415,7 @@ describe("atomic progress", () => {
     const wallet = anonymousWallet(bob, bob.fresh());
     const text = wallet.toJson();
     expect(() =>
-      AnonymousWallet.fromJson(text.replace('"history"', '"version":2,"history"')),
+      AnonymousWallet.fromJson(text.replace('"history"', '"other":2,"history"')),
     ).toThrow("RING_WALLET_DOCUMENT");
     expect(() =>
       AnonymousWallet.fromJson(text.replace('"claims":[]', '"claims":[{"utxoHash":"zz"}]')),

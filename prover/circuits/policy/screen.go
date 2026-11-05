@@ -1,3 +1,18 @@
+// The entry point of the policy, one Screen call runs every section once over the slots transfer opened.
+//
+// A ring statement carries a proven approval mask and an optional digest of the totals. SPP has neither.
+// The program demands a co-signer per mask bit and derives no threshold itself, so a wrong mask would
+// silently drop an approval.
+//
+// Read after policy/policy.go, transfer/owners.go. Read before policy/withdrawals.go, policy/table.go,
+// policy/subjects.go, policy/rules.go, policy/outflow.go.
+//
+// Properties:
+// 1. Withdrawal legs join the payments only once WithdrawalHash binds them.
+// 2. The rule sections run over one payment list, a deposit shares them and reads no row or input.
+// 3. The rows ascend strictly with zero rows last, off the authority rail.
+// 4. A nonzero approval totals digest opens to the outflow section's values, it refuses while the section is off.
+
 package policy
 
 import (
@@ -25,15 +40,6 @@ type Screening struct {
 	outflow frontend.Variable
 }
 
-// AssertApprovalTotals binds a nonzero commitment to the totals, a co-signer opens it off chain and zero discloses nothing.
-func (s Screening) AssertApprovalTotals(api frontend.API, commitment, blinder frontend.Variable) {
-	disclosed := ringgadget.IsNonZero(api, commitment)
-	hash := gadget.HashChain4(api, append([]frontend.Variable{shared.ApprovalTotalsDomain, blinder}, s.totals...))
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: disclosed, A: commitment, B: hash})
-	// Off the outflow section the gross reads zero, a charge would read short.
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, s.outflow), V: disclosed})
-}
-
 // Screen holds a spend to the policy, withdrawal legs join the payments only once their hash binds them.
 func (p *Policy) Screen(api frontend.API, rc frontend.Rangechecker, g Gates, spend Spend, outputs []shared.Output) Screening {
 	cmp := newComparator(rc)
@@ -58,4 +64,15 @@ func (p *Policy) screenPayments(api frontend.API, cmp comparator, g Gates, spend
 	// 5. Every live input's asset meets the unconditional asset rules, list bits alone decide and no amount enters a total.
 	assertInputAssetRules(api, active, table, resolved)
 	return resolved
+}
+
+// AssertApprovalTotals binds a nonzero commitment to the totals, a co-signer opens it off chain and zero discloses nothing.
+//
+// A co-signer that approves exact amounts needs totals the chain must not read. The statement carries the digest alone, and the co-signer receives the totals and the blinder off chain and rehashes them. The hash reads the values the outflow section computed, a total understated to the co-signer opens another digest. A digest with no blinder would let anyone test guessed totals against the chain, so the blinder enters the hash and no statement.
+func (s Screening) AssertApprovalTotals(api frontend.API, commitment, blinder frontend.Variable) {
+	disclosed := ringgadget.IsNonZero(api, commitment)
+	hash := gadget.HashChain4(api, append([]frontend.Variable{shared.ApprovalTotalsDomain, blinder}, s.totals...))
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: disclosed, A: commitment, B: hash})
+	// Off the outflow section the gross reads zero, a charge would read short.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, s.outflow), V: disclosed})
 }

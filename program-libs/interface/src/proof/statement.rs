@@ -1,4 +1,18 @@
 //! The `HashChain4` public input of the transfer, apply and register key proofs.
+//!
+//! An SPP proof binds SPP's own public values. A ring proof has one public input, the fold of a
+//! statement the verifier rebuilds, so a prover picks no element the program derives. A statement
+//! element enforces nothing alone, it fixes a value and a constraint or a program check gives it
+//! meaning. `docs/design/proof-composition.md` names the enforcer of each.
+//!
+//! Each order here is the circuit's, a change on one side alone fails every proof. The Go twins are
+//! `TransferCircuit.statement` in `prover/circuits/transfer/transfer.go`, `Envelope.Head` in
+//! `prover/circuits/audit/audit.go`, and `statement` in each of `prover/circuits/registry/apply_records.go`,
+//! `apply_enrollments.go` and `register_key.go`. `program-libs/interface/tests/statements.rs` and
+//! `go_vectors.rs` pin them through `test-vectors/proof/ring-statements.json`.
+//!
+//! Read after `program-libs/interface/src/instructions/transact.rs`, `docs/design/proof-composition.md`.
+//! Read before `prover/circuits/transfer/transfer.go`, `programs/custom-ring/src/instructions/transfer/verify.rs`.
 
 use spr_hasher::{
     hash_chain::{create_hash_chain_4, create_hash_chain_4_from_slice},
@@ -36,6 +50,7 @@ pub struct AuditHead<'a> {
 }
 
 impl AuditHead<'_> {
+    /// `statement` is the domain, so a proof of one kind cannot answer another.
     fn elements_under(
         &self,
         statement: u32,
@@ -57,45 +72,166 @@ impl AuditHead<'_> {
     }
 }
 
-/// Zero past the last cell, the chain width stays the key's.
-fn zero_filled_chain<'a>(
-    cells: impl Iterator<Item = &'a [u8; 32]>,
-    width: usize,
-) -> Result<[u8; 32], HasherError> {
-    create_hash_chain_4(cells.chain(core::iter::repeat(&ZERO_FIELD)).take(width))
+/// One ring transfer's proof, mirror `prover/circuits/transfer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransferStatement<'a> {
+    pub head: AuditHead<'a>,
+    pub family: TransferFamily<'a>,
+    pub approval_mask: ApprovalMask,
+    /// Zero unless the frame discloses totals to a co-signer.
+    pub approval_totals: &'a [u8; 32],
+    /// Zero unless a public signer owns a data-bearing output.
+    pub signer_data_counts: SignerDataCounts,
+    /// `R` is zero, the frame takes public funds alone.
+    pub no_spend: bool,
+    /// The `m` published slots.
+    pub outputs: &'a [RingOutput<'a>],
+    /// `N`, the key's output capacity.
+    pub output_capacity: usize,
+    /// `n`, the frame's nullifier count.
+    pub input_count: usize,
+    pub private_tx_hash: &'a [u8; 32],
+    /// Default on the in-proof and authority rails and on an empty run.
+    pub signers: SignerSet,
+    pub roots: &'a TransferRoots,
+    pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    /// SPP's signed nets, a withdrawal is `q - |amount|`.
+    pub public_amounts: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    /// Gross withdrawals per slot as right-aligned u128.
+    pub public_gross: &'a [[u8; 32]; N_PUBLIC_SLOTS],
+    pub withdrawal_hash: &'a [u8; 32],
 }
 
-fn output_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
-    zero_filled_chain(outputs.iter().map(|output| output.hash), capacity)
+/// Zero where the frame reads none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransferRoots {
+    pub policy_hash: [u8; 32],
+    pub own_root: [u8; 32],
+    pub curator_root: [u8; 32],
+    pub tracking_root: [u8; 32],
 }
 
-/// `Poseidon(u32 len(ct), HashChain4(pack_left31(ct)))`, without the tag trailing zeros collide.
-pub fn ciphertext_digest(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
-    let chain = create_hash_chain_4_from_slice(&pack_disclosure(ciphertext))?;
-    Poseidon::hashv(&[
-        &right_align(&(ciphertext.len() as u32).to_be_bytes()),
-        &chain,
-    ])
-}
+/// Everything but the party cells, the public slots and the close.
+const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 2 + 1 + 2 + 4 + 1;
 
-/// `HashChain4(hash_bytes(record_i))`, untagged since every record is one length.
-pub fn record_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
-    let mut hashes = Vec::with_capacity(outputs.len());
-    for output in outputs {
-        hashes.push(hash_bytes(output.record)?);
+impl TransferStatement<'_> {
+    pub const fn element_count(&self) -> usize {
+        TRANSFER_FIXED_ELEMENTS + ANONYMOUS_PARTIES + 3 * N_PUBLIC_SLOTS + 1
     }
-    zero_filled_chain(hashes.iter(), capacity)
+
+    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
+        let capacity = self.output_capacity;
+        let mut elements = Vec::with_capacity(self.element_count());
+        // 1. The head ties the proof to SPP's first nullifier, the ring, the sealed key and the auditor stream.
+        elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
+        // 2. One key serves every rail. The circuit holds at most one bit set, and only the program's `delegate` bit parts the signer and delegate rails.
+        elements.extend(self.family.rail_bits().map(bit));
+        elements.extend([
+            // 3. The proof holds these four to what it opened, the program acts on the mask and on the spend bit.
+            right_align(&[self.approval_mask.bits()]),
+            *self.approval_totals,
+            right_align(&self.signer_data_counts.packed().to_be_bytes()),
+            bit(self.no_spend),
+            // 4. SPP's output hashes and the auditor's ciphertexts per slot. The output and record chains are zero filled to `N`, the tail chain too or plain zero with no data, so the count alone carries `m`.
+            count(self.outputs.len()),
+            output_chain(self.outputs, capacity)?,
+            record_chain(self.outputs, capacity)?,
+            tail_chain(self.outputs, capacity)?,
+            // 5. The nullifier count, SPP's hash the proof reopens over the slots it opened, so those are the slots SPP settles, and the in-proof sender.
+            count(self.input_count),
+            *self.private_tx_hash,
+            *self.family.sender(),
+        ]);
+        // 6. The circuit refuses a hidden owner equal to any party the program names.
+        elements.extend(self.family.parties());
+        elements.extend([
+            // 7. SPP's owner run, the ring's policy hash, then each root the program read live, zero where the rail reads none.
+            count(self.signers.count),
+            self.signers.chain,
+            self.roots.policy_hash,
+            self.roots.own_root,
+            self.roots.curator_root,
+            self.roots.tracking_root,
+        ]);
+        // 8. SPP's public slots, then the legs the policy screens. The program folds both from settled legs, the circuit consumes them.
+        for (slot, asset) in self.public_assets.iter().enumerate() {
+            elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
+        }
+        elements.push(*self.withdrawal_hash);
+        // 9. The nonzero length counts itself and closes the chain, HashChain4 pads zeros.
+        let length = (elements.len() + 1) as u64;
+        elements.push(right_align(&length.to_be_bytes()));
+        Ok(elements)
+    }
+
+    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
+        create_hash_chain_4_from_slice(&self.elements()?)
+    }
 }
 
-/// `HashChain4(hash_bytes(tail_i))`, zero while no slot carries a tail.
-pub fn tail_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
-    let mut hashes = Vec::with_capacity(outputs.len());
-    for tail in outputs.iter().filter_map(|output| output.tail) {
-        hashes.push(hash_bytes(tail)?);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferFamily<'a> {
+    /// The signer, in-proof and authority rails.
+    Confidential { sender: ConfidentialSender<'a> },
+    /// The anonymous rail, the head's layout picks the entry disclosure.
+    Anonymous {
+        /// `solana_owner_identity` of the payer, each co-signer and the withdrawal destination, zero when absent.
+        party_identities: &'a [[u8; 32]; ANONYMOUS_PARTIES],
+        /// No hidden sender exists, every live owner is a published signer.
+        public_owners: bool,
+        /// Set only under the authority tag.
+        delegate: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfidentialSender<'a> {
+    Signer,
+    InProof(&'a [u8; 32]),
+    Authority,
+}
+
+impl TransferFamily<'_> {
+    /// `in_proof`, `hidden`, `delegate`, a clear set is the signer rail.
+    fn rail_bits(&self) -> [bool; 3] {
+        match self {
+            Self::Confidential { sender } => [
+                matches!(sender, ConfidentialSender::InProof(_)),
+                false,
+                matches!(sender, ConfidentialSender::Authority),
+            ],
+            Self::Anonymous {
+                public_owners,
+                delegate,
+                ..
+            } => [false, !public_owners && !delegate, *delegate],
+        }
     }
-    match hashes.is_empty() {
-        true => Ok(ZERO_FIELD),
-        false => zero_filled_chain(hashes.iter(), capacity),
+
+    fn sender(&self) -> &[u8; 32] {
+        match self {
+            Self::Confidential { sender } => sender.identity(),
+            Self::Anonymous { .. } => &ZERO_FIELD,
+        }
+    }
+
+    fn parties(&self) -> [[u8; 32]; ANONYMOUS_PARTIES] {
+        match self {
+            Self::Confidential { .. } => [ZERO_FIELD; ANONYMOUS_PARTIES],
+            Self::Anonymous {
+                party_identities, ..
+            } => **party_identities,
+        }
+    }
+}
+
+impl ConfidentialSender<'_> {
+    /// Zero on the signer and authority rails.
+    pub fn identity(&self) -> &[u8; 32] {
+        match self {
+            Self::InProof(identity) => identity,
+            Self::Signer | Self::Authority => &ZERO_FIELD,
+        }
     }
 }
 
@@ -198,171 +334,58 @@ impl SignerDataCounts {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConfidentialSender<'a> {
-    Signer,
-    InProof(&'a [u8; 32]),
-    Authority,
+/// Zero past the last cell, the chain width stays the key's.
+fn zero_filled_chain<'a>(
+    cells: impl Iterator<Item = &'a [u8; 32]>,
+    width: usize,
+) -> Result<[u8; 32], HasherError> {
+    create_hash_chain_4(cells.chain(core::iter::repeat(&ZERO_FIELD)).take(width))
 }
 
-impl ConfidentialSender<'_> {
-    /// Zero on the signer and authority rails.
-    pub fn identity(&self) -> &[u8; 32] {
-        match self {
-            Self::InProof(identity) => identity,
-            Self::Signer | Self::Authority => &ZERO_FIELD,
-        }
+fn output_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
+    zero_filled_chain(outputs.iter().map(|output| output.hash), capacity)
+}
+
+/// `Poseidon(u32 len(ct), HashChain4(pack_left31(ct)))`, without the tag trailing zeros collide.
+pub fn ciphertext_digest(ciphertext: &[u8]) -> Result<[u8; 32], HasherError> {
+    let chain = create_hash_chain_4_from_slice(&pack_disclosure(ciphertext))?;
+    Poseidon::hashv(&[
+        &right_align(&(ciphertext.len() as u32).to_be_bytes()),
+        &chain,
+    ])
+}
+
+/// `HashChain4(hash_bytes(record_i))`, untagged since every record is one length.
+pub fn record_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
+    let mut hashes = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        hashes.push(hash_bytes(output.record)?);
+    }
+    zero_filled_chain(hashes.iter(), capacity)
+}
+
+/// `HashChain4(hash_bytes(tail_i))`, zero while no slot carries a tail.
+pub fn tail_chain(outputs: &[RingOutput<'_>], capacity: usize) -> Result<[u8; 32], HasherError> {
+    let mut hashes = Vec::with_capacity(outputs.len());
+    for tail in outputs.iter().filter_map(|output| output.tail) {
+        hashes.push(hash_bytes(tail)?);
+    }
+    match hashes.is_empty() {
+        true => Ok(ZERO_FIELD),
+        false => zero_filled_chain(hashes.iter(), capacity),
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TransferFamily<'a> {
-    /// The signer, in-proof and authority rails.
-    Confidential { sender: ConfidentialSender<'a> },
-    /// The anonymous rail, the head's layout picks the entry disclosure.
-    Anonymous {
-        /// `solana_owner_identity` of the payer, each co-signer and the withdrawal destination, zero when absent.
-        party_identities: &'a [[u8; 32]; ANONYMOUS_PARTIES],
-        /// No hidden sender exists, every live owner is a published signer.
-        public_owners: bool,
-        /// Set only under the authority tag.
-        delegate: bool,
-    },
-}
-
-/// One ring transfer's proof, mirror `prover/circuits/transfer`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TransferStatement<'a> {
-    pub head: AuditHead<'a>,
-    pub family: TransferFamily<'a>,
-    pub approval_mask: ApprovalMask,
-    /// Zero unless the frame discloses totals to a co-signer.
-    pub approval_totals: &'a [u8; 32],
-    /// Zero unless a public signer owns a data-bearing output.
-    pub signer_data_counts: SignerDataCounts,
-    /// `R` is zero, the frame takes public funds alone.
-    pub no_spend: bool,
-    /// The `m` published slots.
-    pub outputs: &'a [RingOutput<'a>],
-    /// `N`, the key's output capacity.
-    pub output_capacity: usize,
-    /// `n`, the frame's nullifier count.
-    pub input_count: usize,
-    pub private_tx_hash: &'a [u8; 32],
-    /// Default on the in-proof and authority rails and on an empty run.
-    pub signers: SignerSet,
-    pub roots: &'a TransferRoots,
-    pub public_assets: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-    /// SPP's signed nets, a withdrawal is `q - |amount|`.
-    pub public_amounts: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-    /// Gross withdrawals per slot as right-aligned u128.
-    pub public_gross: &'a [[u8; 32]; N_PUBLIC_SLOTS],
-    pub withdrawal_hash: &'a [u8; 32],
-}
-
-/// Zero where the frame reads none.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TransferRoots {
-    pub policy_hash: [u8; 32],
-    pub own_root: [u8; 32],
-    pub curator_root: [u8; 32],
-    pub tracking_root: [u8; 32],
-}
-
-/// Everything but the party cells, the public slots and the close.
-const TRANSFER_FIXED_ELEMENTS: usize = AUDIT_HEAD_ELEMENTS + 3 + 4 + 4 + 2 + 1 + 2 + 4 + 1;
-
-impl TransferFamily<'_> {
-    /// `in_proof`, `hidden`, `delegate`, a clear set is the signer rail.
-    fn rail_bits(&self) -> [bool; 3] {
-        match self {
-            Self::Confidential { sender } => [
-                matches!(sender, ConfidentialSender::InProof(_)),
-                false,
-                matches!(sender, ConfidentialSender::Authority),
-            ],
-            Self::Anonymous {
-                public_owners,
-                delegate,
-                ..
-            } => [false, !public_owners && !delegate, *delegate],
-        }
-    }
-
-    fn sender(&self) -> &[u8; 32] {
-        match self {
-            Self::Confidential { sender } => sender.identity(),
-            Self::Anonymous { .. } => &ZERO_FIELD,
-        }
-    }
-
-    fn parties(&self) -> [[u8; 32]; ANONYMOUS_PARTIES] {
-        match self {
-            Self::Confidential { .. } => [ZERO_FIELD; ANONYMOUS_PARTIES],
-            Self::Anonymous {
-                party_identities, ..
-            } => **party_identities,
-        }
-    }
-}
-
-impl TransferStatement<'_> {
-    pub const fn element_count(&self) -> usize {
-        TRANSFER_FIXED_ELEMENTS + ANONYMOUS_PARTIES + 3 * N_PUBLIC_SLOTS + 1
-    }
-
-    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
-        let capacity = self.output_capacity;
-        let mut elements = Vec::with_capacity(self.element_count());
-        elements.extend(self.head.elements_under(domain::TRANSFER_STATEMENT)?);
-        elements.extend(self.family.rail_bits().map(bit));
-        elements.extend([
-            right_align(&[self.approval_mask.bits()]),
-            *self.approval_totals,
-            right_align(&self.signer_data_counts.packed().to_be_bytes()),
-            bit(self.no_spend),
-            count(self.outputs.len()),
-            output_chain(self.outputs, capacity)?,
-            record_chain(self.outputs, capacity)?,
-            tail_chain(self.outputs, capacity)?,
-            count(self.input_count),
-            *self.private_tx_hash,
-            *self.family.sender(),
-        ]);
-        elements.extend(self.family.parties());
-        elements.extend([
-            count(self.signers.count),
-            self.signers.chain,
-            self.roots.policy_hash,
-            self.roots.own_root,
-            self.roots.curator_root,
-            self.roots.tracking_root,
-        ]);
-        for (slot, asset) in self.public_assets.iter().enumerate() {
-            elements.extend([*asset, self.public_amounts[slot], self.public_gross[slot]]);
-        }
-        elements.push(*self.withdrawal_hash);
-        // The nonzero length counts itself and closes the chain, HashChain4 pads zeros.
-        let length = (elements.len() + 1) as u64;
-        elements.push(right_align(&length.to_be_bytes()));
-        Ok(elements)
-    }
-
-    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        create_hash_chain_4_from_slice(&self.elements()?)
-    }
-}
-
-/// An application of `count` queued writes, mirror `prover/circuits/registry`.
+/// An application of `count` writes, mirror `prover/circuits/registry`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyRecordsStatement {
     pub old_root: [u8; 32],
     pub new_root: [u8; 32],
     pub old_next_index: u32,
     pub new_next_index: u32,
-    /// `chain(head - 1)`.
+    /// `chain_start` of the registry and revision.
     pub chain_start: [u8; 32],
-    /// `chain(tail - 1)`.
+    /// The chain past the last write.
     pub chain_end: [u8; 32],
     pub count: u64,
 }

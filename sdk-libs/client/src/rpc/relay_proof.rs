@@ -2,7 +2,7 @@ use solana_address::Address;
 use spr_event::MessageData;
 use spr_instruction::instruction::{
     CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts, TransactSolTransferAccounts,
-    TransactSplWithdrawalAccounts,
+    TransactSplDepositAccounts, TransactSplWithdrawalAccounts,
 };
 use spr_interface::{instruction::instruction_data::transact::TransactOutput, pda, MAX_OUTPUTS};
 use spr_keypair::{
@@ -34,7 +34,7 @@ pub struct RelayProofInputs {
     pub inputs: Vec<SppProofInputUtxo>,
     pub outputs: Vec<SppProofOutputUtxo>,
     pub external_data: ExternalData,
-    /// One per interface transfer, each a withdrawal.
+    /// One per interface transfer.
     pub interface_transfer_accounts: Vec<TransactInterfaceTransferAccounts>,
     pub blinding_seed: [u8; 32],
     pub output_tree_id: u16,
@@ -90,7 +90,7 @@ pub enum RelayProofInputsError {
     Input { index: usize },
     #[error("output {index} names a cache slot")]
     CachedOutput { index: usize },
-    #[error("interface transfer {index} is not a withdrawal with matching accounts")]
+    #[error("interface transfer {index} does not match its accounts")]
     Settlement { index: usize },
     #[error("nullifier key does not match the sender")]
     NullifierKey,
@@ -286,11 +286,7 @@ struct CoOwnerWire {
 
 impl Drop for ProofInputsWire {
     fn drop(&mut self) {
-        self.nullifier_secret.zeroize();
-        self.tx_viewing_secret.zeroize();
-        for co_owner in &mut self.co_owners {
-            co_owner.nullifier_secret.zeroize();
-        }
+        self.clear_secrets();
     }
 }
 
@@ -358,8 +354,8 @@ struct OutputWire {
 struct ExternalDataWire {
     instruction_discriminator: u8,
     expiry_unix_ts: u64,
-    #[wincode(with = "containers::Vec<WithdrawalWire, FixIntLen<u8>>")]
-    withdrawals: Vec<WithdrawalWire>,
+    #[wincode(with = "containers::Vec<LegWire, FixIntLen<u8>>")]
+    legs: Vec<LegWire>,
     data_hash: Option<[u8; 32]>,
     ring_data_hash: Option<[u8; 32]>,
     tx_viewing_pk: [u8; 33],
@@ -374,7 +370,7 @@ struct ExternalDataWire {
 
 #[derive(SchemaWrite, SchemaRead)]
 #[wincode(tag_encoding = "u8")]
-enum WithdrawalWire {
+enum LegWire {
     Sol {
         amount: u64,
         recipient: Address,
@@ -385,9 +381,30 @@ enum WithdrawalWire {
         user_token_account: Address,
         token_program: Address,
     },
+    SolDeposit {
+        amount: u64,
+        funder: Address,
+    },
+    SplDeposit {
+        mint: Address,
+        amount: u64,
+        token_authority: Address,
+        user_token_account: Address,
+        token_program: Address,
+    },
 }
 
 impl ProofInputsWire {
+    fn clear_secrets(&mut self) {
+        self.nullifier_secret.zeroize();
+        self.tx_viewing_secret.zeroize();
+        self.blinding_seed.zeroize();
+        self.approval_blinder.zeroize();
+        for co_owner in &mut self.co_owners {
+            co_owner.nullifier_secret.zeroize();
+        }
+    }
+
     fn of(inputs: &RelayProofInputs) -> Result<Self, RelayProofInputsError> {
         check_nullifier_key(&inputs.sender, &inputs.nullifier_key)?;
         let external = &inputs.external_data;
@@ -415,7 +432,7 @@ impl ProofInputsWire {
             external_data: ExternalDataWire {
                 instruction_discriminator: external.instruction_discriminator,
                 expiry_unix_ts: external.expiry_unix_ts,
-                withdrawals: withdrawals(
+                legs: legs(
                     &external.interface_transfers,
                     &inputs.interface_transfer_accounts,
                 )?,
@@ -448,11 +465,8 @@ impl ProofInputsWire {
         let nullifier_key = NullifierKey::from_secret(self.nullifier_secret);
         check_nullifier_key(&sender, &nullifier_key)?;
         let external = &self.external_data;
-        let (interface_transfers, interface_transfer_accounts) = external
-            .withdrawals
-            .iter()
-            .map(WithdrawalWire::legs)
-            .unzip();
+        let (interface_transfers, interface_transfer_accounts) =
+            external.legs.iter().map(LegWire::settlement).unzip();
         let co_owners: Vec<RelayCoOwner> = self
             .co_owners
             .iter()
@@ -733,8 +747,8 @@ impl OutputWire {
     }
 }
 
-impl WithdrawalWire {
-    fn legs(&self) -> (SettlementTransfer, TransactInterfaceTransferAccounts) {
+impl LegWire {
+    fn settlement(&self) -> (SettlementTransfer, TransactInterfaceTransferAccounts) {
         match *self {
             Self::Sol { amount, recipient } => (
                 SettlementTransfer::Sol {
@@ -763,15 +777,46 @@ impl WithdrawalWire {
                     token_program,
                 }),
             ),
+            Self::SolDeposit { amount, funder } => (
+                SettlementTransfer::Sol {
+                    is_deposit: true,
+                    amount,
+                    user_sol_account: funder,
+                },
+                TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts {
+                    recipient: funder,
+                }),
+            ),
+            Self::SplDeposit {
+                mint,
+                amount,
+                token_authority,
+                user_token_account,
+                token_program,
+            } => (
+                SettlementTransfer::Spl {
+                    mint,
+                    is_deposit: true,
+                    amount,
+                    user_spl_token: user_token_account,
+                },
+                TransactInterfaceTransferAccounts::SplDeposit(TransactSplDepositAccounts {
+                    mint,
+                    spl_interface: pda::spl_interface(&mint),
+                    token_authority,
+                    user_token_account,
+                    token_program,
+                }),
+            ),
         }
     }
 }
 
-/// Each leg must be a withdrawal with the accounts decode derives for it.
-fn withdrawals(
+/// Each leg must carry the accounts decode derives for it.
+fn legs(
     transfers: &[SettlementTransfer],
     accounts: &[TransactInterfaceTransferAccounts],
-) -> Result<Vec<WithdrawalWire>, RelayProofInputsError> {
+) -> Result<Vec<LegWire>, RelayProofInputsError> {
     if transfers.len() != accounts.len() {
         return Err(RelayProofInputsError::Settlement {
             index: transfers.len().min(accounts.len()),
@@ -790,7 +835,7 @@ fn withdrawals(
                         user_sol_account,
                     },
                     TransactInterfaceTransferAccounts::Sol(_),
-                ) => WithdrawalWire::Sol {
+                ) => LegWire::Sol {
                     amount,
                     recipient: user_sol_account,
                 },
@@ -802,15 +847,41 @@ fn withdrawals(
                         user_spl_token,
                     },
                     TransactInterfaceTransferAccounts::SplWithdrawal(withdrawal),
-                ) => WithdrawalWire::Spl {
+                ) => LegWire::Spl {
                     mint,
                     amount,
                     user_token_account: user_spl_token,
                     token_program: withdrawal.token_program,
                 },
+                (
+                    SettlementTransfer::Sol {
+                        is_deposit: true,
+                        amount,
+                        user_sol_account,
+                    },
+                    TransactInterfaceTransferAccounts::Sol(_),
+                ) => LegWire::SolDeposit {
+                    amount,
+                    funder: user_sol_account,
+                },
+                (
+                    SettlementTransfer::Spl {
+                        mint,
+                        is_deposit: true,
+                        amount,
+                        user_spl_token,
+                    },
+                    TransactInterfaceTransferAccounts::SplDeposit(deposit),
+                ) => LegWire::SplDeposit {
+                    mint,
+                    amount,
+                    token_authority: deposit.token_authority,
+                    user_token_account: user_spl_token,
+                    token_program: deposit.token_program,
+                },
                 _ => return Err(RelayProofInputsError::Settlement { index }),
             };
-            match wire.legs().1 == *accounts {
+            match wire.settlement().1 == *accounts {
                 true => Ok(wire),
                 false => Err(RelayProofInputsError::Settlement { index }),
             }
@@ -825,5 +896,28 @@ fn check_nullifier_key(
     match nullifier_key.pubkey()? == sender.nullifier_pubkey {
         true => Ok(()),
         false => Err(RelayProofInputsError::NullifierKey),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropped_wire_inputs_hold_no_secret_a_blinding_derives_from() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../test-vectors/rpc/relay_proof_inputs.json"
+        ))
+        .unwrap();
+        let encoded: spr_indexer_api::Base64String =
+            serde_json::from_value(vector["proofInputs"].clone()).unwrap();
+        let mut wire: ProofInputsWire = wincode::deserialize_exact(&encoded.0).unwrap();
+        wire.approval_blinder = Some([9; 32]);
+        assert_ne!(wire.blinding_seed, [0; 32]);
+        wire.clear_secrets();
+        assert_eq!(wire.nullifier_secret, [0; BLINDING_LEN]);
+        assert_eq!(wire.tx_viewing_secret, [0; 32]);
+        assert_eq!(wire.blinding_seed, [0; 32]);
+        assert_eq!(wire.approval_blinder, None);
     }
 }

@@ -123,23 +123,6 @@ func (v quadPath) flat() []Field {
 	return flat
 }
 
-func (v bodyView) opening(path quadPath) RecordOpening {
-	return RecordOpening{Next: v.Next, Lists: v.Lists, MintPolicy: v.MintPolicy, WithdrawalThreshold: v.WithdrawalThreshold, AssetLimits: v.AssetLimits, Index: path.Index, Path: path.flat()}
-}
-
-func (v recordView) request() any {
-	return v.opening(v.Path)
-}
-
-func (v memberView) request() any {
-	low := v.Low
-	return MemberOpening{
-		Present:       v.Present,
-		RecordOpening: v.opening(v.Path),
-		LowMember:     low.Member, LowNext: low.Next, LowLists: low.Lists, LowMintPolicy: low.MintPolicy, LowWithdrawalThreshold: low.WithdrawalThreshold, LowAssetLimits: low.AssetLimits,
-	}
-}
-
 func (v enrollmentView) request() any {
 	e := v.Entry
 	return TrackingWrite{

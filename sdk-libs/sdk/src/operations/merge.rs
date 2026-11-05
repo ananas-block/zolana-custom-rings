@@ -7,6 +7,7 @@ use custom_ring_interface::{
 };
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
+use solana_signer::Signer;
 use spr_client::{AsyncRpc, AsyncWitnessReader, MergeProver, ProofCompressed};
 use spr_hasher::primitives::{hash_bytes, pack_be, right_align, solana_owner_identity};
 use spr_indexer_api::SerializablePubkey;
@@ -36,6 +37,7 @@ use zolana_ring_client::{
 use zolana_ring_keys::{MergeSeedHolder, MergeSeedRequest};
 
 use crate::client::{RingClient, RingIndexerBackend};
+use crate::relay_message::MessageMismatch;
 use crate::{
     pipeline::HiddenOwner,
     prover::{to_instruction_proof, RingRequest},
@@ -558,18 +560,23 @@ impl CustomRingMergeInstruction {
 }
 
 #[must_use]
-pub struct MergeRelay {
+pub struct MergeRelay<'a> {
     pub ring: CustomRing,
     /// Owns every input.
     pub sender: ShieldedAddress,
+    /// Signs the request, the relay proves nothing for a stranger.
+    pub owner: &'a dyn Signer,
     pub nullifier_key: NullifierKey,
     pub inputs: Vec<WalletUtxo>,
 }
 
-impl MergeRelay {
-    /// Ring RPC derives the merged note from the nullifier key, no wallet signature follows.
+impl MergeRelay<'_> {
+    /// Ring RPC derives the merged note from the nullifier key, no signed message follows.
     pub fn prepare(self, quote: RelayQuote) -> Result<PreparedRelay, RingError> {
         let ring = self.ring.program_id();
+        if self.owner.try_pubkey()?.to_bytes() != self.sender.signing_pubkey.as_ed25519()? {
+            return Err(MessageMismatch::Signer.into());
+        }
         let proof_inputs = RelayMergeInputs {
             ring_program_id: ring,
             sender: self.sender,
@@ -577,11 +584,17 @@ impl MergeRelay {
             inputs: self.inputs,
         }
         .encode()?;
+        let proof_inputs = ProofInputBytes::new(proof_inputs);
+        let owner_signature = self
+            .owner
+            .try_sign_message(&proof_inputs.merge_request_digest())?
+            .into();
         Ok(PreparedRelay::new(PrepareRelayRequest {
             ring: SerializablePubkey(ring),
             quote,
             intent: RelayIntent::Merge {
-                proof_inputs: ProofInputBytes::new(proof_inputs),
+                proof_inputs,
+                owner_signature,
             },
             co_signers: Vec::new(),
         }))

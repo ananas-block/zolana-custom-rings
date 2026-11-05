@@ -618,7 +618,7 @@ describe("viewing history", () => {
   it("refuses another field, a stale rotation, a malformed counter and a repeated ring", () => {
     const history = ViewingHistory.create(key(), 0n);
     const stored = JSON.parse(history.toJson()) as object;
-    expect(() => ViewingHistory.fromJson(JSON.stringify({ ...stored, version: 7 }))).toThrow(
+    expect(() => ViewingHistory.fromJson(JSON.stringify({ ...stored, other: 7 }))).toThrow(
       "RING_VIEWING_HISTORY_INVALID",
     );
     const rotated = history.withRotatedKey(key(), 5n);

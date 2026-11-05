@@ -1,3 +1,33 @@
+// Reads a registry's records by member, for every subject a transfer screens, from one shared proof.
+//
+// SPP has no registries. A rule's answer comes from a record under a root the program read, and a subject
+// not on any list must prove that too. A transfer reads a record for each sender, payment owner, asset and
+// salted key, and many of those repeat, so the file dedups in two tiers.
+//
+// A record row is a leaf of the tree, opened once under the root by a SharedQuadProof. A subject row is a
+// member with the columns it resolves to, proven once against a record row. A query then finds its
+// member's subject row by a prover chosen index. A repeated subject takes one subject row, and absent
+// subjects that fall in one link share its record row.
+//
+// Absence is a sorted list argument. registry/apply_records.go keeps the records linked in ascending
+// member order, and a sentinel at index 0 brackets every member in [1, q-2]. A member strictly between a
+// leaf's Member and Next has no leaf of its own, and a present member lies inside no link.
+//
+// Deduplication is sound because an index selects a row and never its content. The lookup binds whole
+// rows, a member cannot pair with another record's columns. Duplicate rows are harmless, one member
+// resolves to one answer under one root. Capacity bounds what a key can prove and never what it checks.
+// A padded pool cycles real rows, see RecordPoolOf::padded in program-libs/member-registry/src/record_pool.rs.
+//
+// Read after registry/registry.go, registry/shared_path.go, registry/apply_records.go. Read before
+// policy/tracking.go, policy/subjects.go.
+//
+// Properties:
+// 1. Every record row of an active pool is a leaf under the pool's root.
+// 2. Every subject row of an active pool holds its member's columns, or zeros beside a link proving the member absent.
+// 3. An active query reads the row of its own member and needs an active pool, an inactive query reads zeros.
+// 4. Lists split one way below 2^64, the low NSources bits are the bits a rule reads.
+// 5. A mint policy splits one way into three limbs below 2^64.
+
 package policy
 
 import (
@@ -37,47 +67,6 @@ type OwnerEntry struct {
 	ListSalt      frontend.Variable
 	OwnSalted     frontend.Variable
 	CuratorSalted [1]frontend.Variable
-}
-
-func (s RecordPoolShape) validate(limits RecordPoolShape) error {
-	if err := validatePoolCapacity(s.Own, s.OwnSubjects, limits.Own); err != nil {
-		return err
-	}
-	return validatePoolCapacity(s.Curator, s.CuratorSubjects, limits.Curator)
-}
-
-func validatePoolCapacity(records, subjects, maximum int) error {
-	for _, capacity := range []int{records, subjects} {
-		if capacity < 1 || capacity > maximum {
-			return fmt.Errorf("policy pool capacity is invalid")
-		}
-	}
-	return nil
-}
-
-func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
-	outputs, withdrawals := p.Outputs, len(p.Withdrawals)
-	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
-	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
-	// A funded input's asset already sits among the output and public assets, SPP's balance sees to that. A zero value input can name any other, and every live input can be one, so each input slot takes its own row. The row bounds what the key can prove and never what it checks, every input queries the pools whatever the capacity.
-	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys + p.Spent
-	return RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets), Curator: distinct + withdrawalAssets}
-}
-
-func (s RecordPoolShape) withDefaults(limits RecordPoolShape) RecordPoolShape {
-	if s.Own == 0 {
-		s.Own = limits.Own
-	}
-	if s.Curator == 0 {
-		s.Curator = limits.Curator
-	}
-	if s.OwnSubjects == 0 {
-		s.OwnSubjects = s.Own
-	}
-	if s.CuratorSubjects == 0 {
-		s.CuratorSubjects = s.Curator
-	}
-	return s
 }
 
 type recordQuery struct {
@@ -134,7 +123,63 @@ func newRecordPool(api frontend.API, active frontend.Variable, width int) record
 	return recordPool{pooledTable{active: active, table: lookup.New(api, 2+width)}, width}
 }
 
+// openSubjectPool resolves every subject row once against the records, a query then needs no ordering check of its own.
+func openSubjectPool(api frontend.API, records recordPool, subjects []PoolSubject) subjectPool {
+	pool := subjectPool{pooledTable{active: records.active, table: lookup.New(api, 1+records.width)}}
+	for _, subject := range subjects {
+		resolved := records.read(api, recordQuery{active: records.active, member: subject.Member, index: subject.RecordIndex})
+		pool.table.Insert(append([]frontend.Variable{subject.Member}, resolved...))
+	}
+	return pool
+}
+
+// Zeros for an inactive query or an absent member.
+func (p recordPool) read(api frontend.API, query recordQuery) []frontend.Variable {
+	row := p.lookup(api, query)
+	present := IsSame(api, row[0], query.member)
+	// The row's Member is the query's, or the query lies strictly inside the row's link. AssertOrderedWhen compares canonical field integers.
+	ringgadget.AssertOrderedWhen(api, api.Mul(query.active, api.Sub(1, present)), row[0], query.member, row[1])
+	// An absent member reads zeros whatever its predecessor holds.
+	return gated(api, api.Mul(query.active, present), row[2:])
+}
+
+func (p subjectPool) resolve(api frontend.API, query recordQuery) []frontend.Variable {
+	return withLists(api, p.read(api, query))
+}
+
+func (p subjectPool) read(api frontend.API, query recordQuery) []frontend.Variable {
+	row := p.lookup(api, query)
+	// A row of another member would answer for the query's.
+	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: query.active, A: row[0], B: query.member})
+	return gated(api, query.active, row[1:])
+}
+
+func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Variable {
+	api.AssertIsBoolean(query.active)
+	// The rows of an inactive pool fold under no root, an active query there would read prover chosen lists.
+	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: query.active, V: api.Sub(1, p.active)})
+	return p.table.Lookup(query.index)
+}
+
+func gated(api frontend.API, active frontend.Variable, columns []frontend.Variable) []frontend.Variable {
+	zeroed := make([]frontend.Variable, len(columns))
+	for i, column := range columns {
+		zeroed[i] = api.Mul(active, column)
+	}
+	return zeroed
+}
+
+func withLists(api frontend.API, columns []frontend.Variable) []frontend.Variable {
+	onList := sourceLists(api, columns[0])
+	return append(onList[:], columns[1:]...)
+}
+
+func pooledRecordAt(columns []frontend.Variable) pooledRecord {
+	return pooledRecord{onList: [NSources]frontend.Variable(columns[:NSources]), mintPolicy: columns[NSources], withdrawalThreshold: columns[NSources+1]}
+}
+
 // The range check bounds lists below 2^ListBits so one split exists.
+// A rule reads the low NSources bits alone, a list past them has no source slot. No stored record fails the split, ValueOutsideMask keeps lists within u64 at the write.
 func sourceLists(api frontend.API, lists frontend.Variable) [NSources]frontend.Variable {
 	low, err := api.Compiler().NewHint(rangecheck.DecomposeHint, 1, NSources, NSources, lists)
 	if err != nil {
@@ -144,6 +189,7 @@ func sourceLists(api frontend.API, lists frontend.Variable) [NSources]frontend.V
 	return [NSources]frontend.Variable(api.ToBinary(low[0], NSources))
 }
 
+// decodeMintPolicy reads cosign_above, cap and threshold from low to high, the bounded limbs recompose over the integers and no limb aliases another. registry/apply_records.go keeps a stored policy below 2^192.
 func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWires {
 	limbs, err := api.Compiler().NewHint(rangecheck.DecomposeHint, 3, 192, 64, packed)
 	if err != nil {
@@ -158,53 +204,43 @@ func decodeMintPolicy(api frontend.API, packed frontend.Variable) mintPolicyWire
 	return mintPolicyWires{threshold: limbs[2], cap: limbs[1], cosignAbove: limbs[0]}
 }
 
-func (p pooledTable) lookup(api frontend.API, query recordQuery) []frontend.Variable {
-	api.AssertIsBoolean(query.active)
-	abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: query.active, V: api.Sub(1, p.active)})
-	return p.table.Lookup(query.index)
+func (p *PolicyInputs) recordCapacity(publicAssets int) RecordPoolShape {
+	outputs, withdrawals := p.Outputs, len(p.Withdrawals)
+	// Withdrawals settle through SPP public slots, so their assets are among at most NPublicSlots.
+	withdrawalAssets := min(withdrawals, transaction.NPublicSlots)
+	// An input slot takes no row. Every live input queries these pools and a repeated asset reads the record a payment or another input opened. SPP's balance keeps a funded input's asset among the output and public assets, only a zero value note can name another, and it needs a free row or a larger key. The rows bound what a key can prove and never what it checks, the query binds at any capacity.
+	distinct := p.Senders + outputs + withdrawals + outputs + p.SaltedKeys
+	return RecordPoolShape{Own: distinct + max(withdrawalAssets, publicAssets), Curator: distinct + withdrawalAssets}
 }
 
-// Zeros for an inactive query or an absent member.
-func (p recordPool) read(api frontend.API, query recordQuery) []frontend.Variable {
-	row := p.lookup(api, query)
-	present := IsSame(api, row[0], query.member)
-	ringgadget.AssertOrderedWhen(api, api.Mul(query.active, api.Sub(1, present)), row[0], query.member, row[1])
-	// An absent member reads zeros whatever its predecessor holds.
-	return gated(api, api.Mul(query.active, present), row[2:])
-}
-
-func withLists(api frontend.API, columns []frontend.Variable) []frontend.Variable {
-	onList := sourceLists(api, columns[0])
-	return append(onList[:], columns[1:]...)
-}
-
-func pooledRecordAt(columns []frontend.Variable) pooledRecord {
-	return pooledRecord{onList: [NSources]frontend.Variable(columns[:NSources]), mintPolicy: columns[NSources], withdrawalThreshold: columns[NSources+1]}
-}
-
-func gated(api frontend.API, active frontend.Variable, columns []frontend.Variable) []frontend.Variable {
-	zeroed := make([]frontend.Variable, len(columns))
-	for i, column := range columns {
-		zeroed[i] = api.Mul(active, column)
+func (s RecordPoolShape) withDefaults(limits RecordPoolShape) RecordPoolShape {
+	if s.Own == 0 {
+		s.Own = limits.Own
 	}
-	return zeroed
-}
-
-func openSubjectPool(api frontend.API, records recordPool, subjects []PoolSubject) subjectPool {
-	pool := subjectPool{pooledTable{active: records.active, table: lookup.New(api, 1+records.width)}}
-	for _, subject := range subjects {
-		resolved := records.read(api, recordQuery{active: records.active, member: subject.Member, index: subject.RecordIndex})
-		pool.table.Insert(append([]frontend.Variable{subject.Member}, resolved...))
+	if s.Curator == 0 {
+		s.Curator = limits.Curator
 	}
-	return pool
+	if s.OwnSubjects == 0 {
+		s.OwnSubjects = s.Own
+	}
+	if s.CuratorSubjects == 0 {
+		s.CuratorSubjects = s.Curator
+	}
+	return s
 }
 
-func (p subjectPool) read(api frontend.API, query recordQuery) []frontend.Variable {
-	row := p.lookup(api, query)
-	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: query.active, A: row[0], B: query.member})
-	return gated(api, query.active, row[1:])
+func (s RecordPoolShape) validate(limits RecordPoolShape) error {
+	if err := validatePoolCapacity(s.Own, s.OwnSubjects, limits.Own); err != nil {
+		return err
+	}
+	return validatePoolCapacity(s.Curator, s.CuratorSubjects, limits.Curator)
 }
 
-func (p subjectPool) resolve(api frontend.API, query recordQuery) []frontend.Variable {
-	return withLists(api, p.read(api, query))
+func validatePoolCapacity(records, subjects, maximum int) error {
+	for _, capacity := range []int{records, subjects} {
+		if capacity < 1 || capacity > maximum {
+			return fmt.Errorf("policy pool capacity is invalid")
+		}
+	}
+	return nil
 }

@@ -184,7 +184,6 @@ function quadPath(index: unknown, flat: unknown): QuadPath {
   };
 }
 
-/** Go `RecordOpening` carries no member, the test names the subject it opens. */
 function table(item: Json): PolicyTableProofInputs {
   return {
     sources: list(item["sources"]).map((value) => {
@@ -503,7 +502,6 @@ function request(item: Json): RingProofRequest {
       capacity: ownerPkHashes.length,
       contextHash: field(item["contextHash"]),
       count: count(item["count"]),
-      anonymous: item["anonymous"] === undefined ? false : flag(item["anonymous"]),
       ownerPkHashes,
       ownerKeys: list(item["ownerKeys"]).map((key) => bytes<Bytes32>(key, 32)),
       nullifierPks: fields(item["nullifierPks"]),
@@ -720,8 +718,10 @@ const ENTRY = await anonymousRequest({ entry: true });
 describe("ring prover requests of the rails", () => {
   it("sends the keys of the Go params in declaration order", () => {
     const keys = goKeys("TransferParams");
-    expect(Object.keys(ringProofRequestBody(ENTRY))).toEqual(keys);
-    const off = keys.filter((key) => key !== "entries");
+    expect(Object.keys(ringProofRequestBody({ ...ENTRY, signerDataCounts: 1n }))).toEqual(keys);
+    const uncounted = keys.filter((key) => key !== "signerDataCounts");
+    expect(Object.keys(ringProofRequestBody(ENTRY))).toEqual(uncounted);
+    const off = uncounted.filter((key) => key !== "entries");
     expect(Object.keys(ringProofRequestBody(CONFIDENTIAL))).toEqual(off);
     expect(Object.keys(ringProofRequestBody(ANONYMOUS))).toEqual(off);
     const keysOfSlot = (request: RingProofRequest) =>
@@ -776,7 +776,7 @@ describe("ring prover requests of the rails", () => {
       }),
     );
     const unknown = { ...base };
-    Reflect.set(unknown, "kind", "transferV2");
+    Reflect.set(unknown, "kind", "other");
     const loose = { ...base };
     Reflect.set(loose, "outputs", { length: base.outputs.length });
     for (const malformed of [unknown, loose]) {

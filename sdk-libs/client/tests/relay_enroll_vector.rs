@@ -37,7 +37,7 @@ fn compute_vector() -> Value {
         instruction_data: vec![6, 7, 8],
     };
     json!({
-        "description": "One RelayEnrollInputs with its ring program id of bytes 0x01, owner of 0x02, tracking registry of 0x03 and instruction data 06 07 08, encoded in wincode, with the digest its owner signs. enroll_wire and delegate_wire are prepareRelay requests carrying proofInputs 03 04 05 and a signature of 64 bytes of 0x07. Produced by sdk-libs/client/tests/relay_enroll_vector.rs.",
+        "description": "One RelayEnrollInputs with its ring program id of bytes 0x01, owner of 0x02, tracking registry of 0x03 and instruction data 06 07 08, encoded in wincode, with the digest its owner signs. enroll_wire, delegate_wire, deposit_wire and merge_wire are prepareRelay requests carrying proofInputs 03 04 05 and a signature of 64 bytes of 0x07, deposit_request_digest and merge_request_digest are what the depositor and the owner sign over those proofInputs. Produced by sdk-libs/client/tests/relay_enroll_vector.rs.",
         "ring_program_id": hex::encode([1; 32]),
         "owner": hex::encode([2; 32]),
         "tracking_registry": hex::encode([3; 32]),
@@ -53,6 +53,16 @@ fn compute_vector() -> Value {
             delegate_signature: Signature::from([7; 64]).into(),
             token_account_setup: Vec::new(),
         }),
+        "deposit_wire": request(RelayIntent::Deposit {
+            proof_inputs: proof_inputs(),
+            depositor_signature: Signature::from([7; 64]).into(),
+        }),
+        "merge_wire": request(RelayIntent::Merge {
+            proof_inputs: proof_inputs(),
+            owner_signature: Signature::from([7; 64]).into(),
+        }),
+        "deposit_request_digest": hex::encode(proof_inputs().deposit_request_digest()),
+        "merge_request_digest": hex::encode(proof_inputs().merge_request_digest()),
     })
 }
 

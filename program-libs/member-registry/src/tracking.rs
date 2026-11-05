@@ -1,4 +1,11 @@
 //! The tracking tree's leaf, one indexed tree per ring holding every enrolled key.
+//!
+//! Read after `program-libs/member-registry/src/tree.rs`, `program-libs/interface/src/accounts/tracking.rs`.
+//! Read before `prover/circuits/registry/tracking.go`, `prover/circuits/registry/apply_enrollments.go`.
+//!
+//! Invariants, `ApplyEnrollmentsCircuit` holds each.
+//! 1. A rotation keeps the row's nullifier key, ciphertext hash and list tag.
+//! 2. An insert takes the next empty leaf, so a full tree refuses a new owner while rotations still apply.
 
 use custom_ring_interface::{
     domain,

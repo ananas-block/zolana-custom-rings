@@ -20,7 +20,7 @@ const PHASE_CLOSING: &str = "closing";
 pub struct RelayBudget {
     /// Reserved and spent over the store's life, only the operator raises it.
     pub total_lamports: u64,
-    /// Outstanding at once under one key.
+    /// Outstanding at once under one key, with the fees of its attempts that never landed for good.
     pub signer_lamports: u64,
 }
 
@@ -172,6 +172,23 @@ pub(crate) enum SendEnd {
     Unsent,
 }
 
+/// Whether the attempt's message landed, and what the total keeps for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttemptEnd {
+    /// The signer paid for a landed spend, its share returns whole. The total also keeps the rent and fee.
+    Landed { lamports: u64 },
+    /// No message landed, the charged fees stay on the total and on the signer's share for good.
+    Unlanded,
+}
+
+#[must_use]
+pub(crate) struct Release<'a> {
+    pub key: &'a [u8; 32],
+    /// A newer attempt under the key names another relay and keeps its row.
+    pub relay_id: &'a RelayId,
+    pub end: AttemptEnd,
+}
+
 #[must_use]
 pub(crate) struct ClaimCleanup<'a> {
     /// As the caller selected it, a newer generation refuses the claim.
@@ -193,6 +210,12 @@ fn lamports_value(lamports: u64) -> Result<Value, DbErr> {
     i64::try_from(lamports)
         .map(Into::into)
         .map_err(|_| DbErr::Custom("lamports out of range".into()))
+}
+
+/// A key's row can be deleted and inserted again, a counter restarting there would hand a stalled
+/// holder the new row's lease. The top bits stay clear for the raises and the signed column.
+fn first_generation() -> u64 {
+    rand::random::<u64>() >> 2
 }
 
 fn lease_until(slot: u64) -> Result<Value, DbErr> {
@@ -280,7 +303,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .execute(self.statement(
                 "INSERT INTO relay_reservations(key,relay_id,signer,lamports,fee_allowance,\
                  closing_fees,landing_rent,uploaded,spent,phase,generation,lease_until_slot,\
-                 touched_slot) VALUES($1,$2,$3,0,0,0,0,0,0,$4,1,$5,$6) \
+                 touched_slot) VALUES($1,$2,$3,0,0,0,0,0,0,$4,$7,$5,$6) \
                  ON CONFLICT(key) DO NOTHING",
                 vec![
                     value(&key),
@@ -289,6 +312,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
                     PHASE_OPEN.into(),
                     lease_until(slot)?,
                     lamports_value(slot)?,
+                    lamports_value(first_generation())?,
                 ],
             ))
             .await?
@@ -506,8 +530,8 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
             .db
             .execute(self.statement(
                 "UPDATE relay_reservations SET phase=$3, generation=generation+1, \
-                 lease_until_slot=$4 WHERE key=$1 AND generation=$2 AND lease_until_slot < $5 \
-                 AND (phase<>$6 OR touched_slot < $7)",
+                 lease_until_slot=$4 WHERE key=$1 AND generation=$2 AND relay_id=$8 \
+                 AND lease_until_slot < $5 AND (phase<>$6 OR touched_slot < $7)",
                 vec![
                     value(&held.key),
                     lamports_value(held.generation)?,
@@ -516,6 +540,7 @@ impl<'a, C: ConnectionTrait> RelayReservations<'a, C> {
                     lamports_value(slot)?,
                     PHASE_OPEN.into(),
                     lamports_value(abandoned_before)?,
+                    value(&held.relay_id.0 .0),
                 ],
             ))
             .await?
@@ -678,18 +703,18 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
             .ok_or_else(|| DbErr::Custom("a reservation vanished".into()))
     }
 
-    /// The signer's share returns whole, the total keeps the charged fees and `landed` for good. A
-    /// pending send keeps the row, its fee and the rent stay held until the chain proves its outcome.
+    /// A pending send keeps the row, its fee and the rent stay held until the chain proves its outcome.
     /// The delete reads what it removes in one statement, a concurrent charge cannot slip past it.
-    pub async fn release(&self, key: &[u8; 32], landed: u64) -> Result<(), DbErr> {
+    pub async fn release(&self, release: Release<'_>) -> Result<(), DbErr> {
+        let Release { key, relay_id, end } = release;
         let backend = self.db.get_database_backend();
         let transaction = self.db.begin().await?;
         let row = transaction
             .query_one(Statement::from_sql_and_values(
                 backend,
-                "DELETE FROM relay_reservations WHERE key=$1 AND pending_signature IS NULL \
-                 RETURNING lamports,spent,signer",
-                vec![value(key)],
+                "DELETE FROM relay_reservations WHERE key=$1 AND relay_id=$2 \
+                 AND pending_signature IS NULL RETURNING lamports,spent,signer",
+                vec![value(key), value(&relay_id.0 .0)],
             ))
             .await?;
         let Some(row) = row else {
@@ -702,9 +727,20 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
         }
         let spent: i64 = row.try_get("", "spent")?;
         let signer: Vec<u8> = row.try_get("", "signer")?;
-        let returned = i128::from(lamports) - i128::from(spent) - i128::from(landed);
-        let returned = i64::try_from(returned)
-            .map_err(|_| DbErr::Custom("returned lamports out of range".into()))?;
+        let (to_total, to_signer) = match end {
+            AttemptEnd::Landed { lamports: landed } => (
+                i128::from(lamports) - i128::from(spent) - i128::from(landed),
+                i128::from(lamports),
+            ),
+            AttemptEnd::Unlanded => {
+                let unspent = i128::from(lamports) - i128::from(spent);
+                (unspent, unspent)
+            }
+        };
+        let returned = |lamports: i128| {
+            i64::try_from(lamports)
+                .map_err(|_| DbErr::Custom("returned lamports out of range".into()))
+        };
         let lower = |scope: &[u8], lamports: i64| {
             Statement::from_sql_and_values(
                 backend,
@@ -712,8 +748,12 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
                 vec![value(scope), lamports.into()],
             )
         };
-        transaction.execute(lower(&TOTAL_SCOPE, returned)).await?;
-        transaction.execute(lower(&signer, lamports)).await?;
+        transaction
+            .execute(lower(&TOTAL_SCOPE, returned(to_total)?))
+            .await?;
+        transaction
+            .execute(lower(&signer, returned(to_signer)?))
+            .await?;
         // Fresh keys leave no counter row behind.
         transaction
             .execute(Statement::from_sql_and_values(
@@ -727,11 +767,20 @@ impl<C: ConnectionTrait + TransactionTrait> RelayReservations<'_, C> {
 }
 
 #[cfg(test)]
+use crate::{
+    database::{Store, STORE_CONNECTIONS},
+    migration::Migrator,
+};
+
+#[cfg(test)]
+#[path = "../../tests/common/store.rs"]
+mod store_fixture;
+
+#[cfg(test)]
 mod tests {
     use sea_orm::DatabaseConnection;
 
-    use super::*;
-    use crate::database::Store;
+    use super::{store_fixture::test_store, *};
 
     const BUDGET: RelayBudget = RelayBudget {
         total_lamports: 100,
@@ -770,6 +819,18 @@ mod tests {
     }
 
     type Store0<'a> = RelayReservations<'a, DatabaseConnection>;
+
+    /// Releases the row a `key` of `claim` names, unlanded.
+    async fn release_row(store: &Store0<'_>, key: u8) {
+        store
+            .release(Release {
+                key: &[key; 32],
+                relay_id: &relay_id(key),
+                end: AttemptEnd::Unlanded,
+            })
+            .await
+            .expect("release");
+    }
 
     async fn claim(store: &Store0<'_>, key: u8, who: Address, slot: u64) -> Claim {
         let id = relay_id(key);
@@ -826,7 +887,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_bounds_refuse_and_a_release_returns_the_charge_once() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let FundOutcome::Held(first) = reserve(&store, 1, signer(1), 60).await else {
             panic!("within both bounds");
@@ -843,8 +904,15 @@ mod tests {
             reserve(&store, 4, signer(3), 1).await,
             FundOutcome::OverTotal
         );
-        store.release(&first.key, 0).await.expect("release");
-        store.release(&first.key, 0).await.expect("repeat");
+        store
+            .release(Release {
+                key: &first.key,
+                relay_id: &first.relay_id,
+                end: AttemptEnd::Unlanded,
+            })
+            .await
+            .expect("release");
+        release_row(&store, 1).await;
         assert!(matches!(
             reserve(&store, 6, signer(3), 60).await,
             FundOutcome::Held(_)
@@ -857,7 +925,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_funding_keeps_no_charge_and_its_yield_leaves_no_row() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = claim(&store, 1, signer(1), 1).await;
         assert_eq!(
@@ -873,7 +941,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_live_lease_turns_a_second_admission_away_and_a_lapsed_one_fences_its_holder() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let first = claim(&store, 1, signer(1), 10).await;
         let retry = relay_id(9);
@@ -914,7 +982,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_held_row_keeps_its_upload_progress_and_its_charge_across_a_resume() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let first = uploading(&store).await;
         assert_eq!(
@@ -944,7 +1012,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_charge_past_the_allowance_refuses_and_a_write_cannot_spend_the_way_out() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = uploading(&store).await;
         assert_eq!(
@@ -997,7 +1065,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unsent_write_returns_its_fee_and_a_paid_one_keeps_it() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = uploading(&store).await;
         for _ in 0..3 {
@@ -1015,7 +1083,7 @@ mod tests {
         }
         let row = store.get(&held.lease.key).await.expect("read").unwrap();
         assert_eq!(row.uploaded, 0);
-        store.release(&held.lease.key, 0).await.expect("release");
+        release_row(&store, 1).await;
         // Nothing was spent, the whole charge returned.
         assert!(matches!(
             reserve(&store, 2, signer(2), 60).await,
@@ -1029,7 +1097,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_pending_send_keeps_the_row_and_refuses_the_next_send_and_the_binding() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = uploading(&store).await;
         assert_eq!(
@@ -1057,7 +1125,7 @@ mod tests {
             .expect("bind");
         assert_eq!(bound, SpendCheck::LeaseLost);
 
-        store.release(&held.lease.key, 0).await.expect("release");
+        release_row(&store, 1).await;
         let row = store
             .get(&held.lease.key)
             .await
@@ -1068,7 +1136,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_stale_selection_loses_to_a_resumed_upload() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let first = uploading(&store).await;
         store.yield_lease(&first.lease).await.expect("yield");
@@ -1098,9 +1166,187 @@ mod tests {
         );
     }
 
+    /// A bound row has no lease and no age left to refuse, only the generation does.
+    #[tokio::test]
+    async fn a_stale_selection_loses_to_a_row_a_retry_bound() {
+        let database = test_store().await;
+        let store = RelayReservations::new(database.connection());
+        let first = uploading(&store).await;
+        store.yield_lease(&first.lease).await.expect("yield");
+        let [selected] = store
+            .abandoned(LATER, LATER, 8)
+            .await
+            .expect("read")
+            .try_into()
+            .expect("one row");
+
+        let resumed = claim(&store, 1, signer(1), LATER).await;
+        let live = relay_id(9);
+        assert_eq!(
+            store
+                .bind(Bind {
+                    lease: resumed.lease,
+                    relay_id: &live,
+                    fee: 5,
+                    slot: LATER,
+                })
+                .await
+                .expect("bind"),
+            SpendCheck::Accepted
+        );
+        let claim = store
+            .claim_cleanup(ClaimCleanup {
+                held: &selected,
+                slot: LATER + 1,
+                abandoned_before: LATER,
+            })
+            .await
+            .expect("claim");
+
+        assert_eq!(claim, None);
+        let row = store.by_relay(&live).await.expect("read").expect("row");
+        assert_eq!(row.phase, AttemptPhase::Bound);
+    }
+
+    /// A row of the key's earlier attempt, released, then inserted again for another relay.
+    async fn reused_key(store: &Store0<'_>) -> (Reservation, Reservation) {
+        let first = claim(store, 1, signer(1), 1).await;
+        let bound = store
+            .bind(Bind {
+                lease: first.lease,
+                relay_id: &relay_id(1),
+                fee: 0,
+                slot: 1,
+            })
+            .await
+            .expect("bind");
+        assert_eq!(bound, SpendCheck::Accepted);
+        let selected = store.get(&[1; 32]).await.expect("read").expect("row");
+        release_row(store, 1).await;
+
+        let newer = relay_id(2);
+        let Admission::Claimed(second) = store
+            .admit(Admit {
+                key: [1; 32],
+                relay_id: &newer,
+                signer: signer(1),
+                slot: 2,
+            })
+            .await
+            .expect("admit")
+        else {
+            panic!("the key is free");
+        };
+        let bound = store
+            .bind(Bind {
+                lease: second.lease,
+                relay_id: &newer,
+                fee: 0,
+                slot: 2,
+            })
+            .await
+            .expect("bind");
+        assert_eq!(bound, SpendCheck::Accepted);
+        let live = store.get(&[1; 32]).await.expect("read").expect("row");
+        (selected, live)
+    }
+
+    #[tokio::test]
+    async fn a_stale_selection_never_claims_the_next_attempt_of_its_key() {
+        let database = test_store().await;
+        let store = RelayReservations::new(database.connection());
+        let (mut selected, live) = reused_key(&store).await;
+        // The relay id alone must refuse, whatever the generations read.
+        selected.generation = live.generation;
+
+        let claim = store
+            .claim_cleanup(ClaimCleanup {
+                held: &selected,
+                slot: LATER,
+                abandoned_before: LATER,
+            })
+            .await
+            .expect("claim");
+
+        assert_eq!(claim, None);
+        assert_eq!(store.get(&[1; 32]).await.expect("read"), Some(live));
+    }
+
+    #[tokio::test]
+    async fn a_stale_landed_release_never_deletes_the_next_attempt_of_its_key() {
+        let database = test_store().await;
+        let store = RelayReservations::new(database.connection());
+        let (selected, live) = reused_key(&store).await;
+
+        store
+            .release(Release {
+                key: &selected.key,
+                relay_id: &selected.relay_id,
+                end: AttemptEnd::Landed { lamports: 5 },
+            })
+            .await
+            .expect("release");
+
+        assert_eq!(store.get(&[1; 32]).await.expect("read"), Some(live));
+    }
+
+    /// The row is gone and the key's next row starts over, the old holder must not pass as its holder.
+    #[tokio::test]
+    async fn a_stalled_holder_loses_to_the_next_row_of_its_key() {
+        let database = test_store().await;
+        let store = RelayReservations::new(database.connection());
+        let stalled = uploading(&store).await;
+        release_row(&store, 1).await;
+
+        let next = uploading(&store).await;
+
+        assert_ne!(stalled.lease, next.lease);
+        assert_eq!(
+            store
+                .begin_send(write_of(stalled.lease, 7, 5))
+                .await
+                .expect("begin"),
+            SpendCheck::LeaseLost
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unlanded_attempt_keeps_its_fees_on_the_signers_share() {
+        let database = test_store().await;
+        let store = RelayReservations::new(database.connection());
+        let held = claim(&store, 1, signer(1), 1).await;
+        let funded = store
+            .fund(funding(held.lease, 60, BUDGET))
+            .await
+            .expect("fund");
+        assert!(matches!(funded, FundOutcome::Held(_)));
+        assert_eq!(
+            store
+                .begin_send(write_of(held.lease, 7, 10))
+                .await
+                .expect("begin"),
+            SpendCheck::Accepted
+        );
+        assert!(store
+            .conclude_send(&held.lease, &pending(7).signature, SendEnd::Paid, 12)
+            .await
+            .expect("conclude"));
+        release_row(&store, 1).await;
+
+        // The signer's 60 holds the 10 spent, a whole share past it refuses.
+        assert_eq!(
+            reserve(&store, 2, signer(1), 51).await,
+            FundOutcome::OverSigner
+        );
+        assert!(matches!(
+            reserve(&store, 3, signer(1), 50).await,
+            FundOutcome::Held(_)
+        ));
+    }
+
     #[tokio::test]
     async fn a_won_cleanup_stops_the_old_upload_and_turns_a_retry_away() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let first = uploading(&store).await;
         store.yield_lease(&first.lease).await.expect("yield");
@@ -1140,13 +1386,13 @@ mod tests {
             .await
             .expect("admit");
         assert_eq!(admitted, Admission::Busy);
-        store.release(&won.lease.key, 0).await.expect("release");
+        release_row(&store, 1).await;
         assert_eq!(store.get(&won.lease.key).await.expect("read"), None);
     }
 
     #[tokio::test]
     async fn a_bound_row_keeps_its_relay_and_only_the_message_fee_fits() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = uploading(&store).await;
         let live = relay_id(1);
@@ -1184,7 +1430,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_total_keeps_charged_fees_and_landed_rent_and_the_signer_share_returns() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = claim(&store, 1, signer(1), 1).await;
         assert!(matches!(
@@ -1208,7 +1454,14 @@ mod tests {
             SpendCheck::Accepted
         );
         store.charge_landed(&live, 5).await.expect("charge");
-        store.release(&held.lease.key, 15).await.expect("release");
+        store
+            .release(Release {
+                key: &held.lease.key,
+                relay_id: &live,
+                end: AttemptEnd::Landed { lamports: 15 },
+            })
+            .await
+            .expect("release");
         // The total holds 20 of 100 and the signer holds none of 60.
         assert!(matches!(
             reserve(&store, 2, signer(1), 60).await,
@@ -1226,7 +1479,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unfunded_row_answers_for_no_budget() {
-        let database = Store::open("sqlite::memory:", 1).await.expect("store");
+        let database = test_store().await;
         let store = RelayReservations::new(database.connection());
         let held = claim(&store, 1, signer(1), 1).await;
         let live = relay_id(1);
@@ -1243,7 +1496,14 @@ mod tests {
             SpendCheck::Accepted
         );
         store.charge_landed(&live, 5).await.expect("charge");
-        store.release(&held.lease.key, 5).await.expect("release");
+        store
+            .release(Release {
+                key: &held.lease.key,
+                relay_id: &live,
+                end: AttemptEnd::Landed { lamports: 5 },
+            })
+            .await
+            .expect("release");
         assert!(matches!(
             reserve(&store, 2, signer(1), 60).await,
             FundOutcome::Held(_)

@@ -1231,22 +1231,6 @@ export function ringTransactOutput(
   });
 }
 
-/** Bit `i` set when slot `i` carries a scheme 3 body, frame parsing alone reads it. */
-export function exitsBitmap(outputs: readonly Pick<RingOutput, "body">[]): bigint {
-  return outputs.reduce(
-    (bits, output, slot) => (output.body.kind === "exit" ? bits | (1n << BigInt(slot)) : bits),
-    0n,
-  );
-}
-
-/** Bit `i` set when slot `i` carries no body. */
-export function bodilessBitmap(outputs: readonly Pick<RingOutput, "body">[]): bigint {
-  return outputs.reduce(
-    (bits, output, slot) => (output.body.kind === "none" ? bits | (1n << BigInt(slot)) : bits),
-    0n,
-  );
-}
-
 function treeIndex(trees: InputTrees, input: number): number {
   return trees.kind === "one" ? 0 : Number((trees.secondInputs >> BigInt(input)) & 1n);
 }

@@ -39,7 +39,6 @@ impl Store {
 mod tests {
     use super::*;
 
-    /// Each connection of the pool can hold an older schema when a later migration runs.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_fresh_file_migrates_through_a_pool_and_reopens() {
         let directory = std::env::temp_dir().join(format!("store-{}", std::process::id()));

@@ -223,7 +223,7 @@ describe("ring account", () => {
     const data = account();
     const slot = 3n * (1n << 18n) + 7n;
     data.set(u64le(slot), CREATED_SLOT_OFFSET);
-    expect(data).toHaveLength(1093);
+    expect(data).toHaveLength(1092);
     expect(decodeRingPolicy(data)).toMatchObject({
       createdSlot: slot,
       roles: ROLES,
@@ -231,7 +231,7 @@ describe("ring account", () => {
     });
   });
 
-  it("refuses a short layout, a retired discriminator and an unknown mode like Rust `InvalidRingMode`", () => {
+  it("refuses a short layout, a foreign discriminator and an unknown mode like Rust `InvalidRingMode`", () => {
     const data = account();
     expect(() => decodeRingPolicy(data.subarray(0, CREATED_SLOT_OFFSET))).toThrow(
       expect.objectContaining({
@@ -239,9 +239,9 @@ describe("ring account", () => {
         details: { length: CREATED_SLOT_OFFSET, discriminator: 15 },
       }),
     );
-    for (const retired of [10, 13]) {
+    for (const foreign of [10, 13]) {
       const stale = account();
-      stale[0] = retired;
+      stale[0] = foreign;
       expect(() => decodeRingPolicy(stale)).toThrow(
         expect.objectContaining({ code: "RING_POLICY_INVALID" }),
       );
@@ -386,8 +386,8 @@ describe("policy writes", () => {
 
   it("replaces the table with one source per referenced list and the curator registry after", async () => {
     const table = buildRuleTable({ rules: RULES });
-    const [rule] = table.rules;
-    if (rule === undefined) throw new Error("table without its rule");
+    const [rule, denial] = table.rules;
+    if (rule === undefined || denial === undefined) throw new Error("table without its rules");
     const instruction = await updateRingPolicyInstruction({
       ringProgramId: RING,
       authority: AUTHORITY,
@@ -398,7 +398,18 @@ describe("policy writes", () => {
       },
     });
     expect(instruction.data).toEqual(
-      Uint8Array.of(54, 0, 2, ListId.allow, 0, ListId.block, 1, 1, ...encodeRule(rule)),
+      Uint8Array.of(
+        54,
+        0,
+        2,
+        ListId.allow,
+        0,
+        ListId.block,
+        1,
+        2,
+        ...encodeRule(rule),
+        ...encodeRule(denial),
+      ),
     );
     expect(metas(instruction)).toEqual([
       [AUTHORITY, SIGN],

@@ -21,6 +21,20 @@ import {
 import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
 import { SOL_MINT, assetField } from "@heliuslabs/zolana/transaction";
 import { ringIdField } from "../../../src/crypto/derivation/ring-stream.js";
+import {
+  decodeStorageApplyProofInputs,
+  encodeStorageApplyProofInputsRequest,
+} from "../../../src/protocol/indexer/indexer-codec.js";
+import {
+  decodeMergeSettings,
+  encodeMergeSettings,
+  encodeSetMergeSettingsRequest,
+} from "../../../src/protocol/ring-rpc/ring-rpc-codec.js";
+import {
+  RING_AUTHORITY_MAX_INPUTS,
+  RING_AUTHORITY_SHAPES,
+  isRingAuthorityShape,
+} from "../../../src/protocol/transaction/spp.js";
 import { knownUtxoHash, type KnownUtxo } from "../../../src/operations/audit/audit.js";
 import { passkeyReader } from "../../../src/crypto/keys/passkey.js";
 import {
@@ -1595,5 +1609,66 @@ describe("ring read request", () => {
         addressBytes(authority.address),
       ),
     ).toBe(true);
+  });
+});
+
+describe("merge settings", () => {
+  const settings = { mint: SOL_MINT, targetNoteCount: 4, minAverageAmount: 9n };
+
+  it("writes the Rust request fields and reads the Rust response", () => {
+    const owner = "11111111111111111111111111111112" as Address;
+    const request = encodeSetMergeSettingsRequest({
+      ring: owner,
+      owner,
+      settings,
+      timestamp: 7n,
+      nonce: "AAAA" as never,
+      signature: "1".repeat(64) as never,
+    });
+    expect(Object.keys(request)).toEqual([
+      "ring",
+      "owner",
+      "settings",
+      "timestamp",
+      "nonce",
+      "signature",
+    ]);
+    expect(decodeMergeSettings(encodeMergeSettings(settings))).toEqual(settings);
+  });
+
+  it("refuses a note count past u32", () => {
+    expect(() =>
+      decodeMergeSettings({ ...encodeMergeSettings(settings), targetNoteCount: 2 ** 32 }),
+    ).toThrow();
+  });
+});
+
+describe("storage apply proof inputs", () => {
+  it("writes each write under the Rust `StorageWriteView` keys", () => {
+    const registry = "11111111111111111111111111111112" as Address;
+    const request = encodeStorageApplyProofInputsRequest({
+      registry,
+      writes: [{ member: registry as never, mask: 1n, value: 1n, mintPolicy: null }],
+    });
+    expect(request["registry"]).toBe(registry);
+    expect(Object.keys((request["writes"] as readonly object[])[0] ?? {})).toEqual([
+      "member",
+      "mask",
+      "value",
+      "mintPolicy",
+    ]);
+  });
+
+  it("refuses a response missing a field", () => {
+    expect(() => decodeStorageApplyProofInputs({ revision: 1 })).toThrow();
+  });
+});
+
+describe("isRingAuthorityShape", () => {
+  it("holds the authority widths and no other", () => {
+    const [shape] = RING_AUTHORITY_SHAPES;
+    if (shape === undefined) throw new Error("no authority shape");
+    expect(isRingAuthorityShape(shape)).toBe(true);
+    expect(isRingAuthorityShape({ ...shape, inputs: RING_AUTHORITY_MAX_INPUTS + 1 })).toBe(false);
   });
 });

@@ -4,6 +4,8 @@
 mod attempts;
 #[path = "common/relay.rs"]
 mod relay_fixture;
+#[path = "common/store.rs"]
+mod store_fixture;
 #[path = "common/wide_frame.rs"]
 mod wide_frame;
 
@@ -32,15 +34,15 @@ use zolana_ring_client::rpc::{
     GET_RELAY_STATUS, PREPARE_RELAY, SUBMIT_RELAY,
 };
 use zolana_ring_rpc::{
-    relay_module, Relay, RelayBudget, RelayError, RelayParts, RingRpcError, ServedRings, Store,
-    ABANDONED_AFTER_SLOTS,
+    relay_module, Migrator, Relay, RelayBudget, RelayError, RelayParts, RingRpcError, ServedRings,
+    Store, ABANDONED_AFTER_SLOTS, STORE_CONNECTIONS,
 };
 
 use wide_frame::wide_frame;
 
 use relay_fixture::{
-    anonymous_rail, deposit_request, proof_inputs, signed_request, signers_verify, RecordingChain,
-    RecordingProver, LAST_VALID_BLOCK_HEIGHT, RENT_LAMPORTS, SLOT,
+    anonymous_rail, deposit_request, owner_wallet, proof_inputs, signed_request, signers_verify,
+    RecordingChain, RecordingProver, LAST_VALID_BLOCK_HEIGHT, RENT_LAMPORTS, SLOT,
 };
 
 const RING: Address = Address::new_from_array([6; 32]);
@@ -88,7 +90,7 @@ impl Fixture {
         let chain = Arc::new(RecordingChain::default());
         let fee_payer = Keypair::new_from_array([31; 32]);
         let fee_payer_address = fee_payer.pubkey();
-        let store = Store::open("sqlite::memory:", 1).await.expect("store");
+        let store = store_fixture::test_store().await;
         let relay = Relay::new(RelayParts {
             store: store.clone(),
             prover: prover.clone(),
@@ -117,10 +119,25 @@ impl Fixture {
         connection
             .query_one(Statement::from_string(
                 connection.get_database_backend(),
-                "SELECT COALESCE(SUM(lamports), 0) AS total FROM relay_reservations".to_owned(),
+                "SELECT CAST(COALESCE(SUM(lamports), 0) AS BIGINT) AS total FROM relay_reservations"
+                    .to_owned(),
             ))
             .await
             .expect("sum")
+            .expect("row")
+            .try_get("", "total")
+            .expect("total")
+    }
+
+    async fn row_count(&self) -> i64 {
+        let connection = self.store.connection();
+        connection
+            .query_one(Statement::from_string(
+                connection.get_database_backend(),
+                "SELECT COUNT(*) AS total FROM relay_reservations".to_owned(),
+            ))
+            .await
+            .expect("count")
             .expect("row")
             .try_get("", "total")
             .expect("total")
@@ -132,7 +149,8 @@ impl Fixture {
         connection
             .query_one(Statement::from_sql_and_values(
                 connection.get_database_backend(),
-                "SELECT COALESCE(SUM(committed), 0) AS total FROM relay_reserved WHERE scope=$1",
+                "SELECT CAST(COALESCE(SUM(committed), 0) AS BIGINT) AS total FROM relay_reserved \
+                 WHERE scope=$1",
                 vec![vec![0u8; 32].into()],
             ))
             .await
@@ -261,7 +279,7 @@ async fn a_deposit_relays_through_the_depositors_signature() {
     let fixture = Fixture::new().await;
     let quote = fixture.quote(RelayOperation::Deposit).await;
     let depositor = Keypair::new_from_array([41; 32]);
-    let request = deposit_request(quote, RING, depositor.pubkey(), 700);
+    let request = deposit_request(quote, RING, &depositor, 700);
 
     let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
 
@@ -295,6 +313,33 @@ async fn a_deposit_relays_through_the_depositors_signature() {
             slot: SLOT + 1,
         }
     );
+}
+
+#[tokio::test]
+async fn an_unsigned_deposit_reaches_no_prover_and_stores_nothing() {
+    let fixture = Fixture::new().await;
+    let quote = fixture.quote(RelayOperation::Deposit).await;
+    let depositor = Keypair::new_from_array([41; 32]);
+    let mut request = deposit_request(quote, RING, &depositor, 700);
+    let RelayIntent::Deposit {
+        proof_inputs,
+        depositor_signature,
+    } = &mut request.intent
+    else {
+        panic!("a deposit request");
+    };
+    *depositor_signature = Keypair::new_from_array([43; 32])
+        .sign_message(&proof_inputs.deposit_request_digest())
+        .into();
+
+    let refused = fixture.prepare(&request).await;
+
+    assert!(
+        refused_with(&refused, RelayError::DepositorSignature),
+        "{refused:?}"
+    );
+    assert!(fixture.prover.requests.lock().expect("requests").is_empty());
+    assert_eq!(fixture.row_count().await, 0);
 }
 
 const TRACKING_REGISTRY: Address = Address::new_from_array([0x71; 32]);
@@ -381,6 +426,34 @@ async fn an_enrollment_relays_through_the_owners_signature() {
         })
         .expect("the enrollment");
     assert_eq!(instruction.data, [6, 1, 2, 3]);
+}
+
+#[tokio::test]
+async fn an_enrollment_whose_proof_fails_holds_no_budget() {
+    let fixture = Fixture::with_budget(ENROLLMENT_LAMPORTS).await;
+    let owner = Keypair::new_from_array([42; 32]);
+    let quote = fixture.quote(RelayOperation::Enroll).await;
+    let request = enrollment(&owner, vec![6, 1, 2, 3], quote);
+    fixture
+        .prover
+        .refuse_enrollment
+        .store(true, Ordering::Relaxed);
+
+    let refused = fixture.prepare(&request).await;
+
+    assert!(
+        refused_with(&refused, RelayError::InvalidEnrollment),
+        "{refused:?}"
+    );
+    assert_eq!(fixture.committed().await, 0);
+    assert_eq!(fixture.row_count().await, 0);
+
+    fixture
+        .prover
+        .refuse_enrollment
+        .store(false, Ordering::Relaxed);
+    fixture.prepare(&request).await.expect("a verified proof");
+    assert_eq!(fixture.committed().await, ENROLLMENT_LAMPORTS as i64);
 }
 
 fn refused_with(refused: &Result<RelayStep, jsonrpsee::MethodsError>, error: RelayError) -> bool {
@@ -510,19 +583,36 @@ async fn a_merge_relays_with_one_wallet_call() {
         nullifier_key: NullifierKey::from_secret(*spends.nullifier_key.secret()),
         inputs: spends.inputs.iter().map(note).collect(),
     };
-    let request = PrepareRelayRequest {
+    let proof_inputs = ProofInputBytes::new(merge.encode().expect("encode"));
+    let owner_signature = owner_wallet()
+        .sign_message(&proof_inputs.merge_request_digest())
+        .into();
+    let signed_by = |owner_signature| PrepareRelayRequest {
         ring: RING.into(),
-        quote,
+        quote: quote.clone(),
         intent: RelayIntent::Merge {
-            proof_inputs: ProofInputBytes::new(merge.encode().expect("encode")),
+            proof_inputs: proof_inputs.clone(),
+            owner_signature,
         },
         co_signers: Vec::new(),
     };
+    let stranger = Keypair::new_from_array([43; 32])
+        .sign_message(&proof_inputs.merge_request_digest())
+        .into();
 
-    let step: RelayStep = fixture.call(PREPARE_RELAY, &request).await;
+    let refused = fixture.prepare(&signed_by(stranger)).await;
+    assert!(
+        refused_with(&refused, RelayError::OwnerSignature),
+        "{refused:?}"
+    );
+    assert!(fixture.prover.requests.lock().expect("requests").is_empty());
+
+    let step: RelayStep = fixture
+        .call(PREPARE_RELAY, &signed_by(owner_signature))
+        .await;
 
     let RelayStep::Submitted { relay_id } = step else {
-        panic!("a merge needs no wallet signature, got {step:?}");
+        panic!("a signed merge sends at once, got {step:?}");
     };
     let [sent] = fixture.sent().try_into().expect("one sent transaction");
     assert_eq!(sent.signatures.len(), 1);
@@ -615,7 +705,8 @@ async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_defau
         Fixture::new().await,
         Fixture::with_budget(RENT_LAMPORTS).await,
     ] {
-        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+        *fixture.prover.frame.lock().expect("frame") =
+            Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         let quote = fixture.quote(RelayOperation::Anonymous).await;
         let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
         let refused = fixture.prepare(&request).await;
@@ -629,7 +720,8 @@ async fn a_frame_over_budget_is_refused_before_any_write_and_budget_off_by_defau
 #[tokio::test]
 async fn a_retried_frame_resumes_its_upload_and_is_charged_once() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    *fixture.prover.frame.lock().expect("frame") =
+        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     fixture.chain.refuse_at.store(1, Ordering::Relaxed);
     let quote = fixture.quote(RelayOperation::Anonymous).await;
     let request = signed_request(quote, &proof_inputs(RING, anonymous_rail()));
@@ -676,7 +768,8 @@ async fn a_crash_between_reserve_and_upload_is_swept_after_a_restart() {
     use custom_ring_interface::tag as ring_tag;
     for buffer_landed in [false, true] {
         let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-        *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+        *fixture.prover.frame.lock().expect("frame") =
+            Some(wide_frame(custom_ring_interface::tag::TRANSFER));
         fixture
             .chain
             .refuse_at
@@ -820,13 +913,20 @@ fn delegate_request(
 }
 
 fn delegate_inputs(delegate: Address) -> RelayProofInputs {
-    proof_inputs(RING, RelayRail::Delegate { delegate, plan: None })
+    proof_inputs(
+        RING,
+        RelayRail::Delegate {
+            delegate,
+            plan: None,
+        },
+    )
 }
 
 #[tokio::test]
 async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    *fixture.prover.frame.lock().expect("frame") =
+        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let quote = fixture.quote(RelayOperation::Delegate).await;
     let request = delegate_request(quote, &delegate_inputs(delegate.pubkey()), &delegate);
@@ -853,7 +953,8 @@ async fn a_wide_delegate_frame_relays_under_the_delegates_signature_and_share() 
 #[tokio::test]
 async fn an_unsigned_or_foreign_delegate_request_consumes_nothing() {
     let fixture = Fixture::with_budget(FRAME_BUDGET).await;
-    *fixture.prover.frame.lock().expect("frame") = Some(wide_frame(custom_ring_interface::tag::TRANSFER));
+    *fixture.prover.frame.lock().expect("frame") =
+        Some(wide_frame(custom_ring_interface::tag::TRANSFER));
     let delegate = ring_delegate();
     let stranger = Keypair::new_from_array([52; 32]);
     let quote = fixture.quote(RelayOperation::Delegate).await;
@@ -944,6 +1045,11 @@ async fn token_account_setup_reserves_the_rent_of_a_missing_account() {
             .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
             .await;
         assert_eq!(fixture.outstanding().await, 0);
+        // A live account takes no create, an owner closing it later finds no rent to spend.
+        assert_eq!(
+            fixture.sent()[0].message.instructions().len(),
+            if exists { 1 } else { 2 }
+        );
         let fee = i64::from(fixture.sent()[0].message.header().num_required_signatures) * 5_000;
         let kept = if exists {
             0

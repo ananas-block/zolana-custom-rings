@@ -138,18 +138,22 @@ export function sealedWide(spend: TransferSpend, hasData: boolean): boolean {
   );
 }
 
-/** What a wallet counts ahead of its reads on a table with a salted list, Rust `UnreadSubjects`. */
+/** What a wallet counts ahead of its reads under a written policy, Rust `UnreadSubjects`. */
 export interface UnreadSubjects {
   /** Distinct live input and output owners, plus one per leg since a destination stays unread. */
   readonly owners: number;
   /** Distinct live input, output and public assets. */
   readonly assets: number;
+  /** The table reads a salted list, an owner may then open a salted record and a tracking row. */
+  readonly salted: boolean;
 }
 
-/** The widest read of these subjects, every owner enrolled with a public and a salted record. */
+/** The widest read of these subjects, every owner enrolled with a public and a salted record on a salted table. */
 export function unreadSubjectPools(subjects: UnreadSubjects): PolicyPoolCapacity {
-  const records = 2 * subjects.owners + subjects.assets;
-  return Object.freeze({ own: records, curator: records, tracking: subjects.owners });
+  const records = (subjects.salted ? 2 : 1) * subjects.owners + subjects.assets;
+  // Rows and output owners fit the tracking pool by the shape, no owner reads a row.
+  const tracking = subjects.salted ? subjects.owners : 0;
+  return Object.freeze({ own: records, curator: records, tracking });
 }
 
 /** The one transfer key serving the spend, `undefined` when the catalog keys none. */
@@ -167,13 +171,9 @@ export function signerSlots(circuit: TransferKeyCircuit): number {
 export function transferPoolCapacity(circuit: TransferKeyCircuit): PolicyPoolCapacity {
   // Withdrawals settle through the public slots, their assets are at most N_PUBLIC_SLOTS.
   const withdrawalAssets = Math.min(circuit.withdrawals, N_PUBLIC_SLOTS);
-  // A zero value input can name any asset, every input slot takes its own row.
-  const distinct =
-    circuit.owners +
-    2 * circuit.outputs +
-    circuit.withdrawals +
-    saltedKeys(circuit) +
-    circuit.class;
+  // An input slot takes no row, its asset reads a payment's record or a free one and a spend past
+  // the rows selects the wide key.
+  const distinct = circuit.owners + 2 * circuit.outputs + circuit.withdrawals + saltedKeys(circuit);
   return Object.freeze({
     own: distinct + Math.max(withdrawalAssets, N_PUBLIC_SLOTS),
     curator: distinct + withdrawalAssets,

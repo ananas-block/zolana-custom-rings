@@ -120,7 +120,6 @@ export type RootReader = "transfer" | "delegateTransfer" | "deposit" | "merge";
 /** Rust `GRACE_SLOTS`, the grace a new storage registry gives an outgoing root. */
 export const GRACE_SLOTS = 750n;
 
-/** Byte 1 is retired, never reuse it. */
 const RING_MODES: Readonly<Record<number, RingMode>> = { 0: "confidential", 2: "anonymous" };
 export const RING_CO_SIGNER_DISCRIMINATOR = 14;
 export const RING_CO_SIGNER_SIZE = 35;

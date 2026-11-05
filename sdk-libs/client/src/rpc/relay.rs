@@ -5,6 +5,8 @@ use spr_indexer_api::{Base64String, Hash, SerializablePubkey, SerializableSignat
 use zeroize::Zeroizing;
 
 const RELAY_DOMAIN: &[u8] = b"zolana/ring-rpc-relay";
+const DEPOSIT_REQUEST_DOMAIN: &[u8] = b"zolana/ring-rpc-relay-deposit";
+const MERGE_REQUEST_DOMAIN: &[u8] = b"zolana/ring-rpc-relay-merge";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,10 +73,16 @@ pub enum RelayIntent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         token_account_setup: Vec<TokenAccountSetup>,
     },
-    /// `proof_inputs` is a `RelayDepositInputs`.
-    Deposit { proof_inputs: ProofInputBytes },
-    /// `proof_inputs` is a `RelayMergeInputs`.
-    Merge { proof_inputs: ProofInputBytes },
+    /// `proof_inputs` is a `RelayDepositInputs`, the depositor signs its digest here and the returned message later.
+    Deposit {
+        proof_inputs: ProofInputBytes,
+        depositor_signature: SerializableSignature,
+    },
+    /// `proof_inputs` is a `RelayMergeInputs`, the owner signs its digest here.
+    Merge {
+        proof_inputs: ProofInputBytes,
+        owner_signature: SerializableSignature,
+    },
     /// `proof_inputs` is a `RelayEnrollInputs`, the owner signs its digest here and the returned message later.
     Enroll {
         proof_inputs: ProofInputBytes,
@@ -186,8 +194,8 @@ impl RelayIntent {
             Self::Anonymous { proof_inputs, .. }
             | Self::Confidential { proof_inputs, .. }
             | Self::Delegate { proof_inputs, .. }
-            | Self::Deposit { proof_inputs }
-            | Self::Merge { proof_inputs }
+            | Self::Deposit { proof_inputs, .. }
+            | Self::Merge { proof_inputs, .. }
             | Self::Enroll { proof_inputs, .. } => proof_inputs,
         }
     }
@@ -217,6 +225,25 @@ impl ProofInputBytes {
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+
+    /// The depositor's signature over it spends the relay's proving, it names no quote so a retry keeps it.
+    pub fn deposit_request_digest(&self) -> [u8; 32] {
+        self.request_digest(DEPOSIT_REQUEST_DOMAIN)
+    }
+
+    /// The owner's signature over it spends the relay's proving, it names no quote so a retry keeps it.
+    pub fn merge_request_digest(&self) -> [u8; 32] {
+        self.request_digest(MERGE_REQUEST_DOMAIN)
+    }
+
+    /// Every byte the relay would prove from, the secrets among them stay behind SHA-256.
+    fn request_digest(&self, domain: &[u8]) -> [u8; 32] {
+        Sha256::new()
+            .chain_update(domain)
+            .chain_update(&*self.0)
+            .finalize()
+            .into()
     }
 }
 

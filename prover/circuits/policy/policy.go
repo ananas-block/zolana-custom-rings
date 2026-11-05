@@ -1,12 +1,32 @@
 // Package policy proves a custom ring's policy over a transaction SPP proves.
 //
-// Screen proves these properties over the slots SPP hashes and the roots the statement binds.
-// While Screened, the rules are the table the program hashed at policy_hash.
-// Every live sender, payment owner, payment asset and input asset reads its list bits from a record the policy root of its source holds, present or proven absent by its predecessor.
-// Every sender rule holds over every live row, every owner and asset rule over every live payment within its guard, and every unconditional asset rule over every live input's asset.
-// Payment totals read output and withdrawal amounts, an input's amount only nets a same ring receipt of its own owner and asset.
-// While Outflow is set the caps hold and Screening carries the approval bits the flows reach.
-// The authority rail clears Screened and Outflow, no rule binds on it. The merge circuit reads no policy.
+// SPP authorizes a spend and conserves each asset, and it reads no list, threshold or cap. A ring's
+// policy is a rule table over member lists and a mint record per asset. The rules read private owners,
+// assets and amounts, so the program cannot run them and the proof does. Without the package a ring's
+// allow lists, block lists, guards and caps would hold nothing on a private transfer.
+//
+// Read after transfer/transfer.go, shared/utxo.go, registry/registry.go, policy/record_pool.go,
+// policy/tracking.go, transfer/owners.go. Read before, in call order, policy/screen.go,
+// policy/withdrawals.go, policy/table.go, policy/subjects.go, policy/rules.go, policy/comparator.go,
+// policy/outflow.go, policy/deposit.go.
+//
+// Screen proves these properties over the slots SPP hashes and the roots the statement binds. Properties 2 to 5 hold while Screened.
+//  1. While Screened, the rules are the table the program hashed at policy_hash.
+//  2. Every live sender, payment owner, payment asset and input asset reads its list bits from a record
+//     the policy root of its source holds, present or proven absent by its predecessor.
+//  3. An enrolled owner reads a private list at the one salted key its tracking row fixes, only an owner
+//     proven absent under the tracking root skips the read.
+//  4. Every sender rule holds over every live row, every owner rule over every live payment's nonzero
+//     owner and every asset rule over every live payment within its guard, and every unconditional asset
+//     rule over every live input's asset.
+//  5. Payment totals read output and withdrawal amounts, an input's amount only nets a same ring
+//     receipt of its own owner and asset.
+//  6. While Outflow is set the caps hold and Screening carries the approval bits the flows reach.
+//  7. The authority rail clears Screened and Outflow, no rule binds on it. The merge circuit reads no policy.
+//
+// The properties rely on what the package cannot see. The program validates the table at write time,
+// reads each root live, refuses a tracking root below a salted source's floor, folds the gross and reads
+// the legs. Package transfer ties the slots to SPP and gives every live input owner a row.
 package policy
 
 import (
@@ -21,7 +41,7 @@ import (
 type PolicyInputs struct {
 	// Senders counts the owners the key screens, Outputs the slots, the pool holds a row for each.
 	Senders, Outputs int `gnark:"-"`
-	// Spent counts the input slots, the pools hold a row for each slot's asset.
+	// Spent counts the input slots, each queries the pools by its asset and takes no row.
 	Spent int `gnark:"-"`
 	// SaltedKeys widens each pool past its public subjects.
 	SaltedKeys      int `gnark:"-"`
@@ -40,6 +60,7 @@ type PolicyInputs struct {
 	Table
 }
 
+// Policy adds the private wires of the record pools, the entries are prover chosen indexes and a query checks what each one reads.
 type Policy struct {
 	PolicyInputs
 	OwnRecords      []registry.Record

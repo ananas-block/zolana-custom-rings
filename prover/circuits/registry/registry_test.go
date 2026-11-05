@@ -11,7 +11,6 @@ import (
 
 	"github.com/helius-labs/zolana-custom-rings/prover/circuits/registry"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest"
-	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringkey"
 	"github.com/helius-labs/zolana-custom-rings/prover/ringtest/ringregistry"
 )
 
@@ -73,41 +72,5 @@ func TestQuadPathRejectsAnotherIndex(t *testing.T) {
 			err := test.IsSolved(&rootCircuit{}, &rootCircuit{Root: members.Root(), Leaf: opening.Record.Hash(t), Path: path}, ecc.BN254.ScalarField())
 			ringtest.RequireRefused(t, err, tc.frames...)
 		})
-	}
-}
-
-type presentCount struct {
-	Root, Member frontend.Variable
-	Opening      registry.QuadRecordOpening
-}
-
-func (c *presentCount) Define(api frontend.API) error {
-	c.Opening.AssertPresent(api, 1, c.Root, c.Member)
-	return nil
-}
-
-type memberCount struct {
-	Root, Member frontend.Variable
-	Opening      registry.QuadOpening
-}
-
-func (c *memberCount) Define(api frontend.API) error {
-	c.Opening.Resolve(api, 1, c.Root, c.Member)
-	return nil
-}
-
-// The policy budgets and the deposit and merge pins assume these opening costs.
-func TestOpeningConstraintCounts(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		circuit frontend.Circuit
-		pinned  int
-	}{
-		{"present", &presentCount{}, 3504},
-		{"member", &memberCount{}, 3794},
-	} {
-		if got := ringkey.Compile(t, tc.circuit).GetNbConstraints(); got != tc.pinned {
-			t.Errorf("%s opening constraints=%d, pinned %d", tc.name, got, tc.pinned)
-		}
 	}
 }

@@ -244,7 +244,10 @@ describe("the transfer reader", () => {
       bytes.set(ViewingKey.generate().secretBytes(), 0);
     });
     expect(() => audited(entry, { envelope: forged })).toThrow(
-      expect.objectContaining({ code: "RING_AUDIT_KEY_MISMATCH" }),
+      expect.objectContaining({
+        code: "RING_AUDIT_KEY_MISMATCH",
+        details: { transactionId: expect.any(String) },
+      }),
     );
   });
 

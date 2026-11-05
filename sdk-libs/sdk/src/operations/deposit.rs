@@ -298,11 +298,17 @@ impl RingDeposit<'_> {
             audit_ephemeral_key: note.encryption.ephemeral_sk.clone(),
         }
         .encode()?;
+        let proof_inputs = ProofInputBytes::new(proof_inputs);
+        let depositor_signature = self
+            .payer
+            .try_sign_message(&proof_inputs.deposit_request_digest())?
+            .into();
         Ok(PreparedRelay::new(PrepareRelayRequest {
             ring: SerializablePubkey(self.ring.program_id()),
             quote,
             intent: RelayIntent::Deposit {
-                proof_inputs: ProofInputBytes::new(proof_inputs),
+                proof_inputs,
+                depositor_signature,
             },
             co_signers: Vec::new(),
         })
@@ -767,10 +773,6 @@ impl DisclosedOwner {
             Self::Confidential(_) => Ok(()),
         }
     }
-
-    fn is_anonymous(self) -> bool {
-        matches!(self, Self::Anonymous(_))
-    }
 }
 
 impl DepositAssembly<'_> {
@@ -1001,7 +1003,6 @@ impl DepositDisclosure {
         let curator = records.curator();
         let public_input_hash = DepositPublicInput {
             context_hash: &self.context_hash,
-            anonymous: self.owner.is_anonymous(),
             owner_utxo_hashes: &[self.owner_utxo_hash],
             ciphertexts: &self.encryption.ciphertexts,
             assets: &[self.asset],
@@ -1032,7 +1033,6 @@ impl DepositDisclosure {
             public_input_hash,
             context_hash: self.context_hash,
             count: 1,
-            anonymous: self.owner.is_anonymous(),
             owner_pk_hashes: slotted(self.owner_pk_hash),
             owner_keys: slotted(self.owner.key()),
             nullifier_pks: slotted(self.nullifier_pk),

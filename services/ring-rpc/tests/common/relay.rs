@@ -25,8 +25,8 @@ use spr_transaction::{
     Utxo,
 };
 use zolana_ring_client::rpc::{
-    PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayIntent, RelayProofInputs,
-    RelayQuote, RelayRail,
+    PrepareRelayRequest, ProofInputBytes, RelayDepositInputs, RelayEnrollInputs, RelayIntent,
+    RelayProofInputs, RelayQuote, RelayRail,
 };
 use zolana_ring_rpc::{
     ChainOutcome, ChainSubmit, DelegateSeal, LatestBlockhash, ProvenRelay, RelayError,
@@ -46,6 +46,7 @@ pub struct RecordingProver {
     pub co_signers: Option<Vec<Address>>,
     /// The next proven transfer's data, a frame past one transaction.
     pub frame: Mutex<Option<Vec<u8>>>,
+    pub refuse_enrollment: AtomicBool,
 }
 
 #[async_trait]
@@ -98,6 +99,13 @@ impl RelayProver for RecordingProver {
         _parties: RelayParties,
     ) -> Result<RelayProofInputs, RingRpcError> {
         unreachable!("the wallet seals its own transfer")
+    }
+
+    async fn check_enrollment(&self, _enrollment: &RelayEnrollInputs) -> Result<(), RingRpcError> {
+        match self.refuse_enrollment.load(Ordering::Relaxed) {
+            true => Err(RelayError::InvalidEnrollment.into()),
+            false => Ok(()),
+        }
     }
 }
 
@@ -294,17 +302,17 @@ pub fn proof_inputs(ring: Address, rail: RelayRail) -> RelayProofInputs {
     }
 }
 
-/// A SOL deposit to the owner, the depositor signs its funding after the relay proves.
+/// A SOL deposit to the owner, the depositor signs the request and later its funding.
 pub fn deposit_request(
     quote: RelayQuote,
     ring: Address,
-    depositor: Address,
+    depositor: &solana_keypair::Keypair,
     amount: u64,
 ) -> PrepareRelayRequest {
     let deposit = RelayDepositInputs {
         ring_program_id: ring,
         tree: Address::new_from_array([42; 32]),
-        depositor,
+        depositor: depositor.pubkey(),
         recipient: owner().shielded_address().expect("address"),
         list_salt: [0; 32],
         asset: DepositAsset::Sol,
@@ -318,11 +326,16 @@ pub fn deposit_request(
         blinding_secret: zeroize::Zeroizing::new([47; 32]),
         audit_ephemeral_key: zeroize::Zeroizing::new([48; 32]),
     };
+    let proof_inputs = ProofInputBytes::new(deposit.encode().expect("encode"));
+    let depositor_signature = depositor
+        .sign_message(&proof_inputs.deposit_request_digest())
+        .into();
     PrepareRelayRequest {
         ring: ring.into(),
         quote,
         intent: RelayIntent::Deposit {
-            proof_inputs: ProofInputBytes::new(deposit.encode().expect("encode")),
+            proof_inputs,
+            depositor_signature,
         },
         co_signers: Vec::new(),
     }

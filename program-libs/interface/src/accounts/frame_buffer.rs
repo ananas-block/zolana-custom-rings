@@ -1,3 +1,19 @@
+//! A frame too large for one transaction, written to a buffer over several and settled by its digest.
+//!
+//! SPP sees no buffer. `SettleBuffered` runs the same transfer path over the buffered bytes, and a self
+//! CPI event carries the frame so a reader recovers it after the buffer closes. A buffer moves bytes
+//! alone and passes neither the address ceiling nor the CPI data ceiling.
+//!
+//! Read after `program-libs/interface/src/instructions/transact.rs`. Read before
+//! `programs/custom-ring/src/instructions/settlement/frame_buffer.rs`.
+//!
+//! Guarantees:
+//! 1. Every signer of the settling message signs the frame's digest, and the digest covers each byte, unwritten ones as zero, so a byte changed after a signature fails the settle.
+//! 2. Only the buffer's writer writes it, and the settling transfer holds the SPP payer to that writer, so the anonymous party check covers the writer.
+//!
+//! Relies on:
+//! 1. A reader of [`SettledFrame`] takes `settle` and `event` from one successful transaction, the event from the inner instructions of that settle.
+
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
 use spr_hasher::{Hasher, Sha256};
@@ -48,6 +64,7 @@ impl<'a> FrameBuffer<'a> {
         }
         Ok(Self {
             header,
+            // The header's last byte is the event tag, so the event needs no copy.
             event: &data[FRAME_BUFFER_HEADER_LEN - 1..],
         })
     }

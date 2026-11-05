@@ -1,4 +1,23 @@
+//! The tracking registry, one sorted tree per ring naming each enrolled owner's nullifier key, viewing key and list tag.
+//!
+//! An SPP sender names any nullifier key on an output, and SPP never sees the secret behind it. A
+//! ring's auditor must compute each nullifier, so each owner enrolls once with a proof that seals the
+//! nullifier secret and the list salt to the auditor key. Every transfer, deposit and merge proof then
+//! holds a live ring slot's key, other than `ZERO_NULLIFIER_PUBKEY`, to its owner's row under the tracking
+//! root, and an output under that key to an absent row. Without the row a sender could pay a key the auditor cannot
+//! open, and a wallet could skip its salted lists.
+//!
 //! A ring pins its tracking registry's address, `ring_id` and the seeds authenticate nothing.
+//!
+//! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/storage.rs`.
+//! Read before `programs/storage/src/instructions/enroll.rs`, `programs/storage/src/instructions/apply_enrollments.rs`,
+//! `prover/circuits/registry/tracking.go`, `prover/circuits/policy/tracking.go`.
+//!
+//! Invariants:
+//! 1. An authorization's nullifier key, list tag, ephemeral key and ciphertext never move after creation, `rotate` refuses a change and `ApplyEnrollmentsCircuit` keeps the row's nullifier key, ciphertext hash and list tag.
+//! 2. Enrollment refuses `ZERO_NULLIFIER_PUBKEY` and proves every key a Poseidon output, so a present row's key is nonzero, and the policy circuit reads presence from the literal zero an absent query returns.
+//! 3. A pending authorization grants nothing, because every check reads the root.
+//! 4. A retired tracking root keeps a program constant's grace and a full history refuses the apply. A source's `tracking_floor` is the one exception, and only on a salted read.
 
 use bytemuck::{Pod, Zeroable};
 use solana_address::Address;
@@ -23,6 +42,7 @@ use crate::{
     STORAGE_PROGRAM_ID, TAGGED_X25519_KEY_LEN, VIEWING_PUBKEY_TAG,
 };
 
+/// Taller than a policy tree, anyone can pay to fill it and no tree replaces a full one.
 pub const TRACKING_QUAD_HEIGHT: usize = 13;
 pub const TRACKING_CAPACITY: u64 = 1 << (2 * TRACKING_QUAD_HEIGHT);
 /// Fixed by the program, no write shortens a retired tracking root's service.
@@ -42,6 +62,7 @@ pub struct TrackingRegistry {
     pub ring_id: [u8; 32],
     /// Immutable, enrollment proofs seal to it.
     pub auditor_pubkey: [u8; TAGGED_X25519_KEY_LEN],
+    /// Little endian, the leaf the next new owner takes.
     pub next_index: [u8; 4],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
@@ -56,9 +77,12 @@ pub struct TrackingAuthorization {
     pub owner: Address,
     /// Final after creation, with `list_tag` and the ciphertext.
     pub nullifier_pk: [u8; 32],
+    /// `Poseidon(CRPT, list_salt)`, a policy proof opens the owner's salted key through it.
     pub list_tag: [u8; 32],
+    /// Moves at each rotation, the leaf hash binds it and no transfer proof reads it.
     pub viewing_u: [u8; 32],
     pub eph_u: [u8; 32],
+    /// The nullifier secret and the list salt sealed to the registry's auditor key.
     pub ciphertext: [u8; REGISTER_KEY_CIPHERTEXT_LEN],
     /// Little endian, moves by one at every enrollment.
     pub revision: [u8; 8],
@@ -225,7 +249,8 @@ impl TrackingAuthorization {
         self.applied_revision() < self.revision()
     }
 
-    /// Writes nothing on a refusal, only the viewing key and the revision move.
+    /// Writes nothing on a refusal, only the viewing key and the revision move. The owner's signature
+    /// alone authorizes it, so no proof seals a new secret and every sealed field stays as it was.
     pub fn rotate(&mut self, ix: &EnrollIxData) -> Result<(), StorageError> {
         if ix.nullifier_pk != self.nullifier_pk
             || ix.list_tag != self.list_tag

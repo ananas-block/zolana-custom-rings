@@ -153,18 +153,6 @@ impl CustomRing {
         self.policy(rpc).await?.ok_or(RingError::MissingRingPolicy)
     }
 
-    /// `None` on an audit-only ring.
-    pub async fn pinned_policy(
-        self,
-        rpc: &(impl AsyncRpc + ?Sized),
-    ) -> Result<Option<PinnedPolicy>, RingError> {
-        let config = self.require_config(rpc).await?;
-        if !config.has_policy {
-            return Ok(None);
-        }
-        PinnedPolicy::of(config.account()).map(Some)
-    }
-
     /// `None` when `signer` holds no record.
     pub async fn co_signer(
         self,

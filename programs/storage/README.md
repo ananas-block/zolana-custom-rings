@@ -14,7 +14,7 @@ The authority hands the registry to a new authority with `UpdateAuthority`. Both
 
 ## Salted lists
 
-A registry created with a nonzero `tracking_registry`, a ring's own or a curator's, may back a salted list. Its writes are ordinary record writes under salted member keys. A zero grace update on it takes the pinned registry as a third account and stores that registry's newest revision as `tracking_floor`, and a ring refuses a frame reading the source under an older tracking root through `check_tracking_revision`. A stale root could otherwise prove a blocked owner unenrolled. The ring also compares `tracking_registry` to its own pin, because this program does not know which ring a source serves.
+A registry created with a nonzero `tracking_registry`, a ring's own or a curator's, may back a salted list. Its writes are ordinary record writes under salted member keys. A zero grace update on it takes the pinned registry as a third account and stores that registry's newest revision as `tracking_floor`, and a ring refuses a frame reading the source under an older tracking root through `LiveRoots::tracking`. A stale root could otherwise prove a blocked owner unenrolled. The ring also compares `tracking_registry` to its own pin, because this program does not know which ring a source serves.
 
 ## Tracking registries
 

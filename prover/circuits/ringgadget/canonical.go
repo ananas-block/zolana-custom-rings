@@ -1,4 +1,12 @@
-// One encoding per number, a second form would pass an equality or ordering check it should fail.
+// Helpers that give every number exactly one encoding. A wire holds an integer modulo
+// q, a decomposition that also admits value + q shows one value in two forms. Without
+// them a prover could pass an equality or ordering check it should fail, or hand the
+// auditor bytes other than the value SPP hashed. They answer the same need as zolana's
+// gadget.FieldToBytesBE and gadget.AssertStrictlyOrderedFullField, through range checks,
+// and the ordering takes an enable flag for slots a fixed shape circuit leaves unused.
+//
+// Read first. Read before registry/apply_records.go, registry/tracking.go,
+// policy/record_pool.go, audit/record.go.
 
 package ringgadget
 
@@ -11,47 +19,10 @@ import (
 	"github.com/consensys/gnark/std/rangecheck"
 )
 
-// SplitField returns high and low of value = high*2^lowBits + low, never the split of value+q.
-func SplitField(api frontend.API, rc frontend.Rangechecker, value frontend.Variable, lowBits int) (high, low frontend.Variable) {
-	if lowBits < 1 || lowBits >= api.Compiler().Field().BitLen() {
-		panic("split field: low width outside the field")
-	}
-	out, err := api.Compiler().NewHint(splitFieldHint, 2, value, lowBits)
-	if err != nil {
-		panic(err)
-	}
-	high, low = out[0], out[1]
-	rc.Check(low, lowBits)
-	assertCanonicalSplit(api, rc, value, high, low, lowBits)
-	return high, low
-}
-
-// assertCanonicalSplit pins value = high*2^lowBits + low below q, the caller bounds low to lowBits.
-func assertCanonicalSplit(api frontend.API, rc frontend.Rangechecker, value, high, low frontend.Variable, lowBits int) {
-	q := api.Compiler().Field()
-	// Without the bound, a high near q wraps qHigh - high into range.
-	rc.Check(high, q.BitLen()-lowBits)
-	api.AssertIsEqual(value, api.Add(api.Mul(high, new(big.Int).Lsh(big.NewInt(1), uint(lowBits))), low))
-	qHigh := new(big.Int).Rsh(q, uint(lowBits))
-	qLow := new(big.Int).Sub(q, new(big.Int).Lsh(qHigh, uint(lowBits)))
-	// high is at most the high part of q.
-	rc.Check(api.Sub(qHigh, high), qHigh.BitLen())
-	atBound := api.IsZero(api.Sub(high, qHigh))
-	// At the high part of q, low stays below the low part of q.
-	rc.Check(api.Mul(atBound, api.Sub(new(big.Int).Sub(qLow, big.NewInt(1)), low)), lowBits)
-}
-
-func init() { solver.RegisterHint(splitFieldHint) }
-
-func splitFieldHint(_ *big.Int, inputs, outputs []*big.Int) error {
-	if len(inputs) != 2 || len(outputs) != 2 || !inputs[1].IsUint64() {
-		return errors.New("split field: expecting a value, a low width and two outputs")
-	}
-	lowBits := uint(inputs[1].Uint64())
-	outputs[0].Rsh(inputs[0], lowBits)
-	outputs[1].Sub(inputs[0], new(big.Int).Lsh(outputs[0], lowBits))
-	return nil
-}
+// Properties:
+// 1. FieldToBytesBEWith's 32 bytes are the big endian form of value's integer below q.
+// 2. AssertOrderedWhen holds lo < mid < hi as integers below q while the boolean enabled is set, and says nothing of them while it is clear.
+// Every hint output is untrusted until a range check and a recomposition bind it.
 
 // FieldToBytesBEWith is gadget.FieldToBytesBE through rc, both gap equations stay under 2^129 + 1 and cannot wrap modulo q.
 func FieldToBytesBEWith(api frontend.API, rc frontend.Rangechecker, value frontend.Variable) [32]frontend.Variable {
@@ -84,6 +55,7 @@ func FieldToBytesBEWith(api frontend.API, rc frontend.Rangechecker, value fronte
 	limitLo := new(big.Int).And(limit, new(big.Int).Sub(base, big.NewInt(1)))
 	limitHi := new(big.Int).Rsh(limit, 128)
 	// 2. The bytes plus the gap add up to q-1 without a wrap, so they encode an integer below q.
+	// Checked bytes keep hi and lo below 2^128, so each side of both equations stays under 2^129 + 1, below a q of at least 131 bits, and both hold over the integers. The high equation times 2^128 plus the low one cancels the carry and leaves hi*2^128 + lo + gapHi*2^128 + gapLo = q-1, with every term nonnegative.
 	api.AssertIsEqual(api.Add(lo, gapLo), api.Add(limitLo, api.Mul(carry, base)))
 	api.AssertIsEqual(api.Add(hi, gapHi, carry), limitHi)
 	// 3. The bytes recompose to value, the one encoding below q.
@@ -113,6 +85,7 @@ func fieldBytesHint(q *big.Int, inputs, outputs []*big.Int) error {
 	return nil
 }
 
+// Two limbs per gap reach 2^256, past every q the width check below admits.
 const gapLimbBits = 128
 
 // AssertOrderedWhen proves lo < mid < hi over canonical field integers while a boolean enabled is set,
@@ -123,6 +96,7 @@ func AssertOrderedWhen(api frontend.API, enabled, lo, mid, hi frontend.Variable)
 		panic("ordered when: native field outside 132..256 bits")
 	}
 	// 1. The caller's boolean flag either keeps the operands or swaps in the satisfiable 0 < 1 < 2.
+	// A fixed shape circuit runs the check on every slot, an unused slot then passes on any witness. A flag off 0 or 1 would blend the operands, the caller holds it boolean.
 	lo = api.Mul(enabled, lo)
 	mid = api.Add(api.Mul(enabled, api.Sub(mid, 1)), 1)
 	hi = api.Add(api.Mul(enabled, api.Sub(hi, 2)), 2)
@@ -138,6 +112,7 @@ func AssertOrderedWhen(api frontend.API, enabled, lo, mid, hi frontend.Variable)
 	}
 	rc.Check(carry, 2)
 	// 3. The four gaps plus 2 equal q-1 exactly, so each gap and each partial sum is below q.
+	// The high equation times 2^128 plus the low one cancels the carry and leaves that integer sum, every gap is nonnegative and none can reach q.
 	base := new(big.Int).Lsh(big.NewInt(1), gapLimbBits)
 	limit := new(big.Int).Sub(q, big.NewInt(1))
 	limitLow := new(big.Int).And(limit, new(big.Int).Sub(base, big.NewInt(1)))
@@ -145,6 +120,7 @@ func AssertOrderedWhen(api frontend.API, enabled, lo, mid, hi frontend.Variable)
 	api.AssertIsEqual(api.Add(limbs[0], limbs[2], limbs[4], limbs[6], 2), api.Add(limitLow, api.Mul(base, carry)))
 	api.AssertIsEqual(api.Add(limbs[1], limbs[3], limbs[5], limbs[7], carry), limitHigh)
 	// 4. The gaps rebuild lo, mid and hi with a step of at least one between neighbours.
+	// gap(0) below q is lo's integer. Each next equation adds a gap and 1 with no wrap because the partial sum stays below q, mid and hi are then their integers too and strictly increase. The fourth gap meets only the sum, it absorbs q-1-hi and lets hi reach q-1, the sentinel's next.
 	gap := func(i int) frontend.Variable { return api.Add(limbs[2*i], api.Mul(base, limbs[2*i+1])) }
 	api.AssertIsEqual(gap(0), lo)
 	api.AssertIsEqual(api.Add(lo, gap(1), 1), mid)

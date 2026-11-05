@@ -139,8 +139,6 @@ export {
   ApprovalMask,
   PLAIN_GROTH16_PROOF_LENGTH,
   RingTransactData,
-  bodilessBitmap,
-  exitsBitmap,
   isAnonymousFrame,
   isDelegateRail,
   landedRingRail,
@@ -268,6 +266,27 @@ export {
   verifyRecordUpdate,
 } from "../protocol/ring-rpc/record-update.js";
 export type { UnsignedRecordUpdate } from "../protocol/ring-rpc/record-update.js";
+export {
+  decodeMergeSettings,
+  encodeMergeSettings,
+  encodeSetMergeSettingsRequest,
+} from "../protocol/ring-rpc/ring-rpc-codec.js";
+export type {
+  MergeSettings,
+  SetMergeSettingsRequest,
+} from "../protocol/ring-rpc/ring-rpc-types.js";
+export {
+  decodeStorageApplyProofInputs,
+  encodeStorageApplyProofInputsRequest,
+} from "../protocol/indexer/indexer-codec.js";
+export type {
+  RingListWriteView,
+  RingRecordWriteView,
+  StorageApplyProofInputsRequest,
+  StorageApplyProofInputsResponse,
+  StorageWriteView,
+} from "../protocol/indexer/indexer-types.js";
+export { isRingAuthorityShape } from "../protocol/transaction/spp.js";
 export type {
   ListWriter,
   Member,

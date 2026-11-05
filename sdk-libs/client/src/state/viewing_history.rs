@@ -167,14 +167,6 @@ impl ViewingKeyEntry {
         self.request.next
     }
 
-    pub fn tx_stream(&self) -> &StreamCounter {
-        &self.tx
-    }
-
-    pub fn request_stream(&self) -> &StreamCounter {
-        &self.request
-    }
-
     pub fn known_senders(&self) -> &HashSet<X25519Pubkey> {
         &self.known_senders
     }

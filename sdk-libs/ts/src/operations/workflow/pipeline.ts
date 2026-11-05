@@ -417,12 +417,13 @@ function unreadWide(
   // none and a deposit never counts, so the wallet counts the same legs.
   const legs = policyLegs(config, spend.rail, transfers);
   const rows = ownerRows({ inputs, delegate });
-  // 2. Only a salted list opens more records than the row holding these counts provides, every
-  // other read fits it by the catalog's pool widths.
+  // 2. An unmatched input asset or a salted list opens more records than the row holding these
+  // counts provides, and only a policy read opens them.
   const distinct = (fields: readonly Bytes32[]): number => new Set(fields.map(bytesKey)).size;
   const pools =
-    transferRootRead(config, delegate) === "policy" && readsSaltedList(config)
+    transferRootRead(config, delegate) === "policy"
       ? unreadSubjectPools({
+          salted: readsSaltedList(config),
           owners:
             legs +
             distinct([

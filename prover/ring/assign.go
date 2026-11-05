@@ -132,39 +132,6 @@ type lowView struct {
 	bodyView
 }
 
-// recordView mirrors registry.QuadRecordOpening field for field.
-type recordView struct {
-	bodyView
-	Path quadPath
-}
-
-func (r RecordOpening) view() any {
-	return recordView{bodyView: r.body(), Path: newQuadPath(r.Index, r.Path)}
-}
-
-func (r RecordOpening) body() bodyView {
-	return bodyView{Next: r.Next, MintPolicy: r.MintPolicy, WithdrawalThreshold: r.WithdrawalThreshold, AssetLimits: r.AssetLimits, Lists: r.Lists}
-}
-
-// memberView mirrors registry.QuadOpening field for field.
-type memberView struct {
-	Present bool
-	bodyView
-	Low  lowView
-	Path quadPath
-}
-
-func (m MemberOpening) view() any {
-	return memberView{
-		Present:  m.Present,
-		bodyView: m.body(),
-		Low: lowView{Member: m.LowMember, bodyView: bodyView{
-			Next: m.LowNext, MintPolicy: m.LowMintPolicy, WithdrawalThreshold: m.LowWithdrawalThreshold, AssetLimits: m.LowAssetLimits, Lists: m.LowLists,
-		}},
-		Path: newQuadPath(m.Index, m.Path),
-	}
-}
-
 // writeView mirrors registry.RecordWrite field for field.
 type writeView struct {
 	Entry   QueueEntry

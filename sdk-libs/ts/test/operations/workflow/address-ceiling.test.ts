@@ -240,7 +240,7 @@ describe("TransactionFit, the refusals of Rust `TransactionFit`", () => {
       TransactionFit.of(signing(61), { ...payer, setupInstructions: twelve }, BUDGET),
     ).rejects.toMatchObject({
       code: "RING_FIT_SIGNATURES",
-      details: { signatures: 13, limit: 12 },
+      details: { signers: 13, limit: 12 },
     });
   });
 

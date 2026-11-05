@@ -135,6 +135,26 @@ test-sdk-libs:
 test-ring-indexer:
     cargo nextest run -p ring-indexer
 
+# The Postgres store tests of the indexer and Ring RPC, over a scratch cluster gone at the end.
+test-postgres:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work="$(mktemp -d)"
+    port=$((54329 + ${ZOLANA_PORT_OFFSET:-0}))
+    initdb -D "$work/data" -U postgres -A trust -E UTF8 >/dev/null
+    trap 'pg_ctl -D "$work/data" -m fast stop >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
+    pg_ctl -D "$work/data" -w -l "$work/log" -o "-p $port -c listen_addresses=127.0.0.1 -c unix_socket_directories=''" start >/dev/null
+    for database in ring_indexer ring_rpc; do
+        createdb -h 127.0.0.1 -p "$port" -U postgres "$database"
+    done
+    export RING_INDEXER_TEST_POSTGRES_URL="postgres://postgres@127.0.0.1:$port/ring_indexer"
+    cargo test --locked -p ring-indexer --lib --features surfpool-fixture -- --ignored
+    export RING_RPC_TEST_POSTGRES_URL="postgres://postgres@127.0.0.1:$port/ring_rpc"
+    # One store, one test at a time.
+    cargo test --locked -p zolana-ring-rpc --lib -- --test-threads=1 --include-ignored postgres relay_reservations
+    cargo test --locked -p zolana-ring-rpc --test relay_service -- --test-threads=1
+    cargo test --locked -p zolana-ring-rpc --test audit_service -- --test-threads=1 --ignored
+
 # Custom-ring lifecycle on a local validator (program-tests/custom-ring/tests/ring.rs).
 test-custom-ring-validator filter="all()" *args: fetch-custom-ring-keys build-prover-server build-programs zolana::build-cli zolana::ensure-smart-account zolana::ensure-surfpool
     #!/usr/bin/env bash

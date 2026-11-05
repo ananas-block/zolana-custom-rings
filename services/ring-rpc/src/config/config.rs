@@ -128,7 +128,7 @@ pub struct ServeArgs {
         requires = "fee_payer_key_file"
     )]
     pub relay_budget_lamports: u64,
-    /// Lamports one signer holds outstanding at once.
+    /// Lamports one signer holds outstanding at once, the fees of its attempts that never landed stay counted.
     #[arg(
         long,
         env = "RING_RPC_RELAY_SIGNER_BUDGET_LAMPORTS",

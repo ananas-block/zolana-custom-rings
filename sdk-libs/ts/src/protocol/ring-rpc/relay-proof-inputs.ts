@@ -8,6 +8,7 @@ import {
   X25519_PUBLIC_KEY_LENGTH,
   addressBytes,
   byteVector,
+  concatBytes,
   encodeBase58,
   encodeData,
   equalBytes,
@@ -15,6 +16,7 @@ import {
   readData,
   splInterfaceWithBump,
   writeTransactOutput,
+  sha256,
 } from "@heliuslabs/zolana/internal";
 import {
   TransactWithdrawal,
@@ -54,6 +56,18 @@ export type RelayRail =
   | Readonly<{ kind: "confidential" }>
   | Readonly<{ kind: "delegate"; delegate: Address; plan?: AnonymousPlan }>;
 
+/** One interface transfer's accounts, Rust `TransactInterfaceTransferAccounts`, a SOL deposit's `recipient` is its funder. */
+export type RelayLegAccounts =
+  | TransactWithdrawal
+  | Readonly<{
+      kind: "splDeposit";
+      mint: Address;
+      splTokenInterface: Address;
+      tokenAuthority: Address;
+      userTokenAccount: Address;
+      tokenProgram: Address;
+    }>;
+
 /** Rust `RelayProofInputs`. */
 export interface RelayProofInputs {
   readonly rail: RelayRail;
@@ -67,8 +81,8 @@ export interface RelayProofInputs {
   readonly leafIndexes: readonly bigint[];
   readonly outputs: readonly ProofOutputUtxo[];
   readonly externalData: ExternalData;
-  /** The accounts of the one withdrawal leg. */
-  readonly withdrawal?: TransactWithdrawal;
+  /** One per interface transfer. */
+  readonly interfaceTransferAccounts: readonly RelayLegAccounts[];
   readonly blindingSeed: Bytes32;
   readonly outputTreeId: number;
   /** The owner sealed under the wide key, the relayer proves on it. */
@@ -117,7 +131,7 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
   value.inputs.forEach((input, index) => writeInput(writer, { input, index, value }));
   writer.u8(value.outputs.length, "outputs.length");
   value.outputs.forEach((output, index) => writeOutput(writer, output, index, value.assets));
-  writeExternalData(writer, value.externalData, value.withdrawal);
+  writeExternalData(writer, value.externalData, value.interfaceTransferAccounts);
   writer.bytes(value.blindingSeed, 32, "blindingSeed").u16(value.outputTreeId, "outputTreeId");
   writeRelayListSalts(writer, value.listSalts, value.sender)
     .u8(value.wideOwners ? 1 : 0, "wideOwners")
@@ -144,6 +158,13 @@ export interface RelayMergeInputs {
   /** One per input. */
   readonly leafIndexes: readonly bigint[];
   readonly assets: AssetRegistry;
+}
+
+const MERGE_REQUEST_DOMAIN = new TextEncoder().encode("zolana/ring-rpc-relay-merge");
+
+/** Rust `ProofInputBytes::merge_request_digest`, over the bytes `encodeRelayMergeInputs` returns. */
+export function mergeRequestDigest(encoded: Uint8Array): Bytes32 {
+  return sha256(concatBytes(MERGE_REQUEST_DOMAIN, encoded)) as Bytes32;
 }
 
 /** The caller wipes the returned bytes, they hold the nullifier secret. */
@@ -178,7 +199,7 @@ export function encodeRelayMergeInputs(value: RelayMergeInputs): Uint8Array {
 export async function decodeRelayProofInputs(
   bytes: Uint8Array,
   assets: AssetRegistry,
-): Promise<RelayProofInputs & Readonly<{ withdrawals: readonly TransactWithdrawal[] }>> {
+): Promise<RelayProofInputs> {
   const reader = new WireReader(bytes);
   const rail = readRail(reader);
   const ringProgramId = reader.address("ringProgramId");
@@ -214,12 +235,11 @@ export async function decodeRelayProofInputs(
   const approvalBlinder = readApprovalBlinder(reader);
   reader.done();
   const inputs = unresolved.map((input) => input(coOwners));
-  const legs = await Promise.all(external.legs.map(withdrawalLeg));
+  const legs = await Promise.all(external.legs.map(settlementLeg));
   const externalData = createExternalData({
     ...external.fields,
     interfaceTransfers: legs.map((leg) => leg.transfer),
   });
-  const withdrawals = legs.map((leg) => leg.withdrawal);
   return Object.freeze({
     rail,
     ringProgramId,
@@ -230,8 +250,7 @@ export async function decodeRelayProofInputs(
     leafIndexes,
     outputs,
     externalData,
-    ...(withdrawals[0] === undefined ? {} : { withdrawal: withdrawals[0] }),
-    withdrawals,
+    interfaceTransferAccounts: legs.map((leg) => leg.accounts),
     blindingSeed,
     outputTreeId,
     wideOwners,
@@ -372,14 +391,16 @@ function writeOutput(
 function writeExternalData(
   writer: Writer,
   external: ExternalData,
-  withdrawal: TransactWithdrawal | undefined,
+  accounts: readonly RelayLegAccounts[],
 ): void {
+  if (external.interfaceTransfers.length !== accounts.length)
+    throw refused("settlement", Math.min(external.interfaceTransfers.length, accounts.length));
   writer
     .u8(external.instructionDiscriminator, "instructionDiscriminator")
     .u64(external.expiryUnixTs, "expiryUnixTs")
-    .u8(external.interfaceTransfers.length, "withdrawals.length");
+    .u8(external.interfaceTransfers.length, "legs.length");
   external.interfaceTransfers.forEach((transfer, index) =>
-    writeWithdrawal(writer, { transfer, index, withdrawal }),
+    writeLeg(writer, { transfer, index, accounts: accounts[index] }),
   );
   optionalHash(writer, external.dataHash, "dataHash");
   optionalHash(writer, external.ringDataHash, "ringDataHash");
@@ -397,39 +418,53 @@ function writeExternalData(
   }
 }
 
-/** Each leg a withdrawal whose accounts the decoder derives again. */
-function writeWithdrawal(
+/** Each leg carries the accounts the decoder derives again, Rust `legs`. */
+function writeLeg(
   writer: Writer,
   leg: Readonly<{
     transfer: SettlementTransfer;
     index: number;
-    withdrawal: TransactWithdrawal | undefined;
+    accounts: RelayLegAccounts | undefined;
   }>,
 ): void {
-  const { transfer, index, withdrawal } = leg;
-  if (transfer.isDeposit || index > 0 || withdrawal === undefined)
-    throw refused("settlement", index);
-  if (transfer.kind === "sol" && withdrawal.kind === "sol") {
-    if (withdrawal.recipient !== transfer.userSolAccount) throw refused("settlement", index);
+  const { transfer, index, accounts } = leg;
+  if (transfer.kind === "sol") {
+    if (accounts?.kind !== "sol" || accounts.recipient !== transfer.userSolAccount)
+      throw refused("settlement", index);
     writer
-      .u8(0, "withdrawal")
-      .u64(transfer.amount, "withdrawal.amount")
-      .bytes(addressBytes(transfer.userSolAccount), 32, "withdrawal.recipient");
+      .u8(transfer.isDeposit ? LegTag.solDeposit : LegTag.sol, "leg")
+      .u64(transfer.amount, "leg.amount")
+      .bytes(addressBytes(transfer.userSolAccount), 32, "leg.user");
+    return;
+  }
+  if (transfer.isDeposit) {
+    if (
+      accounts?.kind !== "splDeposit" ||
+      accounts.mint !== transfer.mint ||
+      accounts.userTokenAccount !== transfer.tokenAccount
+    )
+      throw refused("settlement", index);
+    writer
+      .u8(LegTag.splDeposit, "leg")
+      .bytes(addressBytes(transfer.mint), 32, "leg.mint")
+      .u64(transfer.amount, "leg.amount")
+      .bytes(addressBytes(accounts.tokenAuthority), 32, "leg.tokenAuthority")
+      .bytes(addressBytes(transfer.tokenAccount), 32, "leg.userTokenAccount")
+      .bytes(addressBytes(accounts.tokenProgram), 32, "leg.tokenProgram");
     return;
   }
   if (
-    transfer.kind !== "spl" ||
-    withdrawal.kind !== "spl" ||
-    withdrawal.mint !== transfer.mint ||
-    withdrawal.recipientTokenAccount !== transfer.tokenAccount
+    accounts?.kind !== "spl" ||
+    accounts.mint !== transfer.mint ||
+    accounts.recipientTokenAccount !== transfer.tokenAccount
   )
     throw refused("settlement", index);
   writer
-    .u8(1, "withdrawal")
-    .bytes(addressBytes(transfer.mint), 32, "withdrawal.mint")
-    .u64(transfer.amount, "withdrawal.amount")
-    .bytes(addressBytes(transfer.tokenAccount), 32, "withdrawal.userTokenAccount")
-    .bytes(addressBytes(withdrawal.tokenProgram), 32, "withdrawal.tokenProgram");
+    .u8(LegTag.spl, "leg")
+    .bytes(addressBytes(transfer.mint), 32, "leg.mint")
+    .u64(transfer.amount, "leg.amount")
+    .bytes(addressBytes(transfer.tokenAccount), 32, "leg.userTokenAccount")
+    .bytes(addressBytes(accounts.tokenProgram), 32, "leg.tokenProgram");
 }
 
 function optionalHash(writer: Writer, hash: Bytes32 | undefined, name: string): void {
@@ -598,11 +633,11 @@ function readOutput(reader: WireReader): ProofOutputUtxo {
 /** Every field but the interface transfers, whose SPL legs derive their interface account. */
 function readExternalData(reader: WireReader): Readonly<{
   fields: Omit<Parameters<typeof createExternalData>[0], "interfaceTransfers">;
-  legs: readonly WithdrawalWire[];
+  legs: readonly LegWire[];
 }> {
   const instructionDiscriminator = reader.u8("instructionDiscriminator");
   const expiryUnixTs = reader.u64("expiryUnixTs");
-  const legs = reader.list("withdrawals", () => readWithdrawal(reader));
+  const legs = reader.list("legs", () => readLeg(reader));
   const dataHash = reader.option("dataHash", () => reader.hash("dataHash"));
   const ringDataHash = reader.option("ringDataHash", () => reader.hash("ringDataHash"));
   const txViewingPublicKey = X25519PublicKey.fromBytes(
@@ -643,64 +678,101 @@ function readOwnerTag(reader: WireReader): OwnerTag {
   throw refused("ownerTag", kind);
 }
 
-/** Rust `WithdrawalWire`. */
-type WithdrawalWire =
-  | Readonly<{ kind: "sol"; amount: bigint; recipient: Address }>
+/** Rust `LegWire` in tag order. */
+const LegTag = Object.freeze({ sol: 0, spl: 1, solDeposit: 2, splDeposit: 3 } as const);
+
+/** Rust `LegWire`. */
+type LegWire =
+  | Readonly<{ kind: "sol"; isDeposit: boolean; amount: bigint; user: Address }>
   | Readonly<{
       kind: "spl";
       mint: Address;
       amount: bigint;
       userTokenAccount: Address;
       tokenProgram: Address;
+    }>
+  | Readonly<{
+      kind: "splDeposit";
+      mint: Address;
+      amount: bigint;
+      tokenAuthority: Address;
+      userTokenAccount: Address;
+      tokenProgram: Address;
     }>;
 
-function readWithdrawal(reader: WireReader): WithdrawalWire {
-  const tag = reader.u8("withdrawal");
-  if (tag === 0)
-    return {
-      kind: "sol",
-      amount: reader.u64("withdrawal.amount"),
-      recipient: reader.address("withdrawal.recipient"),
-    };
-  if (tag !== 1) throw refused("withdrawal", tag);
-  return {
-    kind: "spl",
-    mint: reader.address("withdrawal.mint"),
-    amount: reader.u64("withdrawal.amount"),
-    userTokenAccount: reader.address("withdrawal.userTokenAccount"),
-    tokenProgram: reader.address("withdrawal.tokenProgram"),
-  };
+function readLeg(reader: WireReader): LegWire {
+  const tag = reader.u8("leg");
+  switch (tag) {
+    case LegTag.sol:
+    case LegTag.solDeposit:
+      return {
+        kind: "sol",
+        isDeposit: tag === LegTag.solDeposit,
+        amount: reader.u64("leg.amount"),
+        user: reader.address("leg.user"),
+      };
+    case LegTag.spl:
+      return {
+        kind: "spl",
+        mint: reader.address("leg.mint"),
+        amount: reader.u64("leg.amount"),
+        userTokenAccount: reader.address("leg.userTokenAccount"),
+        tokenProgram: reader.address("leg.tokenProgram"),
+      };
+    case LegTag.splDeposit:
+      return {
+        kind: "splDeposit",
+        mint: reader.address("leg.mint"),
+        amount: reader.u64("leg.amount"),
+        tokenAuthority: reader.address("leg.tokenAuthority"),
+        userTokenAccount: reader.address("leg.userTokenAccount"),
+        tokenProgram: reader.address("leg.tokenProgram"),
+      };
+    default:
+      throw refused("leg", tag);
+  }
 }
 
-/** Rust `WithdrawalWire::legs`. */
-async function withdrawalLeg(
-  wire: WithdrawalWire,
-): Promise<Readonly<{ transfer: SettlementTransfer; withdrawal: TransactWithdrawal }>> {
+/** Rust `LegWire::settlement`. */
+async function settlementLeg(
+  wire: LegWire,
+): Promise<Readonly<{ transfer: SettlementTransfer; accounts: RelayLegAccounts }>> {
   if (wire.kind === "sol")
     return {
       transfer: {
         kind: "sol",
-        isDeposit: false,
+        isDeposit: wire.isDeposit,
         amount: wire.amount,
-        userSolAccount: wire.recipient,
+        userSolAccount: wire.user,
       },
-      withdrawal: TransactWithdrawal.sol({ recipient: wire.recipient }),
+      accounts: TransactWithdrawal.sol({ recipient: wire.user }),
     };
   const [splTokenInterface, splInterfaceBump] = await splInterfaceWithBump(wire.mint);
+  const transfer: SettlementTransfer = {
+    kind: "spl",
+    mint: wire.mint,
+    isDeposit: wire.kind === "splDeposit",
+    amount: wire.amount,
+    tokenAccount: wire.userTokenAccount,
+    splInterfaceBump,
+  };
   return {
-    transfer: {
-      kind: "spl",
-      mint: wire.mint,
-      isDeposit: false,
-      amount: wire.amount,
-      tokenAccount: wire.userTokenAccount,
-      splInterfaceBump,
-    },
-    withdrawal: TransactWithdrawal.spl({
-      mint: wire.mint,
-      splTokenInterface,
-      recipientTokenAccount: wire.userTokenAccount,
-      tokenProgram: wire.tokenProgram,
-    }),
+    transfer,
+    accounts:
+      wire.kind === "splDeposit"
+        ? Object.freeze({
+            kind: "splDeposit",
+            mint: wire.mint,
+            splTokenInterface,
+            tokenAuthority: wire.tokenAuthority,
+            userTokenAccount: wire.userTokenAccount,
+            tokenProgram: wire.tokenProgram,
+          })
+        : TransactWithdrawal.spl({
+            mint: wire.mint,
+            splTokenInterface,
+            recipientTokenAccount: wire.userTokenAccount,
+            tokenProgram: wire.tokenProgram,
+          }),
   };
 }

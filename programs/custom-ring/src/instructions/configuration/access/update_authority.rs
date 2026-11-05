@@ -1,3 +1,9 @@
+//! Rotates one ring role to a new key.
+//!
+//! The keys stay pairwise distinct and apart from the delegate, so one key holds one authority.
+//!
+//! Read after `instructions/accounts/loader.rs`. Read before `instructions/configuration/access/set_cosigner.rs`.
+
 use custom_ring_interface::{RingRole, UpdateAuthorityIxData};
 use pinocchio::{AccountView, Address, ProgramResult};
 use spr_account_checks::AccountIterator;

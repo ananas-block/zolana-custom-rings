@@ -102,8 +102,6 @@ pub(crate) struct PolicyRows {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PolicyError {
-    #[error("asset allowlists use registry lists, replace assets with require or forbid")]
-    InlineAssetsRemoved,
     #[error("unknown list {name}")]
     UnknownList { name: String },
     #[error("the {name} list is written by its members, a rule cannot read it")]
@@ -168,8 +166,6 @@ struct RawRule {
     forbid: Option<ListName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     any: Option<Vec<Alternative>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    assets: Option<Vec<Base58Address>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     above: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -284,9 +280,6 @@ impl TryFrom<RawRule> for RuleSpec {
         if raw.above.is_some() && raw.limits.is_some() {
             return Err(PolicyError::SeveralGuardForms);
         }
-        if raw.assets.is_some() {
-            return Err(PolicyError::InlineAssetsRemoved);
-        }
         let source = one_form([
             raw.require.map(SourceSpec::Require),
             raw.forbid.map(SourceSpec::Forbid),
@@ -320,7 +313,6 @@ impl From<RuleSpec> for RawRule {
             require: None,
             forbid: None,
             any: None,
-            assets: None,
             above: rule.above,
             limits: rule.limits,
         };
@@ -970,10 +962,6 @@ limits = [
              [[rules]]\nsubject = \"output-owner\"\nrequire = \"allow\"\nabove = 7\n",
         );
         assert!(guard_without_asset.is_ok());
-        assert!(spec(&format!(
-            "[[rules]]\nsubject = \"sender\"\nassets = [\"{MINT}\"]\n"
-        ))
-        .is_err());
         assert_eq!(
             PolicyError::Refused {
                 rule: 2,

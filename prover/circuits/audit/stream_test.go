@@ -300,7 +300,7 @@ func TestStreamVector(t *testing.T) {
 		v := vectorCase{
 			Name: tc.name, Layout: s.Layout(), InputClass: s.Shape.InputClass, Outputs: s.Shape.Outputs, OutputCount: s.OutputCount(), InputCount: s.InputCount,
 			Envelope: hex.EncodeToString(p.Envelope), EnvelopeCt: hex.EncodeToString(stream.Envelope(s.InputCount)),
-			EnvelopeHash: ringtest.FieldHex(s.StatementOf(t, stream, s.Claim())[9]),
+			EnvelopeHash: ringtest.FieldHex(s.StatementOf(t, stream, s.Claim())[7]),
 			RecordChain:  ringtest.FieldHex(ringaudit.RecordChain(t, s.StatementOutputs(t, stream))),
 			TailChain:    ringtest.FieldHex(ringaudit.TailChain(t, s.StatementOutputs(t, stream))),
 		}

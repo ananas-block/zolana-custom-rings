@@ -1,3 +1,26 @@
+//! The rule table a ring pins and every policy proof reads, and the checks the circuit leaves to the program.
+//!
+//! SPP has no policy. A ring's rules are 32 byte rows, each read as one field, and `policy_hash` folds
+//! them with the source map. The circuit decodes any row through one equation and holds its table to
+//! the hash, and it never judges whether a row makes sense. `EncodedRuleTable::validate` runs at every
+//! policy write and is the one place a table's meaning is checked. A table it refuses has no hash on
+//! the account, so no proof reads it.
+//!
+//! Read after `program-libs/policy/src/list.rs`, `docs/design/records-and-roots.md`. Read before
+//! `program-libs/policy/src/rules.rs`, `prover/circuits/policy/table.go`, `prover/circuits/policy/rules.go`.
+//!
+//! Named list semantics a stored table holds.
+//! 1. `Allow`, `Approval` and `PrivateAllow` are grant lists, read by presence. A rule over several passes on any one, within the rule the lists join with OR.
+//! 2. `Block`, `Frozen` and `PrivateBlock` are deny lists, read by absence, one per rule. Rules join with AND, so a public and a private block are two rules.
+//! 3. No rule reads `Reader` or the member written `RingViewing`, so an owner admits itself to nothing and a reader grant moves no funds.
+//! 4. `PrivateAllow` and `PrivateBlock` are always salted. An owner reads them at its salted key once its tracking row is present, and an asset reads its public record. An owner with no row reads no salted list, so a deny rule on one passes and an allow rule on one fails.
+//!
+//! Invariants of a stored table.
+//! 1. Every row is one `Rule::encoded` emits and no two rows share a signature, the circuit's equation alone admits more.
+//! 2. Every list a rule reads has a source, the circuit reads a slot with a zero registry as the ring's own.
+//! 3. Rows past `rule_count` stay zero, each enters the hash as stored.
+//! 4. Every curator slot names one registry, the circuit opens one curator pool beside the own one.
+
 use bytemuck::{Pod, Zeroable};
 use spr_hasher::{primitives::right_align, Hasher, HasherError, Poseidon};
 use thiserror::Error;
@@ -31,70 +54,6 @@ pub struct PolicySource {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceMap {
     slots: [PolicySource; MAX_SOURCES],
-}
-
-/// A slot violates the positional layout.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum SourceMapError {
-    #[error("slot breaks the positional layout")]
-    NotPositional,
-    #[error("list is already mapped")]
-    Duplicate,
-    #[error("the curator slots name more than one registry")]
-    SeveralCurators,
-}
-
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum PolicyTableError {
-    #[error("no source serves a list a rule reads")]
-    MissingSource(ListId),
-    #[error(transparent)]
-    Table(#[from] RuleTableError),
-}
-
-macro_rules! rule_errors {
-    ($($variant:ident => $message:literal,)*) => {
-        /// A table or a row the program refuses.
-        #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-        pub enum RuleTableError {
-            $(#[error($message)] $variant,)*
-        }
-
-        impl RuleTableError {
-            /// Const, a refused `RuleTableBuilder::build` panics with it at compile time.
-            pub const fn message(&self) -> &'static str {
-                match self {
-                    $(Self::$variant => $message,)*
-                }
-            }
-        }
-    };
-}
-
-rule_errors! {
-    TooManyRules => "policy table is full",
-    EmptyLists => "a group names no list",
-    ListInBothSets => "a list is both required and forbidden",
-    SenderGuard => "sender rules take no amount guard",
-    ZeroThreshold => "a zero threshold is Guard::Always",
-    DuplicateRule => "duplicate rule",
-    PerAssetGuardNotOwner => "per-asset limits apply to output owners only",
-    UnknownSubject => "unknown subject",
-    UnknownMode => "unknown mode",
-    UnknownGuardTag => "unknown guard tag",
-    ThresholdWithoutGuard => "a threshold without a guard",
-    ReservedBytes => "reserved row bytes are not zero",
-    NonCanonicalAlternative => "an alternative beside an absent primary",
-    NonZeroPadding => "padding past the counts is not zero",
-    TooManyOutflowLimits => "outflow limits exceed the circuit width",
-    ZeroLimitAsset => "an outflow limit names no mint",
-    DuplicateLimitAsset => "outflow limit mints must be unique",
-    LimitWithoutBound => "an outflow limit needs a cap or a cosign threshold",
-    MemberWrittenList => "a rule reads a list its members write",
-    ListNotPolicyReadable => "a rule reads a list outside the policy lists",
-    MultiListAbsence => "a rule reads more than one list by absence",
-    InvertedPolarity => "a rule reads a grant list by absence or a deny list by presence",
-    MixedPolarity => "a rule mixes presences and absences",
 }
 
 impl SourceMap {
@@ -206,10 +165,11 @@ pub struct Rule {
     pub guard: Guard,
 }
 
-/// Byte positions are the circuit packed-field weights (Go `ruleShift`), reordering breaks proof verification.
+/// Byte positions are the circuit packed-field weights (Go `ruleParts`), reordering breaks proof verification.
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 struct Row {
+    /// Zero, `decodeRule` recomposes the row from the 13 bytes below and a set bit here fails it.
     reserved: [u8; 19],
     alternative: u8,
     threshold: [u8; 8],
@@ -675,8 +635,11 @@ impl EncodedRuleTable {
 
     /// The table a policy write stores, every check the circuit leaves to the program.
     pub fn validate(&self, sources: &SourceMap) -> Result<RuleTable, PolicyTableError> {
+        // 1. Every row is a form `Rule::encoded` emits, unique, with zeros past the count.
         let table = self.decode()?;
+        // 2. The named list semantics hold.
         table.validate()?;
+        // 3. Every list a rule reads has a source, an empty slot would read as the ring's own registry in the circuit.
         let missing = table.rules().iter().find_map(|rule| {
             rule.referenced()
                 .iter()
@@ -689,6 +652,9 @@ impl EncodedRuleTable {
     }
 
     /// Every slot past a count enters as stored, `validate` keeps it zero.
+    ///
+    /// `salted` follows from the slots and still enters, the circuit reads it as a wire and only the
+    /// hash pins it. A wire off the slots would let an owner read a private list at its public key.
     pub fn fields(&self, sources: &SourceMap) -> [[u8; 32]; POLICY_TABLE_FIELDS] {
         let values = [right_align(&POLICY_TABLE_DOMAIN.to_be_bytes())]
             .into_iter()
@@ -726,6 +692,70 @@ impl EncodedRuleTable {
 
 fn zero_past<const N: usize>(slots: &[[u8; N]], len: usize) -> bool {
     slots[len..].iter().all(|slot| *slot == [0u8; N])
+}
+
+/// A slot violates the positional layout.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum SourceMapError {
+    #[error("slot breaks the positional layout")]
+    NotPositional,
+    #[error("list is already mapped")]
+    Duplicate,
+    #[error("the curator slots name more than one registry")]
+    SeveralCurators,
+}
+
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum PolicyTableError {
+    #[error("no source serves a list a rule reads")]
+    MissingSource(ListId),
+    #[error(transparent)]
+    Table(#[from] RuleTableError),
+}
+
+macro_rules! rule_errors {
+    ($($variant:ident => $message:literal,)*) => {
+        /// A table or a row the program refuses.
+        #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+        pub enum RuleTableError {
+            $(#[error($message)] $variant,)*
+        }
+
+        impl RuleTableError {
+            /// Const, a refused `RuleTableBuilder::build` panics with it at compile time.
+            pub const fn message(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $message,)*
+                }
+            }
+        }
+    };
+}
+
+rule_errors! {
+    TooManyRules => "policy table is full",
+    EmptyLists => "a group names no list",
+    ListInBothSets => "a list is both required and forbidden",
+    SenderGuard => "sender rules take no amount guard",
+    ZeroThreshold => "a zero threshold is Guard::Always",
+    DuplicateRule => "duplicate rule",
+    PerAssetGuardNotOwner => "per-asset limits apply to output owners only",
+    UnknownSubject => "unknown subject",
+    UnknownMode => "unknown mode",
+    UnknownGuardTag => "unknown guard tag",
+    ThresholdWithoutGuard => "a threshold without a guard",
+    ReservedBytes => "reserved row bytes are not zero",
+    NonCanonicalAlternative => "an alternative beside an absent primary",
+    NonZeroPadding => "padding past the counts is not zero",
+    TooManyOutflowLimits => "outflow limits exceed the circuit width",
+    ZeroLimitAsset => "an outflow limit names no mint",
+    DuplicateLimitAsset => "outflow limit mints must be unique",
+    LimitWithoutBound => "an outflow limit needs a cap or a cosign threshold",
+    MemberWrittenList => "a rule reads a list its members write",
+    ListNotPolicyReadable => "a rule reads a list outside the policy lists",
+    MultiListAbsence => "a rule reads more than one list by absence",
+    InvertedPolarity => "a rule reads a grant list by absence or a deny list by presence",
+    MixedPolarity => "a rule mixes presences and absences",
 }
 
 const _: () = assert!(EncodedRuleTable::SIZE == 513);

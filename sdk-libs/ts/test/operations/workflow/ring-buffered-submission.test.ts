@@ -238,6 +238,7 @@ describe("a buffered ring submission", () => {
     ]);
     await expect(f.submission.send(f.transport)).rejects.toMatchObject({
       code: "RING_FRAME_BUFFER_CLOSE",
+      details: { buffer: f.frame.buffer, transactionId: expect.any(String) },
     });
     expect(f.wallet.pendingSubmissions()).toHaveLength(1);
     expect(f.release).not.toHaveBeenCalled();
@@ -332,6 +333,9 @@ describe("a buffered record after a restart", () => {
     f.send.mockResolvedValueOnce({ kind: "failed", customCode: 1 });
     await expect(
       closeAbandonedFrameBuffers({ ...f.reclaim, wallet: f.wallet }),
-    ).rejects.toMatchObject({ code: "RING_FRAME_BUFFER_CLOSE" });
+    ).rejects.toMatchObject({
+      code: "RING_FRAME_BUFFER_CLOSE",
+      details: { transactionId: expect.any(String) },
+    });
   });
 });

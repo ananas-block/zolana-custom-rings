@@ -1,3 +1,15 @@
+// Proves that a batch of authority writes moved a policy registry from one root to
+// the next. The storage program keeps no records, only roots and the next index.
+// `Update` hashes the instruction's writes into a chain and verifies the proof over
+// that chain, so writes apply in chain order with none skipped or added, and the
+// records stay sorted by member, as proofs of a missing record need. Without it a new
+// root could drop a block entry or break the order, and a blocked member could prove
+// itself unlisted.
+//
+// Read after registry/registry.go, ringgadget/canonical.go, ringgadget/count.go,
+// shared/width.go. Read before registry/tracking.go, policy/record_pool.go,
+// prover/ring/ring.go.
+
 package registry
 
 import (
@@ -13,12 +25,24 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/gadget"
 )
 
+// Properties:
+// 1. NewRoot, NewNextIndex and ChainEnd follow from applying, in chain order, exactly the Count writes whose chain runs from ChainStart to ChainEnd.
+// 2. A write keeps every list bit outside its mask while the program keeps Value inside Mask.
+// 3. A write replaces the mint settings, the withdrawal threshold and the limits together under bit 192 of its MintPolicy, and otherwise keeps them.
+// 4. A present member keeps its leaf, its member and its link, a record a write empties stays in the list and reads as empty.
+// 5. An absent member is proven absent under the running root and inserted after its low record at exactly the next index below Capacity, and a write that would leave its record empty inserts nothing.
+// 6. Every write keeps the links one sorted run from the sentinel to q-1 with every member at a link's end.
+// 7. The statement binds both roots, both next indexes, both chain ends and the count.
+//
+// The program holds what the circuit takes as given. chain_start in program-libs/interface/src/accounts/storage.rs names one registry at one revision in ChainStart, and list_and_mint_entry in program-libs/interface/src/instructions/instruction.rs refuses a member outside [1, q-2], a Value outside its Mask and invalid limits.
+
 // ApplyBatch is the wide apply key's write capacity, mirrored by APPLY_BATCH in program-libs/interface/src/accounts/member_registry.rs.
 const ApplyBatch = 16
 
 // ApplyWidths mirrors RingCircuit::apply_records in program-libs/interface/src/proof/key_catalog.rs.
 var ApplyWidths = []int{1, 2, 4, 8, ApplyBatch}
 
+// QueueEntry's MintPolicy packs the settings below bit 192 and marks a replacement at bit 192, mirrored by QueueEntry::mint_policy_field in program-libs/interface/src/accounts/member_registry.rs.
 type QueueEntry struct {
 	Member              frontend.Variable
 	Mask                frontend.Variable
@@ -76,12 +100,12 @@ func (c *ApplyRecordsCircuit) Define(api frontend.API) error {
 	}
 	// 1. Count selects a prefix of one write up to the capacity, the writes past it act on nothing.
 	count := ringgadget.SelectCount(api, c.Count, 1, c.NumWrites)
-	// 2. Every active write moves the running root, next index and chain in queue order.
+	// 2. Every active write moves the running root, next index and chain in instruction order.
 	state := registryState{root: c.OldRoot, next: c.OldNextIndex, chain: c.ChainStart}
 	for i, w := range c.Writes {
 		state = w.apply(api, count.Active[i], state)
 	}
-	// 3. The registry after the batch and the queue segment it consumed are the statement's.
+	// 3. The registry after the batch and the chain end are the statement's.
 	api.AssertIsEqual(state.root, c.NewRoot)
 	api.AssertIsEqual(state.next, c.NewNextIndex)
 	api.AssertIsEqual(state.chain, c.ChainEnd)
@@ -95,6 +119,7 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	maskBits := api.ToBinary(w.Entry.Mask, ListBits)
 	updated := RecordBody{Next: w.Old.Next, Lists: api.Add(keptLists(api, w.Old.Lists, maskBits), w.Entry.Value)}
 	// 2. Mint settings move only under bit 192 of the entry, the 193 bit decomposition range-checks it.
+	// A separate flag keeps a replacement by all zeros apart from no change.
 	policyBits := api.ToBinary(w.Entry.MintPolicy, 193)
 	updated.MintPolicy = api.Select(policyBits[192], api.FromBinary(policyBits[:192]...), w.Old.MintPolicy)
 	updated.WithdrawalThreshold = api.Select(policyBits[192], w.Entry.WithdrawalThreshold, w.Old.WithdrawalThreshold)
@@ -102,6 +127,9 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 		updated.AssetLimits[i] = api.Select(policyBits[192], w.Entry.AssetLimits[i], w.Old.AssetLimits[i])
 	}
 	// 3. An absent member has empty old fields and lies strictly inside its low record's link under the running root, a link no present member falls inside.
+	// The argument runs over the tree's whole history. The empty root holds the one link (0, q-1), and an insert splits its link (low, next) into (low, member) and (member, next). The links therefore partition the field with every member at a link's end, a present member falls strictly inside none and AssertOrderedWhen refuses it.
+	// The check also runs on a write that inserts nothing. A present member called absent under a write that clears it would otherwise read as empty here, insert nothing and keep its list bit.
+	// Empty old fields leave Value and, under bit 192, the entry's mint settings as the new record.
 	api.AssertIsBoolean(w.Exists)
 	absent := api.Mul(active, api.Sub(1, w.Exists))
 	ringgadget.AssertOrderedWhen(api, absent, w.Low.Member, w.Entry.Member, w.Low.Next)
@@ -118,10 +146,12 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 	insert := api.Mul(absent, ringgadget.IsAny(api, nonzero...))
 	update := api.Mul(active, w.Exists)
 	// 5. An insert relinks the low record to the member and takes the empty leaf at the next index, linking on to the low record's old next.
+	// The next index keeps one free leaf per insert, a member placed on a later leaf would block the insert that reaches it. At next = Capacity the index fails QuadPath.digits, a full tree takes no member and a write that inserts nothing still passes.
 	linked := api.Select(insert, relinkedRoot, s.root)
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.Slot.Index, B: s.next})
 	abstractor.CallVoid(api, gadget.AssertEqualWhen{Cond: insert, A: w.Old.Next, B: w.Low.Next})
 	// 6. An update or insert replaces the slot's old leaf under the running root, an insert's old leaf is the empty leaf 0.
+	// On an insert the slot's siblings are those of the tree after the relink, the empty leaf must fold to linked. Exists cannot lie in the other direction either, a member called present must open a leaf that names it.
 	before := api.Select(w.Exists, Record{Member: w.Entry.Member, RecordBody: w.Old}.Hash(api), 0)
 	after := Record{Member: w.Entry.Member, RecordBody: updated}.Hash(api)
 	opened, written := w.Slot.Update(api, before, after)
@@ -137,7 +167,7 @@ func (w RecordWrite) apply(api frontend.API, active frontend.Variable, s registr
 }
 
 func keptLists(api frontend.API, old frontend.Variable, maskBits []frontend.Variable) frontend.Variable {
-	// The bitmap holds ListBits bits, the width of every record and queued mask.
+	// The bitmap holds ListBits bits, the width of every record and write mask.
 	oldBits := api.ToBinary(old, ListBits)
 	kept := frontend.Variable(0)
 	for i := range oldBits {

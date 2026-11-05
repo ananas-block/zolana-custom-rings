@@ -1,3 +1,13 @@
+//! One indexed tree, generic over its leaf, and the writes an apply proof replays.
+//!
+//! The tree is off chain. Each write here runs in the order the apply circuit proves its steps, so the
+//! proof input it returns opens the running root the circuit folds. A leaf type supplies its hash, the
+//! fields a write moves and the entry the program chains.
+//!
+//! Read after `program-libs/member-registry/src/lib.rs`, `program-libs/member-registry/src/path.rs`.
+//! Read before `program-libs/member-registry/src/memory.rs`, `program-libs/member-registry/src/record.rs`,
+//! `prover/circuits/registry/apply_records.go`, `prover/circuits/registry/apply_enrollments.go`.
+
 use core::marker::PhantomData;
 
 use custom_ring_interface::{QUAD_ARITY, QUAD_HEIGHT};
@@ -330,6 +340,7 @@ impl<L: WritableLeaf<H>, const H: usize, S: RecordStore<L, H> + ?Sized> Growing<
     /// One write in the order the apply circuit proves its steps.
     fn apply(&mut self, entry: &L::Entry) -> Result<L::WriteProof, S::Error> {
         let member = L::entry_member(entry);
+        // 1. A present member's write replaces its own leaf.
         if let Some(IndexedRecord { index, record }) = self.store.record(member)? {
             let slot = self.filled().path(index)?;
             self.write(index, record.after(entry)?)?;
@@ -338,6 +349,7 @@ impl<L: WritableLeaf<H>, const H: usize, S: RecordStore<L, H> + ?Sized> Growing<
                 WriteStep::Present { old: record, slot },
             ));
         }
+        // 2. An absent member lies strictly inside its low record's link under the running root.
         let IndexedRecord {
             index: low_index,
             record: low,
@@ -368,6 +380,7 @@ impl<L: WritableLeaf<H>, const H: usize, S: RecordStore<L, H> + ?Sized> Growing<
         if full {
             return Err(RecordTreeError::Full.into());
         }
+        // 3. An insert relinks the low record first, the new leaf's path then reads the relinked root the circuit folds.
         self.write(low_index, low.relinked(*member))?;
         let slot = self.filled().path(self.next_index)?;
         self.write(self.next_index, inserted)?;

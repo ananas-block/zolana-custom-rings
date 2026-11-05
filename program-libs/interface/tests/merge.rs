@@ -1,4 +1,4 @@
-//! The ring merge request around its compressed SPP proof point, and the tag 47 frame it replaced.
+//! The ring merge request around its compressed SPP proof point.
 
 mod common;
 

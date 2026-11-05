@@ -15,7 +15,6 @@ type depositStatementCircuit struct {
 	PublicInputHash frontend.Variable `gnark:",public"`
 	ContextHash     frontend.Variable
 	Count           frontend.Variable
-	Anonymous       frontend.Variable
 	TrackingRoot    frontend.Variable
 	OwnRoot         frontend.Variable
 	CuratorRoot     frontend.Variable
@@ -30,7 +29,7 @@ type depositStatementCircuit struct {
 
 func (c *depositStatementCircuit) Define(api frontend.API) error {
 	circuit := &DepositCircuit{
-		ContextHash: c.ContextHash, Count: c.Count, Anonymous: c.Anonymous, TrackingRoot: c.TrackingRoot, OwnRoot: c.OwnRoot,
+		ContextHash: c.ContextHash, Count: c.Count, TrackingRoot: c.TrackingRoot, OwnRoot: c.OwnRoot,
 		PolicyHash: c.PolicyHash, Assets: c.Assets[:], Amounts: c.Amounts[:],
 	}
 	circuit.CuratorRoot = c.CuratorRoot
@@ -49,7 +48,6 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 	var vectors struct {
 		Deposit struct {
 			ContextHash     string   `json:"context_hash"`
-			Anonymous       bool     `json:"anonymous"`
 			OwnerUtxoHashes []string `json:"owner_utxo_hashes"`
 			Ciphertexts     []string `json:"ciphertexts"`
 			AuditorPubkey   string   `json:"auditor_pubkey"`
@@ -70,7 +68,7 @@ func TestDepositStatementMatchesRustVector(t *testing.T) {
 	}
 	witness := &depositStatementCircuit{
 		PublicInputHash: ringtest.VectorField(t, v.PublicInputHash), ContextHash: ringtest.VectorField(t, v.ContextHash),
-		Count: len(v.OwnerUtxoHashes), Anonymous: ringtest.Bit(v.Anonymous), TrackingRoot: ringtest.VectorField(t, v.TrackingRoot), OwnRoot: 0, CuratorRoot: 0, PolicyHash: 0,
+		Count: len(v.OwnerUtxoHashes), TrackingRoot: ringtest.VectorField(t, v.TrackingRoot), OwnRoot: 0, CuratorRoot: 0, PolicyHash: 0,
 	}
 	if v.OwnRoot != nil {
 		witness.OwnRoot = ringtest.VectorField(t, *v.OwnRoot)

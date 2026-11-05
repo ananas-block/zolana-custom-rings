@@ -916,6 +916,42 @@ fn write_record_update_vectors() {
     }
 }
 
+/// A spend of `owner`, its hash and nullifier under its own key.
+fn relay_spend(
+    owner: &ShieldedKeypair,
+    ring: Address,
+    blinding: [u8; 32],
+) -> spr_transaction::utxo::SppProofInputUtxo {
+    let address = owner.shielded_address().expect("address");
+    let utxo = spr_transaction::Utxo {
+        owner: address.signing_pubkey,
+        asset: spr_transaction::Mint::SOL,
+        amount: 900,
+        blinding,
+        ring_program_id: Some(ring),
+        data: spr_transaction::Data::default(),
+    };
+    let utxo_hash = utxo
+        .hash(&address.nullifier_pubkey, &[0; 32], &[0; 32], 4)
+        .expect("hash");
+    spr_transaction::utxo::SppProofInputUtxo {
+        address: false,
+        nullifier: owner
+            .nullifier_key
+            .nullifier(&utxo_hash, &utxo.blinding)
+            .expect("nullifier"),
+        utxo,
+        nullifier_pubkey: address.nullifier_pubkey,
+        utxo_hash,
+        data_hash: None,
+        ring_data_hash: None,
+        tree_id: 4,
+        leaf_index: 17,
+        cache_slot: None,
+        compact: false,
+    }
+}
+
 fn relay_proof_inputs() -> RelayProofInputs {
     use spr_event::MessageData;
     use spr_instruction::instruction::{
@@ -929,40 +965,14 @@ fn relay_proof_inputs() -> RelayProofInputs {
     use spr_transaction::{
         instructions::transact::{ExternalData, SettlementTransfer},
         utxo::SppProofInputUtxo,
-        Data, Mint, SppProofOutputUtxo, Utxo,
+        Mint, SppProofOutputUtxo,
     };
     use zolana_ring_transaction::AnonymousPlan;
     let owner =
         ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[5; 32])).expect("owner");
     let sender = owner.shielded_address().expect("address");
     let ring = Address::new_from_array([6; 32]);
-    let utxo = Utxo {
-        owner: sender.signing_pubkey,
-        asset: Mint::SOL,
-        amount: 900,
-        blinding: [11; 32],
-        ring_program_id: Some(ring),
-        data: Data::default(),
-    };
-    let utxo_hash = utxo
-        .hash(&sender.nullifier_pubkey, &[0; 32], &[0; 32], 4)
-        .expect("hash");
-    let spend = SppProofInputUtxo {
-        address: false,
-        nullifier: owner
-            .nullifier_key
-            .nullifier(&utxo_hash, &utxo.blinding)
-            .expect("nullifier"),
-        utxo,
-        nullifier_pubkey: sender.nullifier_pubkey,
-        utxo_hash,
-        data_hash: None,
-        ring_data_hash: None,
-        tree_id: 4,
-        leaf_index: 17,
-        cache_slot: None,
-        compact: false,
-    };
+    let spend = relay_spend(&owner, ring, [11; 32]);
     let change = SppProofOutputUtxo {
         asset: Mint::SOL,
         amount: 800,
@@ -1073,6 +1083,217 @@ fn relay_proof_inputs_encode_to_the_shared_vector() {
     assert_eq!(read.outputs, inputs.outputs);
     assert_eq!(read.external_data, inputs.external_data);
     assert_eq!(read.rail.operation(), RelayOperation::Anonymous);
+}
+
+fn co_owner_keys() -> ShieldedKeypair {
+    ShieldedKeypair::from_keypair(SigningKey::from_ed25519_bytes(&[40; 32])).expect("co-owner")
+}
+
+fn relay_co_owner(keys: &ShieldedKeypair) -> RelayCoOwner {
+    let signing = keys.shielded_address().expect("address").signing_pubkey;
+    RelayCoOwner {
+        owner: Address::new_from_array(signing.as_ed25519().expect("ed25519")),
+        nullifier_key: nullifier_key_of(keys),
+    }
+}
+
+fn nullifier_key_of(keys: &ShieldedKeypair) -> spr_keypair::NullifierKey {
+    spr_keypair::NullifierKey::from_secret(*keys.nullifier_key.secret())
+}
+
+/// `relay_proof_inputs` with a co-owner's note at input 1 and every term the owner sealed.
+fn co_owned_relay_proof_inputs() -> RelayProofInputs {
+    let keys = co_owner_keys();
+    let mut inputs = relay_proof_inputs();
+    inputs.inputs[1] = relay_spend(&keys, inputs.ring_program_id, [41; 32]);
+    inputs.co_owners = vec![relay_co_owner(&keys)];
+    inputs.approval_blinder = Some([42; 32]);
+    inputs.list_salts = vec![SubjectListSalt {
+        member: [43; 32],
+        list_salt: [44; 32],
+    }];
+    inputs.wide_owners = true;
+    inputs
+}
+
+#[test]
+fn relay_proof_inputs_rederive_a_co_owners_spend_and_carry_the_sealed_terms() {
+    let inputs = co_owned_relay_proof_inputs();
+    let read = RelayProofInputs::decode(&inputs.encode().expect("encode")).expect("decode");
+    assert_eq!(read.inputs, inputs.inputs);
+    assert_eq!(read.approval_blinder, Some([42; 32]));
+    assert!(read.wide_owners);
+    assert!(read.list_salts == inputs.list_salts);
+    let [co_owner] = read.co_owners.as_slice() else {
+        panic!("one co-owner");
+    };
+    assert_eq!(co_owner.owner, inputs.co_owners[0].owner);
+    assert_eq!(
+        co_owner.nullifier_key.secret(),
+        co_owner_keys().nullifier_key.secret()
+    );
+}
+
+#[test]
+fn relay_proof_inputs_refuse_to_encode_what_the_service_cannot_prove() {
+    let refused = |change: fn(&mut RelayProofInputs)| {
+        let mut inputs = co_owned_relay_proof_inputs();
+        change(&mut inputs);
+        inputs.encode().expect_err("refused")
+    };
+    assert!(matches!(
+        refused(|inputs| inputs.nullifier_key = nullifier_key_of(&co_owner_keys())),
+        RelayProofInputsError::NullifierKey
+    ));
+    assert!(matches!(
+        refused(|inputs| inputs.co_owners.clear()),
+        RelayProofInputsError::Input { index: 1 }
+    ));
+    assert!(matches!(
+        refused(|inputs| inputs.co_owners[0].nullifier_key = inputs.nullifier_key.clone()),
+        RelayProofInputsError::Input { index: 1 }
+    ));
+    assert!(matches!(
+        refused(|inputs| inputs.inputs[0].cache_slot = Some(0)),
+        RelayProofInputsError::Input { index: 0 }
+    ));
+    assert!(matches!(
+        refused(|inputs| inputs.outputs[0].cache_slot = Some(0)),
+        RelayProofInputsError::CachedOutput { index: 0 }
+    ));
+    assert!(matches!(
+        refused(|inputs| inputs.interface_transfer_accounts.clear()),
+        RelayProofInputsError::Settlement { index: 0 }
+    ));
+    assert!(matches!(
+        refused(|inputs| {
+            inputs.external_data.interface_transfers = vec![
+                spr_transaction::instructions::transact::SettlementTransfer::Sol {
+                    is_deposit: true,
+                    amount: 100,
+                    user_sol_account: Address::new_from_array([15; 32]),
+                },
+            ];
+        }),
+        RelayProofInputsError::Settlement { index: 0 }
+    ));
+}
+
+/// A relay decodes bytes from outside, so each check holds without the encoder.
+#[test]
+fn relay_proof_inputs_refuse_forged_bytes() {
+    let inputs = co_owned_relay_proof_inputs();
+    let encoded = inputs.encode().expect("encode");
+    // The owner's last site is the co-owner list, its first is the spend naming it.
+    let swapped = |from: &[u8], to: &[u8]| {
+        let site = encoded
+            .windows(from.len())
+            .rposition(|window| window == from)
+            .expect("site");
+        let mut forged = encoded.to_vec();
+        forged[site..site + from.len()].copy_from_slice(to);
+        forged
+    };
+    let mut trailing = encoded.to_vec();
+    trailing.push(0);
+    assert!(matches!(
+        RelayProofInputs::decode(&trailing).err().expect("refused"),
+        RelayProofInputsError::Decode(_)
+    ));
+    assert!(matches!(
+        RelayProofInputs::decode(&encoded[..encoded.len() - 1])
+            .err()
+            .expect("refused"),
+        RelayProofInputsError::Decode(_)
+    ));
+    let other_key = swapped(
+        &inputs.nullifier_key.secret()[..],
+        &co_owner_keys().nullifier_key.secret()[..],
+    );
+    assert!(matches!(
+        RelayProofInputs::decode(&other_key).err().expect("refused"),
+        RelayProofInputsError::NullifierKey
+    ));
+    let unnamed = swapped(inputs.co_owners[0].owner.as_array(), &[45; 32]);
+    assert!(matches!(
+        RelayProofInputs::decode(&unnamed).err().expect("refused"),
+        RelayProofInputsError::NullifierKey
+    ));
+}
+
+#[test]
+fn relay_merge_inputs_refuse_a_note_the_sender_does_not_own() {
+    let spends = relay_proof_inputs();
+    let foreign = relay_spend(&co_owner_keys(), spends.ring_program_id, [41; 32]);
+    let refused = RelayMergeInputs {
+        ring_program_id: spends.ring_program_id,
+        sender: spends.sender,
+        nullifier_key: spends.nullifier_key.clone(),
+        inputs: vec![spr_transaction::WalletUtxo {
+            utxo: foreign.utxo,
+            nullifier_pubkey: foreign.nullifier_pubkey,
+            utxo_hash: foreign.utxo_hash,
+            nullifier: foreign.nullifier,
+            tx_viewing_key: None,
+            data_hash: None,
+            ring_data_hash: None,
+            tree_id: foreign.tree_id,
+            leaf_index: foreign.leaf_index,
+            latest_tree_id: None,
+            slot: 0,
+            tx_signature: Signature::default(),
+            slot_index: 0,
+        }],
+    }
+    .encode()
+    .expect_err("refused");
+    assert!(matches!(
+        refused,
+        RelayProofInputsError::MergeInput { index: 0 }
+    ));
+}
+
+#[test]
+fn token_account_setup_names_only_a_withdrawals_associated_account_once() {
+    use spr_instruction::instruction::{
+        CreateAssociatedTokenAccount, TransactInterfaceTransferAccounts,
+        TransactSplWithdrawalAccounts,
+    };
+    let payer = Address::new_from_array([50; 32]);
+    let owner = Address::new_from_array([51; 32]);
+    let mint = Address::new_from_array([52; 32]);
+    let token_program = Address::new_from_array([54; 32]);
+    let mut inputs = relay_proof_inputs();
+    inputs.interface_transfer_accounts = vec![TransactInterfaceTransferAccounts::SplWithdrawal(
+        TransactSplWithdrawalAccounts {
+            mint,
+            spl_interface: Address::new_from_array([53; 32]),
+            user_token_account: CreateAssociatedTokenAccount {
+                payer,
+                owner,
+                mint,
+                token_program,
+            }
+            .address(),
+            token_program,
+        },
+    )];
+    let setup = |owner: Address, mint: Address| TokenAccountSetup {
+        owner: owner.into(),
+        mint: mint.into(),
+    };
+    let created = inputs
+        .token_account_setup(payer, &[setup(owner, mint)])
+        .expect("setup");
+    assert_eq!(created.len(), 1);
+    let refused = |entries: &[TokenAccountSetup]| inputs.token_account_setup(payer, entries).err();
+    let no_withdrawal = Some(TokenAccountSetupError::NoWithdrawal { index: 0 });
+    assert_eq!(refused(&[setup(payer, mint)]), no_withdrawal);
+    assert_eq!(refused(&[setup(owner, payer)]), no_withdrawal);
+    assert_eq!(
+        refused(&[setup(owner, mint), setup(owner, mint)]),
+        Some(TokenAccountSetupError::Repeated { index: 1 })
+    );
 }
 
 #[derive(Deserialize)]

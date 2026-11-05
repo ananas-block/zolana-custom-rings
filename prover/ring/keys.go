@@ -25,7 +25,7 @@ const (
 type Key struct {
 	Circuit common.CircuitType
 	Family  Family
-	// Inputs counts the input slots or queued writes the key sizes.
+	// Inputs counts the input slots or writes the key sizes.
 	Inputs      int
 	Outputs     int
 	Withdrawals int

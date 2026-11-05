@@ -2,7 +2,9 @@
 
 use bytemuck::Zeroable;
 use custom_ring_interface::{
-    cosign::ApprovalMask, funder_account_position, input_flag, key_catalog::RingCircuit,
+    cosign::ApprovalMask,
+    funder_account_position, input_flag,
+    key_catalog::{FrameKey, RingCircuit},
     sender_bundle_len, shape_flag, spl_withdrawal_count, tag, transact_flag, AnonymousProofData,
     CoSignScope, CustomRingError, CustomRingProof, FramedSenderBundle, InputTrees,
     PlainGroth16Proof, PolicyProof, RingOutput, RingPolicy, RingRail, RingRole, RingTransactData,
@@ -73,7 +75,7 @@ impl Fixture {
             records: core::array::from_fn(|i| [0x80 + i as u8; AUDIT_RECORD_LEN]),
             bodies: core::array::from_fn(|i| [0x90 + i as u8; RECIPIENT_BODY_LEN]),
             bundle: vec![0x3c; sender_bundle_len(16)],
-            envelope: (0..2048u32).map(|byte| byte as u8 ^ 0x93).collect(),
+            envelope: (0..5000u32).map(|byte| byte as u8 ^ 0x93).collect(),
             tags: core::array::from_fn(|i| field(0xa0 + i as u8)),
             salt: [0x5c; 16],
             spl_owners: [[0x73; 32]; 8],
@@ -125,7 +127,15 @@ impl Fixture {
             interface_transfers: Vec::new(),
             has_data: false,
             entry: false,
-            wide_owners: false,
+            wide_owners: FrameKey {
+                rail,
+                inputs: usize::from(n_in),
+                outputs: usize::from(n_out),
+                spends_default_ring: false,
+                wide: false,
+            }
+            .shape()
+            .is_none(),
             outputs: Vec::new(),
             replies: None,
             sender: rail.anonymous_frame().then(|| FramedSenderBundle {

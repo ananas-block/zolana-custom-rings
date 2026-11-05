@@ -247,7 +247,8 @@ function checkCounts(form: Instruction, signers: FitSigners): void {
   });
   if (signatures > MAX_TRANSACTION_SIGNATURES)
     throw new RingError("RING_FIT_SIGNATURES", {
-      details: { signatures, limit: MAX_TRANSACTION_SIGNATURES },
+      // `sanitizeDetails` drops a key naming a signature.
+      details: { signers: signatures, limit: MAX_TRANSACTION_SIGNATURES },
     });
   const instructions = setup.length + 1;
   if (instructions > MAX_TRANSACTION_INSTRUCTIONS)

@@ -30,7 +30,12 @@ interface Case {
   readonly name: string;
   readonly accepts: number;
   readonly opening: unknown;
-  readonly limits: readonly Readonly<{ mint: Address; peak: string; outflow: string }>[];
+  readonly limits: readonly Readonly<{
+    mint: Address;
+    peak: string;
+    outflow: string;
+    gross: string;
+  }>[];
   readonly seenBlinders: readonly string[];
   readonly message: string;
   readonly verdict: string;
@@ -58,6 +63,7 @@ function ruleOf(entry: Case): CoSignerRule {
         mint: limit.mint,
         peak: BigInt(limit.peak),
         outflow: BigInt(limit.outflow),
+        gross: BigInt(limit.gross),
       })),
       seenBlinders: entry.seenBlinders.map(hash),
     },

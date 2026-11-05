@@ -1,3 +1,5 @@
+// Refusals of the input asset rules, a zero value delisted input and an input asset subject the root does not hold.
+
 package policy_test
 
 import (
@@ -141,11 +143,23 @@ func TestGuardedAssetRuleKeepsItsTotals(t *testing.T) {
 	})
 }
 
-// Every subject the key can name is distinct, each input a zero value note of its own asset.
-func TestDistinctInputAssetsFitTheDefaultPools(t *testing.T) {
+// Every input repeats the payment's asset, the three rows of the sender, the owner and the asset hold them all.
+func TestRepeatedInputAssetsShareOneRecord(t *testing.T) {
+	w := poolWorld(ringpolicy.SectionShape{Outputs: 2}, false, false)
+	w.Records = policy.RecordPoolShape{Own: 3, Curator: 3}
+	w.Inputs = nil
+	for range 2 + len(w.Public) {
+		w.Inputs = append(w.Inputs, ringpolicy.Slot{Owner: ringpolicy.Sender, Asset: ringpolicy.AssetA, Amount: 1})
+	}
+	requireSolved(t, w.Build(t))
+}
+
+// Every payment subject is distinct, the unmatched zero value notes spend on the rows left free.
+func TestUnmatchedInputAssetsTakeFreeRows(t *testing.T) {
 	w := poolWorld(ringpolicy.SectionShape{Outputs: 2}, true, false)
 	w.Inputs = nil
-	for i := range 2 + len(w.Public) {
+	free := 3
+	for i := range free {
 		asset := int64(40000 + i)
 		w.Own[asset], w.Curator[asset] = ringpolicy.Record{Lists: ringregistry.AllowBit}, ringpolicy.Record{Lists: ringregistry.AllowBit}
 		w.Inputs = append(w.Inputs, ringpolicy.Slot{Owner: ringpolicy.Sender, Asset: asset})
