@@ -1,11 +1,11 @@
 import { getBase64Decoder } from "@solana/kit";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import { RingError } from "../error.js";
 import { getBase58Decoder } from "@solana/kit";
 
-import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/spr/internal";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
+import type { ShieldedAddress } from "@heliuslabs/spr/keypair";
 
 import { encodeMintPolicy } from "../indexer/indexer-codec.js";
 import type {

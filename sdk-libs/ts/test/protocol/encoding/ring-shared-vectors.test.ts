@@ -10,8 +10,8 @@ import { describe, expect, it } from "vitest";
 import records from "../../../../../test-vectors/registry/ring-records.json" with { type: "json" };
 import statements from "../../../../../test-vectors/proof/ring-statements.json" with { type: "json" };
 import poolCapacity from "../../../../../test-vectors/policy/pool_capacity.json" with { type: "json" };
-import { ZERO_32, encodeBase58 } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes64, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { ZERO_32, encodeBase58 } from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes64, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 import { packDisclosure, unpackDisclosure } from "../../../src/crypto/audit/audit.js";
 import {
   fittedSpend,

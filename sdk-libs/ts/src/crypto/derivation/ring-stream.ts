@@ -1,8 +1,8 @@
 import { getAddressEncoder, type Address } from "@solana/kit";
 
-import { hashBytes, rightAlign, checkedBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/keypair";
-import type { ViewingKey, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { hashBytes, rightAlign, checkedBytes } from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/keypair";
+import type { ViewingKey, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import { packBytesBe } from "./hasher.js";
 
 import { u32Field } from "../error.js";

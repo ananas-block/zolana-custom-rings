@@ -10,8 +10,8 @@ import {
   copyBytes,
   hashBytes,
   wrapKeypairError,
-} from "@heliuslabs/zolana/internal";
-import { type Bytes32, type Bytes33, ShieldedPublicKey } from "@heliuslabs/zolana";
+} from "@heliuslabs/spr/internal";
+import { type Bytes32, type Bytes33, ShieldedPublicKey } from "@heliuslabs/spr";
 
 import { memberOfIdentity, memberOfTag, type Member } from "../../protocol/membership/policy.js";
 import { RingError } from "../../protocol/error.js";

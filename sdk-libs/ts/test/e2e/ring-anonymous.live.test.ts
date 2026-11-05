@@ -2,7 +2,7 @@
 import { generateKeyPairSigner, type KeyPairSigner } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import type { RuleTable } from "../../src/ring/advanced.js";
 import {

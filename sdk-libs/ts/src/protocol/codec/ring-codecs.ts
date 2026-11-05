@@ -1,7 +1,7 @@
 import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
-import { Reader, encodeBase58, ZERO_32, equalBytes } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { Reader, encodeBase58, ZERO_32, equalBytes } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { X25519PublicKey } from "@heliuslabs/spr/keypair";
 import { RING_RULE_SLOTS, RING_SOURCE_SLOTS } from "../../rpc/prover/types.js";
 import { MEMBER_REGISTRY_CAPACITY, ROOT_HISTORY } from "../membership/member-registry.js";
 

@@ -1,5 +1,5 @@
 /** The policy section of a ring transfer, every record read under a root the statement binds. */
-import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedAddress, ShieldedPublicKey } from "@heliuslabs/spr/keypair";
 import { EMPTY_MINT_POLICY, type MintPolicy } from "../protocol/membership/mint-policy.js";
 import type { RecordPool } from "../protocol/membership/member-registry.js";
 import {
@@ -14,17 +14,17 @@ import {
   bytesKey,
   equalBytes,
   isZero,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import { type RingRecordReader, type TrackingReader } from "../rpc/ports.js";
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
 import {
   assetField,
   type ProofInputUtxo,
   type ProofOutputUtxo,
   type SettlementTransfer,
   type SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import type {
   PolicyOwnerEntry,
   PolicyProofInputs,

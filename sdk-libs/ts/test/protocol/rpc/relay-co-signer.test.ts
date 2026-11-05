@@ -9,9 +9,9 @@ import {
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
 
 import { CoSignerApproval } from "../../../src/proof/cosign.js";
 import type { ApprovalOpening } from "../../../src/protocol/membership/approval-totals.js";

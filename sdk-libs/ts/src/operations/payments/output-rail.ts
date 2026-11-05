@@ -5,10 +5,10 @@ import {
   equalBytes,
   isZero,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32, MessageData, TransactOutput } from "@heliuslabs/zolana/interface";
-import { randomSalt, ViewingKey } from "@heliuslabs/zolana/keypair";
-import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32, MessageData, TransactOutput } from "@heliuslabs/spr/interface";
+import { randomSalt, ViewingKey } from "@heliuslabs/spr/keypair";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   createExternalData,
   createProofOutput,
@@ -19,8 +19,8 @@ import {
   type AssetRegistry,
   type PreparedTransfer,
   type ProofOutputUtxo,
-} from "@heliuslabs/zolana/transaction";
-import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/transaction";
+import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/spr/interface";
 
 import {
   encodeRingOutput,

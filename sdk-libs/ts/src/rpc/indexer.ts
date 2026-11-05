@@ -1,11 +1,11 @@
-import { ClientError, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
+import { ClientError, type Bytes32, type RequestContext } from "@heliuslabs/spr";
 import {
   ApiError,
   equalBytes,
   indexerScalars,
   wrapIndexer,
-  type ZolanaApi,
-} from "@heliuslabs/zolana/internal";
+  type SprApi,
+} from "@heliuslabs/spr/internal";
 
 import {
   getStorageMemberOpeningsMethod,
@@ -63,9 +63,9 @@ const RING_PROJECTION_CODES: ReadonlyMap<number, RingErrorCode> = new Map([
 ]);
 
 export class RingIndexer implements RingRecordReader, TrackingReader {
-  readonly #api: ZolanaApi;
+  readonly #api: SprApi;
 
-  constructor(api: ZolanaApi) {
+  constructor(api: SprApi) {
     this.#api = api;
   }
 

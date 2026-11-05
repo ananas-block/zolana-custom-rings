@@ -1,17 +1,17 @@
 import { address, getAddressDecoder } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
 import {
   ShieldedKeypair,
   SigningKey,
   ViewingKey,
   ed25519DerivationMessage,
   isDerivationInput,
-} from "@heliuslabs/zolana/keypair";
-import { LocalShieldedKeys } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/keypair";
+import { LocalShieldedKeys } from "@heliuslabs/spr/transaction";
 
 import { listSaltOf } from "../../src/crypto/keys/list-salt.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";

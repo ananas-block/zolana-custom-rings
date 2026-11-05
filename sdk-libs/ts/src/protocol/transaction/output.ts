@@ -4,7 +4,7 @@ import {
   DisclosureFormat,
   RECIPIENT_BODY_LEN,
 } from "../codec/ring-disclosure-layout.js";
-import { TransactionError } from "@heliuslabs/zolana/transaction";
+import { TransactionError } from "@heliuslabs/spr/transaction";
 
 /** The schemes a ring output publishes, SPP stores the ring-owned ones unparsed. */
 export const RingScheme = Object.freeze({

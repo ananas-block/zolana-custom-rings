@@ -2,10 +2,10 @@
 import { describe, expect, it } from "vitest";
 import type { Address } from "@solana/kit";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { bigIntBytes, hashChain4 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import type { SettlementTransfer } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { bigIntBytes, hashChain4 } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import type { SettlementTransfer } from "@heliuslabs/spr/transaction";
 
 import {
   decodeAuditEnvelope,

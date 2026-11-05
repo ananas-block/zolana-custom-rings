@@ -1,4 +1,4 @@
-import { bytesKey } from "@heliuslabs/zolana/internal";
+import { bytesKey } from "@heliuslabs/spr/internal";
 import {
   assertIsFullySignedTransaction,
   assertIsTransactionWithinSizeLimit,
@@ -20,16 +20,16 @@ import {
   equalBytes,
   assertVersion1Transaction,
   compileUnsignedTransaction,
-} from "@heliuslabs/zolana/internal";
-import type { BlockhashProvider, ChainReader, KitRpcAccess } from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/internal";
+import type { BlockhashProvider, ChainReader, KitRpcAccess } from "@heliuslabs/spr/client";
 import type { ViewingHistory } from "../../state/viewing-history.js";
-import { savePersistedWallet, type WalletPersistence } from "@heliuslabs/zolana/wallet";
-import type { Bytes32, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
+import { savePersistedWallet, type WalletPersistence } from "@heliuslabs/spr/wallet";
+import type { Bytes32, RequestContext, Transaction } from "@heliuslabs/spr/interface";
 import {
   type Wallet,
   type WalletUtxo,
   type PendingWalletSubmission,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import type {
   RingSubmissionPending,
   RingSubmissionStatus,

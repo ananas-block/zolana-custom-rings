@@ -1,4 +1,4 @@
-import type { ChainReader, TreeContext } from "@heliuslabs/zolana/client";
+import type { ChainReader, TreeContext } from "@heliuslabs/spr/client";
 import {
   equalBytes,
   bytesKey,
@@ -6,16 +6,16 @@ import {
   ZERO_NULLIFIER_PK,
   type SpendPolicy,
   type SpendSelectionErrors,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   MAX_INPUT_TREES,
   type Address,
   type Bytes32,
   type RequestContext,
-} from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
-import { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
-import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import type { ShieldedAddress } from "@heliuslabs/spr/keypair";
+import { ProofInputUtxo } from "@heliuslabs/spr/transaction";
+import type { Wallet, WalletUtxo } from "@heliuslabs/spr/transaction";
 
 import { recoveryAllows, type RecoveryWallet } from "../../state/recovery-session.js";
 import { RingError } from "../../protocol/error.js";

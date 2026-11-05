@@ -7,8 +7,8 @@ import { Worker } from "node:worker_threads";
 import { rolldown } from "rolldown";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import {
   answerScanRequest,
@@ -41,12 +41,12 @@ async function bundledEntry(directory: string): Promise<string> {
     platform: "node",
     resolve: {
       alias: {
-        "@heliuslabs/zolana/internal": `${core}internal.ts`,
-        "@heliuslabs/zolana/interface": `${core}interface/index.ts`,
-        "@heliuslabs/zolana/keypair": `${core}keypair/index.ts`,
-        "@heliuslabs/zolana/transaction": `${core}transaction/index.ts`,
-        "@heliuslabs/zolana/client": `${core}client/index.ts`,
-        "@heliuslabs/zolana": `${core}index.ts`,
+        "@heliuslabs/spr/internal": `${core}internal.ts`,
+        "@heliuslabs/spr/interface": `${core}interface/index.ts`,
+        "@heliuslabs/spr/keypair": `${core}keypair/index.ts`,
+        "@heliuslabs/spr/transaction": `${core}transaction/index.ts`,
+        "@heliuslabs/spr/client": `${core}client/index.ts`,
+        "@heliuslabs/spr": `${core}index.ts`,
       },
     },
   });

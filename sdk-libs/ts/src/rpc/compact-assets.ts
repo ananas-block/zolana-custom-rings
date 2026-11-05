@@ -1,14 +1,13 @@
 import { getBase64Decoder, getU64Encoder, type Base64EncodedBytes } from "@solana/kit";
-import { ClientError, type KitRpcAccess } from "@heliuslabs/zolana/client";
+import { ClientError, type KitRpcAccess } from "@heliuslabs/spr/client";
 import {
   decodeSplAssetCounter,
   decodeSplAssetRegistry,
   FIRST_ASSET_ID,
   SHIELDED_POOL_PROGRAM_ID,
-  SPL_ASSET_REGISTRY_ASSET_ID_OFFSET,
   StateDiscriminator,
   type RequestContext,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   runKitRpc,
   splAssetCounterAddress,
@@ -16,10 +15,13 @@ import {
   U64_MAX,
   unsignedBigint,
   wireDecoder,
-} from "@heliuslabs/zolana/internal";
-import { AssetRegistry, Mint, SOL_ASSET_ID, SOL_MINT } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import { AssetRegistry, Mint, SOL_ASSET_ID, SOL_MINT } from "@heliuslabs/spr/transaction";
 
 export const COMPACT_ASSET_LOOKUP_BUDGET = 32;
+
+/** Past the discriminator, 7 reserved bytes and the mint. */
+export const SPL_ASSET_REGISTRY_ASSET_ID_OFFSET = 40n;
 
 export type CompactAssetResolution =
   | Readonly<{ kind: "foreign" }>

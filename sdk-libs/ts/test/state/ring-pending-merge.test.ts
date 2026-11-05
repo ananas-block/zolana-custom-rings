@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   encodeMergeOutputData,
   encryptMergeOutput,
   mergeOutputBlinding,
   mergeOutputKey,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes16 } from "@heliuslabs/zolana/interface";
-import { AssetRegistry, Utxo, Wallet, type WalletUtxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import type { Address, Bytes16 } from "@heliuslabs/spr/interface";
+import { AssetRegistry, Utxo, Wallet, type WalletUtxo } from "@heliuslabs/spr/transaction";
 
 import { AnonymousSync } from "../../src/state/anonymous-sync.js";
 import { AnonymousWallet } from "../../src/state/anonymous-wallet.js";

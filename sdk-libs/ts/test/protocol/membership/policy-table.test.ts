@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import rulesVector from "../../../../../test-vectors/policy/ring-policy-rules.json" with { type: "json" };
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";

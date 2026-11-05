@@ -11,8 +11,8 @@ import {
   encodeBase58,
   equalBytes,
   u64be,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
 
 import { checkedCounter } from "../../crypto/error.js";
 import {

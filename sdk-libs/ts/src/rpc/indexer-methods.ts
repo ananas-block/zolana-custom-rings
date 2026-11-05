@@ -1,4 +1,4 @@
-import type { MethodDescriptor } from "@heliuslabs/zolana/internal";
+import type { MethodDescriptor } from "@heliuslabs/spr/internal";
 
 import {
   decodeStorageMemberOpenings,

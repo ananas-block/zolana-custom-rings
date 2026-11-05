@@ -1,8 +1,8 @@
-import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/zolana/keypair";
-import { LocalKeys, type ProofService } from "@heliuslabs/zolana/client";
-import { SHIELDED_POOL_PROGRAM_ID, treeAddress } from "@heliuslabs/zolana/internal";
-import { type Bytes32 } from "@heliuslabs/zolana/interface";
-import { Data, SOL_MINT, Utxo, Wallet, AssetRegistry } from "@heliuslabs/zolana/transaction";
+import { ShieldedKeypair, SigningKey, type ShieldedAddress } from "@heliuslabs/spr/keypair";
+import { LocalKeys, type ProofService } from "@heliuslabs/spr/client";
+import { SHIELDED_POOL_PROGRAM_ID, treeAddress } from "@heliuslabs/spr/internal";
+import { type Bytes32 } from "@heliuslabs/spr/interface";
+import { Data, SOL_MINT, Utxo, Wallet, AssetRegistry } from "@heliuslabs/spr/transaction";
 import {
   approveRingUnattended,
   type RingApprovalHandler,

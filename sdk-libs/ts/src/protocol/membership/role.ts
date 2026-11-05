@@ -1,5 +1,5 @@
-import type { ChainReader, RpcAccount } from "@heliuslabs/zolana/client";
-import type { Address, RequestContext } from "@heliuslabs/zolana";
+import type { ChainReader, RpcAccount } from "@heliuslabs/spr/client";
+import type { Address, RequestContext } from "@heliuslabs/spr";
 
 import { decodeRingPolicy, RING_ROLES, type RingAuthorityRole } from "../codec/ring-codecs.js";
 import { ringPolicyAddress } from "../pda/index.js";

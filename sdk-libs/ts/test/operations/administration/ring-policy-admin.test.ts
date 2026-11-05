@@ -2,9 +2,9 @@ import { storageRegistryAccount } from "../../helpers/ring-accounts.js";
 import { address, blockhash, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { RpcAccount } from "@heliuslabs/zolana/client";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import type { RpcAccount } from "@heliuslabs/spr/client";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import type { RingSourceSlot } from "../../../src/protocol/codec/ring-codecs.js";
 import {

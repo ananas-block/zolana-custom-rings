@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { NoteLedger } from "../../src/state/anonymous-sync.js";
 import { ScanWallet } from "../helpers/ring-scan.js";
 
 // Counts every hash comparison and every hash key the ledger takes.
-vi.mock("@heliuslabs/zolana/internal", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@heliuslabs/zolana/internal")>();
+vi.mock("@heliuslabs/spr/internal", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@heliuslabs/spr/internal")>();
   return { ...actual, bytesKey: vi.fn(actual.bytesKey), equalBytes: vi.fn(actual.equalBytes) };
 });
-const { bytesKey, equalBytes } = vi.mocked(await import("@heliuslabs/zolana/internal"));
+const { bytesKey, equalBytes } = vi.mocked(await import("@heliuslabs/spr/internal"));
 
 const NOTES = 10_000;
 

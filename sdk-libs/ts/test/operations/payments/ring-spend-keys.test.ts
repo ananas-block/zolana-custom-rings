@@ -1,23 +1,18 @@
 import { generateKeyPairSigner, type Address } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { ProofAuthority, ProverInputs } from "@heliuslabs/zolana/client";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { ProofAuthority, ProverInputs } from "@heliuslabs/spr/client";
 import {
   bigIntBytes,
   bytesToBigInt,
   poseidon,
   randomBytes,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
-import { NullifierKey, ShieldedKeypair } from "@heliuslabs/zolana/keypair";
-import {
-  SOL_MINT,
-  Utxo,
-  type SppProofInputs,
-  type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import type { Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
+import { NullifierKey, ShieldedKeypair } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, Utxo, type SppProofInputs, type WalletUtxo } from "@heliuslabs/spr/transaction";
 
 import {
   checkCoOwnerKeys,

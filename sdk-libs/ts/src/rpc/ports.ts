@@ -1,6 +1,6 @@
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { Bytes32, Bytes64, RequestContext } from "@heliuslabs/zolana";
-import type { Transaction } from "@heliuslabs/zolana/interface";
+import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
+import type { Bytes32, Bytes64, RequestContext } from "@heliuslabs/spr";
+import type { Transaction } from "@heliuslabs/spr/interface";
 import type {
   BlockhashProvider,
   ChainReader,
@@ -9,7 +9,7 @@ import type {
   ProvenRingTransact,
   Prover,
   TreeContext,
-} from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/client";
 import type { Address, Signature } from "@solana/kit";
 
 import type {

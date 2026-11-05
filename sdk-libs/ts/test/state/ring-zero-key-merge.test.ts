@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   addressBytes,
   encodeMergeOutputData,
@@ -9,10 +9,10 @@ import {
   seededMergeOutputKey,
   ZERO_32,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { ViewingKey } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, Utxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { ViewingKey } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, Utxo } from "@heliuslabs/spr/transaction";
 
 import { isZeroKeyNote } from "../../src/state/exposed-notes.js";
 import { LocalRingKeys } from "../../src/state/ring-keys.js";
@@ -34,7 +34,7 @@ beforeAll(initializePoseidon);
 const FIRST_NULLIFIER = field(9, 9);
 const SALT = new Uint8Array(16).fill(4) as Bytes16;
 
-/** A merge row sealed under `seed`, tagged by `tag` as `merge_ring_v2` tags it. */
+/** A merge row sealed under `seed`, tagged by `tag` as `merge_ring` tags it. */
 function zeroKeyMergeRow(
   input: Readonly<{ owner: ScanWallet; seed: Bytes32; tag?: Bytes32; amount?: bigint }>,
 ) {
@@ -66,7 +66,6 @@ function zeroKeyMergeRow(
               SALT,
             ),
             ringDataHash: ZERO_32,
-            ringV2: true,
           }),
         },
       ],

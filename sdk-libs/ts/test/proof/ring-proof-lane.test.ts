@@ -1,12 +1,12 @@
-import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
+import type { ShieldedPublicKey } from "@heliuslabs/spr/keypair";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import { hexToBytes } from "@noble/hashes/utils.js";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { bytesKey } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { bytesKey } from "@heliuslabs/spr/internal";
 import type { Address } from "@solana/kit";
 
 import {
@@ -56,8 +56,8 @@ import { TRACKING_QUAD_HEIGHT } from "../../src/protocol/membership/tracking.js"
 import { unopenedRecordPool } from "../../src/protocol/membership/member-opening.js";
 import { transferPoolCapacity } from "../../src/protocol/proof/transfer-shapes.js";
 import { ringStreamLayout } from "../../src/protocol/transaction/transact.js";
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/zolana/transaction";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { ProofInputUtxo, ProofOutputUtxo } from "@heliuslabs/spr/transaction";
 import type { TrackingRecord } from "../../src/protocol/membership/tracking.js";
 import {
   ringProofRequestBody,

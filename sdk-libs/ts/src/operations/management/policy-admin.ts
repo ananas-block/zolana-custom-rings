@@ -1,11 +1,6 @@
-import type { BlockhashProvider, ChainReader } from "@heliuslabs/zolana/client";
-import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
-import type {
-  Address,
-  Instruction,
-  RequestContext,
-  Transaction,
-} from "@heliuslabs/zolana/interface";
+import type { BlockhashProvider, ChainReader } from "@heliuslabs/spr/client";
+import { compileUnsignedTransaction } from "@heliuslabs/spr/internal";
+import type { Address, Instruction, RequestContext, Transaction } from "@heliuslabs/spr/interface";
 
 import {
   RingInstructionTag,

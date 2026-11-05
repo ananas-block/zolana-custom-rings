@@ -16,7 +16,7 @@ import {
   type Bytes32,
   TRANSACTION_SIZE_LIMIT,
   transactionSize,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   randomBlinding,
   ShieldedKeypair,
@@ -24,7 +24,7 @@ import {
   ViewingKey,
   X25519Keypair,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
@@ -37,7 +37,7 @@ import {
   Wallet,
   type PreparedTransfer,
   type SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   approveRingUnattended,
   type RingApprovalRequest,
@@ -180,8 +180,8 @@ function signer(address: Address) {
 
 import { ringSpendTransfer } from "../../../src/operations/payments/ring-spend.js";
 import { ringProofInput } from "../../../src/operations/workflow/selection.js";
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { WalletUtxo } from "@heliuslabs/spr/transaction";
 
 const ownNullifier = (): Bytes32 => new Uint8Array(32).fill(0x12) as Bytes32;
 

@@ -1,6 +1,6 @@
 import { getBase58Decoder, getBase64Decoder, type MessagePartialSigner } from "@solana/kit";
-import type { RequestContext, Signature } from "@heliuslabs/zolana/interface";
-import { signerAddress } from "@heliuslabs/zolana/internal";
+import type { RequestContext, Signature } from "@heliuslabs/spr/interface";
+import { signerAddress } from "@heliuslabs/spr/internal";
 
 import { RingError } from "../../protocol/error.js";
 import { fetchRingPolicy } from "../../protocol/membership/config.js";

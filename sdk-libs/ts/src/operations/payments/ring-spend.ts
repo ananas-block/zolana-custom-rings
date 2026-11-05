@@ -1,26 +1,26 @@
 /** A spend of co-owner and zero key notes the core transfer builder refuses. */
 import type { Address } from "@solana/kit";
 
-import type { ProofAuthority } from "@heliuslabs/zolana/client";
+import type { ProofAuthority } from "@heliuslabs/spr/client";
 import {
   bigIntBytes,
   bytesToBigInt,
   equalBytes,
   poseidon,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
 import {
   NullifierKey,
   type ShieldedAddress,
   type ShieldedPublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   ConfidentialTransfer,
   ProofInputUtxo,
   Utxo,
   type SppProofInputs,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { RingError } from "../../protocol/error.js";
 

@@ -1,8 +1,8 @@
 /** One co-sign rule for the program and the SDKs, Rust `instructions::cosign`. */
 import type { Address } from "@solana/kit";
 
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import type { RequestContext } from "@heliuslabs/spr/interface";
 
 import {
   RING_COSIGN_APPROVE_OUTFLOW,

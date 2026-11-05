@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_CACHE_WRITES } from "@heliuslabs/zolana/interface";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { hashChain4 } from "@heliuslabs/zolana/internal";
+import { MAX_CACHE_WRITES } from "@heliuslabs/spr/interface";
+import type { Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { hashChain4 } from "@heliuslabs/spr/internal";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../../src/protocol/proof/custom-ring-proof.js";
 import { field, ringFrame, ringInstructionData } from "../../helpers/ring-frame.js";

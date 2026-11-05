@@ -1,10 +1,10 @@
 /** Zero-key notes stay readable and recorded, no automatic path spends one. */
 import type { Address } from "@solana/kit";
 
-import { equalBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes31, Bytes32 } from "@heliuslabs/zolana/interface";
-import { NullifierKey } from "@heliuslabs/zolana/keypair";
-import type { WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { equalBytes } from "@heliuslabs/spr/internal";
+import type { Bytes31, Bytes32 } from "@heliuslabs/spr/interface";
+import { NullifierKey } from "@heliuslabs/spr/keypair";
+import type { WalletUtxo } from "@heliuslabs/spr/transaction";
 
 /** `exposedIfSpent` publishes the owner on a spend, `spent` takes precedence over it. */
 export type NoteState = "spendable" | "exposedIfSpent" | "spent";

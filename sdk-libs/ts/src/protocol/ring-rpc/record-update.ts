@@ -1,7 +1,7 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { getBase58Decoder, getBase58Encoder, type MessagePartialSigner } from "@solana/kit";
 
-import type { Address, Bytes32, Signature } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32, Signature } from "@heliuslabs/spr/interface";
 import {
   U64_MAX,
   ZERO_32,
@@ -10,7 +10,7 @@ import {
   hashBytes,
   indexerScalars,
   poseidon,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 
 import { RingDomain, domainField } from "../../crypto/derivation/ring-domain.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { hashChain } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
+import { hashChain } from "@heliuslabs/spr/internal";
+import type { Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 
 import vector from "../../../../test-vectors/merge/merge.json" with { type: "json" };
 import {

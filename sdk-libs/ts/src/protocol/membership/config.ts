@@ -1,9 +1,9 @@
 import { getProgramDerivedAddress, type Address, type ProgramDerivedAddress } from "@solana/kit";
 
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import { decodeRingConfig, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import { addressBytes } from "@heliuslabs/zolana/internal";
-import type { RequestContext } from "@heliuslabs/zolana/interface";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import { decodeRingConfig, SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import { addressBytes } from "@heliuslabs/spr/internal";
+import type { RequestContext } from "@heliuslabs/spr/interface";
 import {
   ringAuthAddress,
   ringCoSignerPda,

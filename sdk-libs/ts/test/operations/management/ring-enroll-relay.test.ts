@@ -1,9 +1,5 @@
-import {
-  addressBytes,
-  compileUnsignedTransaction,
-  encodeBase58,
-} from "@heliuslabs/zolana/internal";
-import type { Instruction } from "@heliuslabs/zolana/interface";
+import { addressBytes, compileUnsignedTransaction, encodeBase58 } from "@heliuslabs/spr/internal";
+import type { Instruction } from "@heliuslabs/spr/interface";
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   getBase58Encoder,

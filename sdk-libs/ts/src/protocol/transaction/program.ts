@@ -27,7 +27,7 @@ import {
   type TransactionPlan,
   type TransactionSigner,
 } from "@solana/kit";
-import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/zolana";
+import { ClientError, type Address, type Bytes32, type RequestContext } from "@heliuslabs/spr";
 import {
   runKitRpc,
   pollUntil,
@@ -41,15 +41,15 @@ import {
   encodeBase58,
   sha256,
   equalBytes,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   createIndexerPollConfig,
   type BlockhashProvider,
   type ChainReader,
   type KitRpcAccess,
   type TransactionConfirmer,
-} from "@heliuslabs/zolana/client";
-import type { SignerAccount } from "@heliuslabs/zolana/instructions";
+} from "@heliuslabs/spr/client";
+import type { SignerAccount } from "@heliuslabs/spr/instructions";
 
 import { ringPolicyAddress } from "../pda/index.js";
 import { BPF_LOADER_UPGRADEABLE_ID, ringProgramDataAddress } from "../membership/config.js";

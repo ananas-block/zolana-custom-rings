@@ -3,7 +3,7 @@ import {
   disclosureFormat,
 } from "../../src/protocol/codec/ring-disclosure-layout.js";
 import { encodeCompactAuditRecord } from "../../src/protocol/codec/audit-stream.js";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename } from "node:path";
 
@@ -26,9 +26,9 @@ import {
   type TrackingWriteProofInput,
   type TransferProofRequest,
 } from "../../src/rpc/prover/ring.js";
-import { ZERO_32, encodeBase58, isZero } from "@heliuslabs/zolana/internal";
-import { DUMMY_DOMAIN, UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
-import type { Address, Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { ZERO_32, encodeBase58, isZero } from "@heliuslabs/spr/internal";
+import { DUMMY_DOMAIN, UTXO_DOMAIN } from "@heliuslabs/spr/interface";
+import type { Address, Bytes16, Bytes31, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 import {
   NullifierKey,
   poseidon,
@@ -36,8 +36,8 @@ import {
   SigningKey,
   X25519Keypair,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
-import { AssetRegistry, ConfidentialTransfer, SOL_MINT } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/keypair";
+import { AssetRegistry, ConfidentialTransfer, SOL_MINT } from "@heliuslabs/spr/transaction";
 import type {
   MemberRecord,
   QuadPath,

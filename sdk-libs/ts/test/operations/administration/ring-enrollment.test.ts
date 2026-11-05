@@ -3,10 +3,10 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { readFileSync } from "node:fs";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { Reader, ZERO_32, ZERO_NULLIFIER_PK, addressBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { Reader, ZERO_32, ZERO_NULLIFIER_PK, addressBytes } from "@heliuslabs/spr/internal";
+import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair, SigningKey, X25519Keypair } from "@heliuslabs/spr/keypair";
 import { hexToBytes } from "@noble/hashes/utils.js";
 
 import { withConfirmedReads } from "../../helpers/clients.js";
@@ -42,7 +42,7 @@ import {
 } from "../../../src/protocol/pda/index.js";
 import { registerKeyStatementHash } from "../../../src/protocol/proof/statement.js";
 import type { RegisterKeyProofRequest } from "../../../src/rpc/prover/ring.js";
-import { poseidon } from "@heliuslabs/zolana/internal";
+import { poseidon } from "@heliuslabs/spr/internal";
 
 const REGISTRY = address("Stor111111111111111111111111111111111111111");
 const OWNER = address("Cura111111111111111111111111111111111111111");

@@ -7,10 +7,10 @@ import {
   type Address,
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
-import { ClientError } from "@heliuslabs/zolana/client";
-import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { ClientError } from "@heliuslabs/spr/client";
+import { compileUnsignedTransaction } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { X25519Keypair } from "@heliuslabs/spr/keypair";
 import type { RingSubmissionStatus, RingSubmissionTransport } from "../../../src/rpc/ports.js";
 import { RingProgramError } from "../../../src/protocol/error.js";
 import {
@@ -22,7 +22,7 @@ import {
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { ViewingHistory } from "../../../src/state/viewing-history.js";
 import { BLOCKHASH, kitReads } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
-import type { RpcAccount } from "@heliuslabs/zolana/client";
+import type { RpcAccount } from "@heliuslabs/spr/client";
 import {
   ownedAccount,
   ringPolicyData,

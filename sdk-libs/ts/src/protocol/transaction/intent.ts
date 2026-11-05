@@ -1,21 +1,21 @@
 /** The ring intents beside the pinned SPP intents. */
 import { sha256 } from "@noble/hashes/sha2.js";
 
-import type { Address, Bytes32 } from "@heliuslabs/zolana";
+import type { Address, Bytes32 } from "@heliuslabs/spr";
 import {
   addressBytes,
   checkIntentApproval,
   checkPreparedTransfer,
   equalBytes,
   u64be,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   intentHash,
   type ApprovalRequest,
   type IntentApproval,
   type PreparedTransfer,
   type TransactionIntent,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { RingAddress } from "../../crypto/keys/ring-address.js";
 import { RingError } from "../error.js";

@@ -1,9 +1,9 @@
 import { address, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { addressBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { addressBytes } from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/spr/keypair";
 
 import { ENROLL_TAG } from "../../../src/operations/management/enrollment.js";
 import {

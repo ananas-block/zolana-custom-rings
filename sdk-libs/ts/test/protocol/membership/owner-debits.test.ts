@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 
 import vectors from "../../../../../test-vectors/rpc/owner_debits.json" with { type: "json" };
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { ownerDebits } from "../../../src/protocol/membership/owner-debits.js";
 

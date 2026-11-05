@@ -1,7 +1,7 @@
 /** A nonzero key enrolls in the ring's tracking registry, Rust `custom_ring_sdk::storage`. */
 import type { Address, Instruction } from "@solana/kit";
 
-import type { ChainReader } from "@heliuslabs/zolana/client";
+import type { ChainReader } from "@heliuslabs/spr/client";
 import {
   SYSTEM_PROGRAM,
   Writer,
@@ -13,9 +13,9 @@ import {
   signerAddress,
   ZERO_NULLIFIER_PK,
   type SignerAccount,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey, type ShieldedKeypairLike } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/spr/interface";
+import { X25519PublicKey, type ShieldedKeypairLike } from "@heliuslabs/spr/keypair";
 
 import { listTagOf } from "../../crypto/keys/list-salt.js";
 import { checkedCustomRingProof } from "../../protocol/codec/ring-codecs.js";

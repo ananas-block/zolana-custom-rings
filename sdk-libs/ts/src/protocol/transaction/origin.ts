@@ -12,7 +12,7 @@ import {
   treeAddress,
   equalBytes,
   encodeMergeOutputData,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   MAX_CACHE_WRITES,
   INPUT_TREES,
@@ -20,9 +20,9 @@ import {
   SHIELDED_POOL_CPI_AUTHORITY,
   SHIELDED_POOL_PROGRAM_ID,
   SOL_INTERFACE,
-} from "@heliuslabs/zolana/interface";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
-import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
+import { X25519PublicKey } from "@heliuslabs/spr/keypair";
 import type {
   Address,
   Bytes16,
@@ -31,8 +31,8 @@ import type {
   InterfaceTransfer,
   RequestContext,
   Signature,
-} from "@heliuslabs/zolana/interface";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
 import type { AuditStreamLayout } from "../codec/ring-disclosure-layout.js";
 
 import { RingError } from "../error.js";
@@ -90,7 +90,7 @@ function confirmedMergeRecordOf(
 ): Pick<Extract<ConfirmedRingTransaction, { kind: "merge" }>, "sealedRecord" | "authority"> {
   const wrapper = found.wrapper;
   if (
-    found.source.data[0] !== InstructionTag.ringMergeV2 ||
+    found.source.data[0] !== InstructionTag.ringMergeTransact ||
     wrapper?.data[0] !== RingInstructionTag.merge
   )
     throw invalid("merge.instruction");
@@ -98,7 +98,7 @@ function confirmedMergeRecordOf(
   const forwarded = forwardedMergeData(
     request,
     sppMergeBody(request.compactBody),
-    InstructionTag.ringMergeV2,
+    InstructionTag.ringMergeTransact,
   );
   if (!equalBytes(forwarded, found.source.data)) throw invalid("merge.sealedRecord");
   const { ephemeralPublicKey, ciphertext } = request.sealed;
@@ -238,8 +238,7 @@ function isEventSourceTag(value: number | undefined): boolean {
     value === InstructionTag.ringTransact ||
     value === InstructionTag.ringAuthorityTransact ||
     value === InstructionTag.mergeTransact ||
-    value === InstructionTag.ringMergeTransact ||
-    value === InstructionTag.ringMergeV2
+    value === InstructionTag.ringMergeTransact
   );
 }
 
@@ -537,7 +536,7 @@ function readConfirmedEvent(
     });
     return { ...data, outputTree, firstLeaf, kind: "transfer", inputTrees };
   }
-  if (tag === InstructionTag.ringMergeV2) {
+  if (tag === InstructionTag.ringMergeTransact) {
     if (kind !== 3) throw invalid("event.kind");
     const data = new Reader(source.data.slice(1));
     const ringDataHash = data.bytes(32, "merge.ringDataHash") as Bytes32;
@@ -545,7 +544,7 @@ function readConfirmedEvent(
     const merge = readMergeData(data);
     data.done();
     const { salt, ciphertext } = merge.outputEncryption;
-    const payload = encodeMergeOutputData({ ringDataHash, salt, ciphertext, ringV2: true });
+    const payload = encodeMergeOutputData({ ringDataHash, salt, ciphertext });
     const { outputTree, firstLeaf } = readEventLocation(event);
     const viewTag = event.bytes(32, "merge.viewTag") as Bytes32;
     event.done();

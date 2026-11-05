@@ -1,16 +1,16 @@
 import { readFileSync } from "node:fs";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/zolana/instructions";
-import type { Bytes32, Instruction } from "@heliuslabs/zolana/interface";
-import { compileUnsignedTransaction, type indexerTypes } from "@heliuslabs/zolana/internal";
-import { ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { getCreateAssociatedTokenAccountInstructionAsync } from "@heliuslabs/spr/instructions";
+import type { Bytes32, Instruction } from "@heliuslabs/spr/interface";
+import { compileUnsignedTransaction, type indexerTypes } from "@heliuslabs/spr/internal";
+import { ShieldedKeypair, SigningKey } from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
   type ProofInputUtxo,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   AccountRole,
   getBase64Decoder,

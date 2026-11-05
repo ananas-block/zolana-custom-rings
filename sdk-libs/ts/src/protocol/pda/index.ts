@@ -14,7 +14,7 @@ import {
   ringAuthAddress,
   signerAddress,
   type SignerAccount,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 
 export { ringAuthAddress };
 

@@ -4,14 +4,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
 import emptyVector from "../../../../../test-vectors/registry/empty_root.json" with { type: "json" };
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   SYSTEM_PROGRAM,
   encodeBase58,
   poseidon,
   solanaOwnerIdentity,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { enrollInstruction } from "../../../src/operations/management/enrollment.js";
 import {

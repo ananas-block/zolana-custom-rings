@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import vector from "../../../../../test-vectors/audit/row-dispositions.json" with { type: "json" };
-import { KeypairError } from "@heliuslabs/zolana/keypair";
-import { TransactionError } from "@heliuslabs/zolana/transaction";
+import { KeypairError } from "@heliuslabs/spr/keypair";
+import { TransactionError } from "@heliuslabs/spr/transaction";
 
 import { RingKeyError } from "../../../src/crypto/error.js";
 import {

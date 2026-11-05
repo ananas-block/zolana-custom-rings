@@ -1,6 +1,6 @@
 /** Rust `zolana_ring_indexer::tracking`. */
-import { indexerCodec, indexerScalars, type MethodDescriptor } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
+import { indexerCodec, indexerScalars, type MethodDescriptor } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
 
 import { QUAD_ARITY, type QuadPath } from "../membership/member-registry.js";
 import {

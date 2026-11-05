@@ -1,6 +1,6 @@
 import type { MintPolicy } from "../membership/mint-policy.js";
-import type { Address } from "@heliuslabs/zolana";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
+import type { Address } from "@heliuslabs/spr";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
 
 type Hash = indexerTypes.Hash;
 type IndexerContext = indexerTypes.IndexerContext;

@@ -1,7 +1,7 @@
 /** The packed element a signer checks its data-bearing outputs against. */
 import { describe, expect, it } from "vitest";
 
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { TRANSFER_SHAPES } from "../../../src/protocol/proof/transfer-shapes.js";
 import {

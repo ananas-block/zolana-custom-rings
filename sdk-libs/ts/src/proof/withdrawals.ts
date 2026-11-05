@@ -1,8 +1,8 @@
-import { addressBytes, hashChain4, bigIntBytes } from "@heliuslabs/zolana/internal";
-import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import { assetField, type SettlementTransfer } from "@heliuslabs/zolana/transaction";
+import { addressBytes, hashChain4, bigIntBytes } from "@heliuslabs/spr/internal";
+import { solanaOwnerIdentity } from "@heliuslabs/spr/keypair";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import { assetField, type SettlementTransfer } from "@heliuslabs/spr/transaction";
 import { splDestination } from "../operations/payments/anonymous.js";
 import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";

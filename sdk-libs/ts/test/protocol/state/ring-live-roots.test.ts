@@ -1,7 +1,7 @@
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   decodeRingPolicy,
   decodeStorageRegistry,

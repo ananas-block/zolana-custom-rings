@@ -1,5 +1,5 @@
-import { equalBytes } from "@heliuslabs/zolana/internal";
-import type { Address } from "@heliuslabs/zolana/interface";
+import { equalBytes } from "@heliuslabs/spr/internal";
+import type { Address } from "@heliuslabs/spr/interface";
 import { address, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -12,9 +12,9 @@ import {
   syncWallet,
   type Bytes16,
   type Bytes32,
-} from "@heliuslabs/zolana";
-import { DEFAULT_TREE_ID, type Bytes33 } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr";
+import { DEFAULT_TREE_ID, type Bytes33 } from "@heliuslabs/spr/interface";
+import { X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   bytesKey,
   ZERO_NULLIFIER_PK,
@@ -24,13 +24,13 @@ import {
   mergeOutputBlinding,
   mergeOutputKey,
   poseidon,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   AssetRegistry,
   Wallet,
   ownerUtxoHash,
   type IndexedShieldedTransaction,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import {
   encodeRingBodyOutput,
@@ -290,7 +290,6 @@ function mergeOf(owner: ShieldedKeypair, nullifier: Bytes32, mint: Address) {
             salt,
           ),
           ringDataHash,
-          ringV2: true,
         }),
         outputContext: { hash: commitment, tree: TREE, treeId: DEFAULT_TREE_ID, leafIndex: 4n },
       },

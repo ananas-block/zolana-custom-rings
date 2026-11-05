@@ -15,12 +15,12 @@ import {
   poseidon,
   encodeMergeOutputData,
   encryptMergeOutput,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { ShieldedKeypair, X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { AssetRegistry, SOL_MINT, ownerUtxoHash } from "@heliuslabs/zolana/transaction";
-import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { ShieldedKeypair, X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
+import { AssetRegistry, SOL_MINT, ownerUtxoHash } from "@heliuslabs/spr/transaction";
+import type { IndexedShieldedTransaction, OutputSlot } from "@heliuslabs/spr/transaction";
 import { STREAM_FIRST_COUNTER } from "../../../src/protocol/codec/ring-disclosure-layout.js";
 import {
   auditSharedSecret,
@@ -375,7 +375,6 @@ describe("auditRing", () => {
             salt: new Uint8Array(16).fill(3) as Bytes16,
             ciphertext: [ZERO_32, ZERO_32, ZERO_32],
             ringDataHash: ZERO_32,
-            ringV2: true,
           }),
           outputContext: leaf(commitment, 9n),
         },
@@ -771,7 +770,7 @@ describe("recoverRingMemberNotes", () => {
       outputSlots: [
         {
           viewTag: nullifier,
-          payload: encodeMergeOutputData({ salt, ciphertext, ringDataHash, ringV2: true }),
+          payload: encodeMergeOutputData({ salt, ciphertext, ringDataHash }),
           outputContext: leaf(commitment, 9n),
         },
       ],
@@ -784,7 +783,6 @@ describe("recoverRingMemberNotes", () => {
           salt,
           ciphertext: [new Uint8Array(32).fill(255) as Bytes32, ZERO_32, ZERO_32],
           ringDataHash,
-          ringV2: true,
         }),
       })),
     };
@@ -966,7 +964,6 @@ describe("recoverRingMemberNotes", () => {
             salt: new Uint8Array(16).fill(3) as Bytes16,
             ciphertext: [new Uint8Array(32).fill(255) as Bytes32, ZERO_32, ZERO_32],
             ringDataHash,
-            ringV2: true,
           }),
           outputContext: leaf(commitment, 9n),
         },

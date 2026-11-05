@@ -7,14 +7,14 @@ import {
   seededMergeOutputBlinding,
   seededMergeOutputKey,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   Utxo,
   type IndexedShieldedTransaction,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { answered } from "./batch.js";
 import { zeroKeyNullifier } from "./exposed-notes.js";

@@ -1,6 +1,6 @@
 /** Rust `zolana_ring_keys::ListSaltHolder`. */
-import { poseidon } from "@heliuslabs/zolana/internal";
-import type { Bytes32, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { poseidon } from "@heliuslabs/spr/internal";
+import type { Bytes32, ViewingKey } from "@heliuslabs/spr/keypair";
 import { getAddressEncoder, type Address } from "@solana/kit";
 
 import { domainField, RingDomain } from "../derivation/ring-domain.js";

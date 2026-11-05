@@ -1,5 +1,5 @@
 import type { MintPolicy } from "./mint-policy.js";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 /** Rust `QUAD_ARITY` and `QUAD_HEIGHT`, the 4-ary record tree of a ring's member registry. */
 export const QUAD_ARITY = 4;

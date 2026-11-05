@@ -1,8 +1,8 @@
 import { type RingMemberOpening, type RingRecordReader, type StorageRoot } from "./ports.js";
 import { MAX_RING_MEMBER_BATCH } from "../protocol/indexer/indexer-limits.js";
-import type { ChainReader } from "@heliuslabs/zolana/client";
-import { equalBytes, waitForProjection } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
+import type { ChainReader } from "@heliuslabs/spr/client";
+import { equalBytes, waitForProjection } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
 
 import { fetchRingPolicy, fetchStorageRegistry } from "../protocol/membership/config.js";
 import { RingError } from "../protocol/error.js";

@@ -4,7 +4,7 @@ import {
   bytesToBigInt,
   encodeBase58,
   prepareTransfer,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import type { NoteData } from "../../../src/operations/payments/anonymous.js";
 import { EMPTY_MINT_POLICY } from "../../../src/protocol/membership/mint-policy.js";
 import { policyWithdrawalHash } from "../../../src/proof/withdrawals.js";
@@ -24,21 +24,21 @@ import {
 import { describe, expect, it } from "vitest";
 import { ringIntentMismatch } from "../../../src/operations/workflow/selection.js";
 
-import type { WalletKeys, RpcAccount } from "@heliuslabs/zolana/client";
+import type { WalletKeys, RpcAccount } from "@heliuslabs/spr/client";
 import {
   SYSTEM_PROGRAM,
   addressBytes,
   associatedTokenAddress,
   splInterfaceWithBump,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   SOL_INTERFACE,
   SPL_TOKEN_2022_PROGRAM_ID,
   SPL_TOKEN_PROGRAM_ID,
   TransactWithdrawal,
   type Bytes32,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   randomBlinding,
   ShieldedAddress,
@@ -46,7 +46,7 @@ import {
   SigningKey,
   solanaOwnerIdentity,
   X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   SOL_MINT,
@@ -61,7 +61,7 @@ import {
   Data,
   type PreparedTransfer,
   type ProofOutputUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   checkRingPreparedTransfer,
   approveRingUnattended,

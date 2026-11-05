@@ -1,6 +1,6 @@
 import { ASSET_LIMIT_KEYS, type MintPolicy } from "../membership/mint-policy.js";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/zolana/internal";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
+import { U64_MAX, indexerCodec, indexerScalars } from "@heliuslabs/spr/internal";
 
 import {
   MEMBER_REGISTRY_CAPACITY,

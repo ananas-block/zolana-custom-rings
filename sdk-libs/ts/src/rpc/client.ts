@@ -1,17 +1,17 @@
 import {
-  ZolanaApi,
+  SprApi,
   resolveClientEndpoints,
   fromClientCause,
   checkedServiceUrl,
   ProverClient,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   initializePoseidon,
   type RequestContext,
   ClientError,
-  type ZolanaClientConfig,
-} from "@heliuslabs/zolana";
-import { ZolanaClient, type ProvingKeyReport } from "@heliuslabs/zolana/client";
+  type SprClientConfig,
+} from "@heliuslabs/spr";
+import { SprClient, type ProvingKeyReport } from "@heliuslabs/spr/client";
 
 import type {
   PendingEnrollments,
@@ -37,7 +37,7 @@ import { CustomRingProver } from "./prover/client.js";
 import { customRingProof } from "./prover/proof.js";
 import type { RingProofRequest } from "./prover/ring.js";
 
-export type CustomRingClientConfig = Omit<ZolanaClientConfig, "provingKeys"> & {
+export type CustomRingClientConfig = Omit<SprClientConfig, "provingKeys"> & {
   readonly provingKeys?: never;
 };
 
@@ -49,7 +49,7 @@ export async function createCustomRingClient(
   return new CustomRingClient(config);
 }
 
-export class CustomRingClient extends ZolanaClient implements RingProver, RingRecordReader {
+export class CustomRingClient extends SprClient implements RingProver, RingRecordReader {
   readonly #ringProver: CustomRingProver;
   readonly #ringIndexer: RingIndexer;
 
@@ -75,7 +75,7 @@ export class CustomRingClient extends ZolanaClient implements RingProver, RingRe
       config.allowInsecureHttp ?? false,
     );
     this.#ringIndexer = new RingIndexer(
-      new ZolanaApi({
+      new SprApi({
         url,
         ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
         ...(config.fetch === undefined ? {} : { fetch: config.fetch }),

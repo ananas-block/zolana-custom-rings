@@ -1,11 +1,11 @@
 /** The SPP anonymous ring rail on the pinned SPP wire, Rust `CircuitId::AnonymousRingEddsa`. */
-import type { Bytes32 } from "@heliuslabs/zolana";
+import type { Bytes32 } from "@heliuslabs/spr";
 import {
   checkedBytes,
   encodeTransactExternalData,
   encodeTransactInstructionData,
-} from "@heliuslabs/zolana/internal";
-import type { CircuitId, TransactInstructionData } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { CircuitId, TransactInstructionData } from "@heliuslabs/spr/interface";
 
 const ANONYMOUS_RING_EDDSA_TAG = 3;
 /** `u16 kind ‖ u8 inputs ‖ u8 outputs ‖ u8 publicAssetSlots`. */

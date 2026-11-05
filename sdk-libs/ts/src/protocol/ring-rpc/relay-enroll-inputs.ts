@@ -8,8 +8,8 @@ import {
   SYSTEM_PROGRAM,
   Writer,
   type SignerAccount,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
 import type { AccountMeta, Instruction } from "@solana/kit";
 
 import { STORAGE_PROGRAM_ID, trackingAuthorizationPda } from "../pda/index.js";

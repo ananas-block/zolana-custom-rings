@@ -5,8 +5,8 @@ import {
   getCompiledTransactionMessageDecoder,
   type AccountMeta,
 } from "@solana/kit";
-import type { Instruction } from "@heliuslabs/zolana/interface";
-import { encodeBase58, equalBytes } from "@heliuslabs/zolana/internal";
+import type { Instruction } from "@heliuslabs/spr/interface";
+import { encodeBase58, equalBytes } from "@heliuslabs/spr/internal";
 import { sealedAuditorSchedule } from "../../../src/crypto/audit/audit.js";
 import {
   decodeAuditRecord,
@@ -26,7 +26,7 @@ import {
 } from "../../../src/protocol/transaction/transact.js";
 import { replyLength, sealReply } from "../../../src/protocol/codec/anonymous-delivery.js";
 import { ringInstructionData } from "../../helpers/ring-frame.js";
-import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import { compileUnsignedTransaction } from "@heliuslabs/spr/internal";
 import { ringComputeUnitLimit } from "../../../src/operations/management/admin.js";
 import { SIZE_PROBE_LIFETIME } from "../../../src/operations/workflow/compile.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
@@ -41,11 +41,11 @@ import {
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import { ShieldedAddress, ShieldedKeypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { Data } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
+import { ShieldedAddress, ShieldedKeypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
+import { Data } from "@heliuslabs/spr/transaction";
 
 import {
   type AllowedNullifiers,

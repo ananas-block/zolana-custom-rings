@@ -11,10 +11,10 @@ import {
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import { SYSTEM_PROGRAM, addressBytes, sha256 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ClientError } from "@heliuslabs/zolana/client";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { SYSTEM_PROGRAM, addressBytes, sha256 } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { ClientError } from "@heliuslabs/spr/client";
+import { X25519Keypair } from "@heliuslabs/spr/keypair";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import {
   BPF_LOADER_UPGRADEABLE_ID,

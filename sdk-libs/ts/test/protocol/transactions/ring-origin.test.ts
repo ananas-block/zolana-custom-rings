@@ -10,23 +10,23 @@ import {
   Writer,
   addressBytes,
   treeAddress,
-} from "@heliuslabs/zolana/internal";
-import { X25519PublicKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import { X25519PublicKey, X25519Keypair } from "@heliuslabs/spr/keypair";
 import {
   InstructionTag,
   SHIELDED_POOL_CPI_AUTHORITY,
   SHIELDED_POOL_PROGRAM_ID,
   SOL_INTERFACE,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import type {
   Bytes16,
   Bytes32,
   Bytes33,
   Bytes128,
   InterfaceTransfer,
-} from "@heliuslabs/zolana/interface";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/interface";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 import { RingError } from "../../../src/protocol/error.js";
 import { readMergeData } from "../../../src/protocol/codec/codecs.js";
 import {
@@ -1013,7 +1013,7 @@ describe("RpcTransactionOrigin", () => {
       const forwarded = forwardedMergeData(
         request,
         sppMergeBody(request.compactBody),
-        InstructionTag.ringMergeV2,
+        InstructionTag.ringMergeTransact,
       );
       const wrapper = Uint8Array.of(wrapperTag, ...encodeRingMergeRequest(request));
       const source = forwarded.slice();
@@ -1047,7 +1047,6 @@ describe("RpcTransactionOrigin", () => {
         ringDataHash: vectorFrame.outputRingDataHash,
         salt: merge.outputEncryption.salt,
         ciphertext: merge.outputEncryption.ciphertext,
-        ringV2: true,
       });
       const row = indexed(merge.nullifiers, payload, merge.outputUtxoHash);
       await expect(
@@ -1057,7 +1056,7 @@ describe("RpcTransactionOrigin", () => {
       await expect(
         new RpcTransactionOrigin(rpcWith(tampered.confirmed)).confirmedTransaction(row, RING),
       ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });
-      const sppTag = bind(authority, false, InstructionTag.ringMergeV2);
+      const sppTag = bind(authority, false, InstructionTag.ringMergeTransact);
       await expect(
         new RpcTransactionOrigin(rpcWith(sppTag.confirmed)).confirmedTransaction(row, RING),
       ).rejects.toMatchObject({ code: "RING_ORIGIN_DECODE" });

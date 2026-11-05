@@ -5,7 +5,7 @@ import {
   concatBytes,
   equalBytes,
   solanaOwnerIdentity,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   encodeRingTransactInstructionData,
   type RingCircuitId,
@@ -18,7 +18,7 @@ import {
   MAX_CACHE_WRITES,
   SPP_SUPPORTED_SHAPES,
   type SettlementAccounts,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import type {
   Address,
   Bytes16,
@@ -33,7 +33,7 @@ import type {
   TransactOutput,
   TreeContext,
   Shape,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import { CUSTOM_RING_PROOF_LENGTH } from "../proof/custom-ring-proof.js";
 import {
   auditRecordLength,

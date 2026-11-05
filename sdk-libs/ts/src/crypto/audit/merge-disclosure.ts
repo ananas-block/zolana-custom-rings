@@ -10,17 +10,11 @@ import {
   checkedBytes,
   ZERO_32,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import { pack33 } from "@heliuslabs/zolana/interface";
-import type {
-  Address,
-  Bytes32,
-  Bytes33,
-  Bytes64,
-  RequestContext,
-} from "@heliuslabs/zolana/interface";
-import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import type { NullifierKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import { pack33 } from "@heliuslabs/spr/interface";
+import type { Address, Bytes32, Bytes33, Bytes64, RequestContext } from "@heliuslabs/spr/interface";
+import { X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
+import type { NullifierKey } from "@heliuslabs/spr/keypair";
 
 import { CUSTOM_RING_PROOF_LENGTH } from "../../protocol/proof/custom-ring-proof.js";
 import {
@@ -42,7 +36,7 @@ import { x25519FromU } from "../keys/x25519.js";
 import { domainField, RingDomain } from "../derivation/ring-domain.js";
 import { AuditSchedule, MERGE_RECORD_ENC_INFO, auditSharedSecret } from "./audit.js";
 
-/** Who admits a merge, the wincode tag SPP's `MergeRingV2IxData` reads. */
+/** Who admits a merge, the wincode tag SPP's `MergeRingIxData` reads. */
 export const MergeRingAuthority = Object.freeze({ ring: 0, ownerSigned: 1 } as const);
 export type MergeRingAuthority = (typeof MergeRingAuthority)[keyof typeof MergeRingAuthority];
 
@@ -305,7 +299,7 @@ export function compactMergeBody(body: Uint8Array, compressedB: Bytes64): Uint8A
   return out;
 }
 
-/** Rust `SppMergeBody::decompressed`, the bytes SPP's `merge_ring_v2` parses past its prefix. */
+/** Rust `SppMergeBody::decompressed`, the bytes SPP's `merge_ring` parses past its prefix. */
 export function sppMergeBody(compact: Uint8Array): Uint8Array {
   if (compact.length < MERGE_B_OFFSET + COMPRESSED_G2_LEN) throw invalid("merge.body");
   const b = decompressG2(

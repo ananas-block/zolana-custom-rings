@@ -10,9 +10,9 @@ import {
   type Signature,
 } from "@solana/kit";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { ProofService } from "@heliuslabs/zolana/client";
-import { LocalKeys } from "@heliuslabs/zolana/client";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { ProofService } from "@heliuslabs/spr/client";
+import { LocalKeys } from "@heliuslabs/spr/client";
 import {
   checkIntentApproval,
   isZero,
@@ -22,21 +22,15 @@ import {
   splAssetRegistryAddress,
   splInterfaceWithBump,
   type SignerAccount,
-} from "@heliuslabs/zolana/internal";
-import { decodeSplAssetRegistry } from "@heliuslabs/zolana/interface";
-import type {
-  Address,
-  Bytes32,
-  RequestContext,
-  TransactDeposit,
-  Transaction,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import { decodeSplAssetRegistry } from "@heliuslabs/spr/interface";
+import type { Address, Bytes32, RequestContext, Transaction } from "@heliuslabs/spr/interface";
 import {
   NullifierKey,
   ShieldedAddress,
   ShieldedKeypair,
   type Bytes31,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 import {
   AssetRegistry,
   ConfidentialTransfer,
@@ -49,7 +43,7 @@ import {
   type DepositSource,
   type ProofOutputUtxo,
   type TransactionIntent,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { RingAddress, type RingPaymentRequest } from "../../crypto/keys/ring-address.js";
 import { RingError, wrapRingError } from "../../protocol/error.js";
@@ -64,7 +58,12 @@ import { mismatch } from "../../rpc/relay-message.js";
 import { signMessage } from "../../rpc/ring-rpc.js";
 import type { RingKeys } from "../../state/ring-keys.js";
 import { ringComputeUnitLimit } from "../management/admin.js";
-import { boundState, type ProvenRingTransfer, type RingBoundState } from "../workflow/pipeline.js";
+import {
+  boundState,
+  type ProvenRingTransfer,
+  type RingBoundState,
+  type TransactDeposit,
+} from "../workflow/pipeline.js";
 import { ringIntentMismatch } from "../workflow/selection.js";
 import {
   provenRingAttempt,

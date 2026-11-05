@@ -1,10 +1,10 @@
 import { type Address } from "@solana/kit";
 import { expect, vi } from "vitest";
 
-import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/zolana/client";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+import type { MerkleProof, NonInclusionProof, RpcAccount } from "@heliuslabs/spr/client";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 
 import { transactionsPage } from "../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { filled, treeAccount } from "../../../../zolana/sdk-libs/ts/test/helpers/tree-account.js";

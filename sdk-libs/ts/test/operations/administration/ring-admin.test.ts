@@ -1,10 +1,10 @@
 import { address, type Address, type Instruction } from "@solana/kit";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { SYSTEM_PROGRAM, addressBytes, protocolConfigAddress } from "@heliuslabs/zolana/internal";
-import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import { X25519Keypair, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { SYSTEM_PROGRAM, addressBytes, protocolConfigAddress } from "@heliuslabs/spr/internal";
+import { SHIELDED_POOL_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import { X25519Keypair, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   ringAuthAddress,
   ringCoSignerAddress,

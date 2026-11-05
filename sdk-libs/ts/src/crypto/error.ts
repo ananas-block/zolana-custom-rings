@@ -1,5 +1,5 @@
-import { fieldU32, hideCause, sanitizeDetails, U64_MAX } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana";
+import { fieldU32, hideCause, sanitizeDetails, U64_MAX } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr";
 
 /** Rust `zolana_ring_keys::RingKeyError` variants, another enum's variant written `Enum::Variant`. */
 export const RING_KEY_ERROR_RUST_VARIANT = Object.freeze({

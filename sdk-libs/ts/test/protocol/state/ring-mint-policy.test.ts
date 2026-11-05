@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import vector from "../../../../../test-vectors/registry/mint-records.json" with { type: "json" };
 import {
   EMPTY_MINT_POLICY,

@@ -1,5 +1,5 @@
-import { TRANSACTION_SIZE_LIMIT, transactionSize } from "@heliuslabs/zolana/interface";
-import { compileUnsignedTransaction } from "@heliuslabs/zolana/internal";
+import { TRANSACTION_SIZE_LIMIT, transactionSize } from "@heliuslabs/spr/interface";
+import { compileUnsignedTransaction } from "@heliuslabs/spr/internal";
 import { address, blockhash, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 

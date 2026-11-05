@@ -1,14 +1,14 @@
 /** SPP UTXO commitments over field values a ring reads from a disclosure, pinned SPP layout. */
-import type { Bytes32 } from "@heliuslabs/zolana";
+import type { Bytes32 } from "@heliuslabs/spr";
 import {
   checked,
   checkU64,
   commitmentPoseidon,
   rightAlign,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import { DUMMY_DOMAIN, treeIdField, UTXO_DOMAIN } from "@heliuslabs/zolana/interface";
-import { TransactionError, type TreeId } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import { DUMMY_DOMAIN, treeIdField, UTXO_DOMAIN } from "@heliuslabs/spr/interface";
+import { TransactionError, type TreeId } from "@heliuslabs/spr/transaction";
 
 interface CommitmentFields {
   readonly owner: Bytes32;

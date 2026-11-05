@@ -4,10 +4,10 @@ import { readFileSync } from "node:fs";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { encodeBase58 } from "@heliuslabs/zolana/internal";
-import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/zolana/interface";
-import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { encodeBase58 } from "@heliuslabs/spr/internal";
+import { SPP_SUPPORTED_SHAPES } from "@heliuslabs/spr/interface";
+import type { Bytes16, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
 
 import approvalFrames from "../../../../../test-vectors/proof/approval_totals_frame.json" with { type: "json" };
 import expansion from "../../../../../test-vectors/proof/ring-transact-expansion.json" with { type: "json" };

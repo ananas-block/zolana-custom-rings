@@ -1,6 +1,6 @@
-import { hashBytes } from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { hashBytes } from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import { getAddressDecoder, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 

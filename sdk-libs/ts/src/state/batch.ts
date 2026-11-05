@@ -1,4 +1,4 @@
-import { WalletError } from "@heliuslabs/zolana";
+import { WalletError } from "@heliuslabs/spr";
 
 /** A key holder answers each batch with exactly one value per request. */
 export function exactlyOne<T>(values: readonly T[]): T {

@@ -12,7 +12,7 @@ import {
   SigningKey,
   ViewingKey,
   type Bytes32,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 
 type ValidCase = Readonly<{
   name: string;

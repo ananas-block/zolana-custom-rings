@@ -1,7 +1,7 @@
 import { address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
-import type { Bytes32 } from "@heliuslabs/zolana";
-import { ZolanaApi, indexerScalars } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/spr";
+import { SprApi, indexerScalars } from "@heliuslabs/spr/internal";
 
 import { QUAD_HEIGHT } from "../../src/protocol/membership/member-registry.js";
 import { RingIndexer } from "../../src/rpc/indexer.js";
@@ -46,7 +46,7 @@ describe("ring member registry wire", () => {
   const openings = { context: CONTEXT, root, openings: [opening] };
   const indexerFor = (body: Readonly<Record<string, unknown>>) =>
     new RingIndexer(
-      new ZolanaApi({
+      new SprApi({
         url: "https://indexer.example",
         fetch: async () => Response.json({ jsonrpc: "2.0", id: "test-account", ...body }),
       }),

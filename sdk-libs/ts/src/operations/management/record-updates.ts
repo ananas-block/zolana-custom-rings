@@ -1,7 +1,7 @@
 import type { Address, MessagePartialSigner } from "@solana/kit";
 
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { addressBytes, copyBytes, indexerScalars } from "@heliuslabs/zolana/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { addressBytes, copyBytes, indexerScalars } from "@heliuslabs/spr/internal";
 
 import { RingError } from "../../protocol/error.js";
 import { mintPolicyField, type MintPolicy } from "../../protocol/membership/mint-policy.js";

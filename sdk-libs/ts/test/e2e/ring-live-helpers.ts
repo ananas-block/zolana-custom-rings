@@ -15,12 +15,9 @@ import {
 } from "@solana/kit";
 
 import type { CustomRingClient } from "../../src/rpc/client.js";
-import {
-  compileUnsignedTransaction,
-  setRingActivationInstruction,
-} from "@heliuslabs/zolana/internal";
-import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
-import { LocalKeys, ShieldedKeypair, SigningKey, Wallet, type Bytes32 } from "@heliuslabs/zolana";
+import { compileUnsignedTransaction, setRingActivationInstruction } from "@heliuslabs/spr/internal";
+import type { X25519PublicKey } from "@heliuslabs/spr/keypair";
+import { LocalKeys, ShieldedKeypair, SigningKey, Wallet, type Bytes32 } from "@heliuslabs/spr";
 import { type RuleTable } from "../../src/ring/advanced.js";
 import {
   RingProgramBinary,

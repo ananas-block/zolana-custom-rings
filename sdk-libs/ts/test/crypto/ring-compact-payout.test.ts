@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { encodeBase58 } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { encodeBase58 } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 import {
   decodeCompactRecipientBody,
   decodeRecipientBody,

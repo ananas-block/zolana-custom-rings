@@ -8,37 +8,36 @@ import {
   prepareRingAuthorityTransfer,
   addressBytes,
   solanaOwnerIdentity,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import type { AnonymousRingTransactProver } from "../../rpc/ports.js";
 import type {
   PreparedOwnerSignature,
   ProofAuthority,
   Prover,
   WalletKeys,
-} from "@heliuslabs/zolana/client";
-import { type Shape, InstructionTag } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/client";
+import { type Shape, InstructionTag } from "@heliuslabs/spr/interface";
 import type {
   Address,
   Bytes32,
   RequestContext,
-  TransactDeposit,
   TransactWithdrawal,
-} from "@heliuslabs/zolana/interface";
-import { associatedTokenAddress, signerAddress } from "@heliuslabs/zolana/internal";
-import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/interface";
+import { associatedTokenAddress, signerAddress } from "@heliuslabs/spr/internal";
+import type { NullifierKey, ShieldedAddress } from "@heliuslabs/spr/keypair";
 import type {
   ExpectedSealed,
   RelayTransferTerms,
   TokenAccountCreate,
 } from "../../rpc/relay-message.js";
-import { randomBlinding, ShieldedPublicKey, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { randomBlinding, ShieldedPublicKey, ViewingKey } from "@heliuslabs/spr/keypair";
 import type {
   AssetRegistry,
   ProofInputUtxo,
   ProofOutputUtxo,
   SettlementTransfer,
   WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   createProofOutput,
   SOL_MINT,
@@ -46,7 +45,7 @@ import {
   type ConfidentialTransfer,
   type PreparedTransfer,
   type WithdrawalTarget,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import {
   encodeRelayProofInputs,
   type RelayLegAccounts,
@@ -92,6 +91,7 @@ import {
   type RingTransactionFrame,
   type StagedTransfer,
   type StagedTransferInput,
+  type TransactDeposit,
 } from "../workflow/pipeline.js";
 import type { SealRow } from "../workflow/transfer-plan.js";
 import { isSmallOrder } from "../../crypto/keys/x25519.js";

@@ -1,7 +1,7 @@
 import { createKeyPairSignerFromPrivateKeyBytes } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
 import { RingRpc, signCreateRecordsRegistryRequest } from "../../src/rpc/ring-rpc.js";
 
 const RING = "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx" as Address;

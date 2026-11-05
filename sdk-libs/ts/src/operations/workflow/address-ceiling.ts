@@ -5,15 +5,15 @@ import {
   type Bytes32,
   type Bytes33,
   type Instruction,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   equalBytes,
   isZero,
   nullifierPdaAddress,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { ShieldedPublicKey } from "@heliuslabs/zolana/keypair";
-import type { ProofInputUtxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import type { ShieldedPublicKey } from "@heliuslabs/spr/keypair";
+import type { ProofInputUtxo } from "@heliuslabs/spr/transaction";
 
 import { RingError } from "../../protocol/error.js";
 import { RingInstructionTag } from "../../protocol/transaction/instruction-tag.js";

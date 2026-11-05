@@ -1,18 +1,18 @@
 import type { Address } from "@solana/kit";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { IndexerReader } from "@heliuslabs/zolana/client";
-import { PAGE_LIMIT, ZERO_NULLIFIER_PK, bytesKey, equalBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import { ownerHash } from "@heliuslabs/zolana/keypair";
-import type { NullifierKey, ShieldedAddress, X25519Keypair } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { IndexerReader } from "@heliuslabs/spr/client";
+import { PAGE_LIMIT, ZERO_NULLIFIER_PK, bytesKey, equalBytes } from "@heliuslabs/spr/internal";
+import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import { ownerHash } from "@heliuslabs/spr/keypair";
+import type { NullifierKey, ShieldedAddress, X25519Keypair } from "@heliuslabs/spr/keypair";
 import type {
   AssetRegistry,
   IndexedShieldedTransaction,
   OutputContext,
   WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
-import { Utxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
+import { Utxo } from "@heliuslabs/spr/transaction";
 
 import { nextHistoryToken } from "../../rpc/history.js";
 import {

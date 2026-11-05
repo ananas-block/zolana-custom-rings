@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 import { address } from "@solana/kit";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { addressBytes, hashBytes, solanaOwnerIdentity } from "@heliuslabs/zolana/internal";
-import { ownerHash, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { addressBytes, hashBytes, solanaOwnerIdentity } from "@heliuslabs/spr/internal";
+import { ownerHash, X25519Keypair } from "@heliuslabs/spr/keypair";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
 
 import ranges from "../../../../../test-vectors/audit/ring-disclosure-ranges.json" with { type: "json" };
 import vector from "../../../../../test-vectors/audit/audit-stream.json" with { type: "json" };

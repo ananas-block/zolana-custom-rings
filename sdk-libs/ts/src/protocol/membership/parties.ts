@@ -1,6 +1,6 @@
-import { addressBytes, ZERO_32 } from "@heliuslabs/zolana/internal";
-import { solanaOwnerIdentity } from "@heliuslabs/zolana/keypair";
-import type { Address, Bytes32 } from "@heliuslabs/zolana/interface";
+import { addressBytes, ZERO_32 } from "@heliuslabs/spr/internal";
+import { solanaOwnerIdentity } from "@heliuslabs/spr/keypair";
+import type { Address, Bytes32 } from "@heliuslabs/spr/interface";
 
 import { RingError } from "../error.js";
 import { ANONYMOUS_PARTIES, MAX_CO_SIGNERS } from "../transaction/transact.js";

@@ -1,5 +1,5 @@
 import { longestFitting } from "../../../src/operations/payments/merge.js";
-import { encodeBase58 } from "@heliuslabs/zolana/internal";
+import { encodeBase58 } from "@heliuslabs/spr/internal";
 import { fitsOneTransaction, transactionSize } from "../../../src/operations/workflow/compile.js";
 import { bn254 } from "@noble/curves/bn254.js";
 import {
@@ -13,14 +13,14 @@ import {
 } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import { ClientError, LocalKeys, mergeProverRequestBody } from "@heliuslabs/zolana/client";
+import { ClientError, LocalKeys, mergeProverRequestBody } from "@heliuslabs/spr/client";
 import type {
   MergeAssembler,
   ProofService,
   WalletKeys,
   NonInclusionProof,
   SpendProof,
-} from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/client";
 import {
   bigintToBytes,
   assembleMergeWithProofs,
@@ -35,9 +35,9 @@ import {
   mergeOutputKey,
   ZERO_32,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { MAX_MERGE_INPUTS } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { MAX_MERGE_INPUTS } from "@heliuslabs/spr/interface";
 import type {
   Address,
   Bytes32,
@@ -46,16 +46,16 @@ import type {
   Bytes128,
   MergeTransactInstructionData,
   RequestContext,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   mergePrivateTxBlinding,
   NullifierKey,
   type Bytes31,
   ShieldedKeypair,
-  ShieldedPda,
   ViewingKey,
   X25519Keypair,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
+import { ShieldedPda } from "@heliuslabs/spr/program";
 import {
   AssetRegistry,
   SOL_MINT,
@@ -69,7 +69,7 @@ import {
   intentHash,
   Wallet,
   assetField,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 import type { MergeProofRequest, RingProofRequest } from "../../../src/rpc/prover/ring.js";
 import { ringAuthAddress, ringPolicyPda } from "../../../src/protocol/pda/index.js";
 import { LocalRingKeys, ringWalletKeys, type RingKeys } from "../../../src/state/ring-keys.js";

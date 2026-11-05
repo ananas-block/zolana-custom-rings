@@ -2,21 +2,21 @@ import { encodeRingBodyOutput } from "../../src/protocol/transaction/output.js";
 import { getBase58Decoder, type Signature } from "@solana/kit";
 import { describe, expect, it, vi } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { randomSalt, ShieldedAddress, ViewingKey, type ViewTag } from "@heliuslabs/zolana/keypair";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { randomSalt, ShieldedAddress, ViewingKey, type ViewTag } from "@heliuslabs/spr/keypair";
 import {
   encodeMergeOutputData,
   encryptMergeOutput,
   mergeOutputBlinding,
   mergeOutputKey,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import {
   SOL_MINT,
   Utxo,
   type IndexedShieldedTransaction,
   type OutputSlot,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { deliveredSlotSecret, slotTag } from "../../src/crypto/derivation/ring-stream.js";
 import { sealRecipientBody } from "../../src/protocol/codec/anonymous-delivery.js";

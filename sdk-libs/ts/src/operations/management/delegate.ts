@@ -1,12 +1,12 @@
 /** Delegate moves from a wallet, the configured delegate signs and the member does not. */
-import { NullifierKeyProofAuthority } from "@heliuslabs/zolana/client";
+import { NullifierKeyProofAuthority } from "@heliuslabs/spr/client";
 import type {
   BlockhashProvider,
   KitRpcAccess,
   ProofAuthority,
   ProofService,
   WalletKeys,
-} from "@heliuslabs/zolana/client";
+} from "@heliuslabs/spr/client";
 import {
   reserveEntries,
   reservedUtxoKeys,
@@ -22,9 +22,9 @@ import {
   encodeBase58,
   equalBytes,
   fetchSplAssetRegistrations,
-} from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, RequestContext, Transaction } from "@heliuslabs/zolana/interface";
-import type { NullifierKey, ShieldedAddress } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/internal";
+import type { Address, Bytes32, RequestContext, Transaction } from "@heliuslabs/spr/interface";
+import type { NullifierKey, ShieldedAddress } from "@heliuslabs/spr/keypair";
 import {
   approveUnattended,
   intentHash,
@@ -32,7 +32,7 @@ import {
   type TransactionIntent,
   Wallet,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { RingError, wrapRingError } from "../../protocol/error.js";
 import {

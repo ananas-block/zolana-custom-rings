@@ -4,11 +4,11 @@ import {
   TRANSACTION_SIZE_LIMIT,
   type Instruction,
   type Shape,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import {
   compileUnsignedTransaction,
   type TransactionCompilerOptions,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 
 import { RingError } from "../../protocol/error.js";
 

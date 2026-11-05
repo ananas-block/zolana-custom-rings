@@ -3,8 +3,8 @@
  *
  * Read `syncRingWallet` first. Each held key's `tagPosition` resumes the ring tag reads beside the core sync's checkpoints, `AnonymousWallet._absorbConfidential` stores both with the notes.
  */
-import { syncWallet, type SyncReport, type SyncWalletInput } from "@heliuslabs/zolana";
-import type { IndexerReader, IndexerRpcConfig } from "@heliuslabs/zolana/client";
+import { syncWallet, type SyncReport, type SyncWalletInput } from "@heliuslabs/spr";
+import type { IndexerReader, IndexerRpcConfig } from "@heliuslabs/spr/client";
 import {
   bytesKey,
   equalBytes,
@@ -14,10 +14,10 @@ import {
   ZERO_NULLIFIER_PK,
   type CheckpointStream,
   type SyncCheckpointAdvances,
-} from "@heliuslabs/zolana/internal";
+} from "@heliuslabs/spr/internal";
 import { confidentialSlotTag } from "../crypto/derivation/ring-stream.js";
-import type { Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/zolana/keypair";
+import type { Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import type { ShieldedAddress, X25519PublicKey } from "@heliuslabs/spr/keypair";
 import {
   decryptTransactions,
   Wallet,
@@ -25,7 +25,7 @@ import {
   type IndexedShieldedTransaction,
   type ShieldedKeys,
   type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
 
 import { ringBodyOutput, readRingOutput, RingScheme } from "../protocol/transaction/output.js";
 import { openRecipientNote } from "../crypto/derivation/blinding.js";

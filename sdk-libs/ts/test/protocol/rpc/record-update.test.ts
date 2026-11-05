@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Address, Bytes32, Bytes33 } from "@heliuslabs/zolana/interface";
-import { indexerScalars } from "@heliuslabs/zolana/internal";
+import type { Address, Bytes32, Bytes33 } from "@heliuslabs/spr/interface";
+import { indexerScalars } from "@heliuslabs/spr/internal";
 import { P256ReaderKey } from "../../../src/operations/management/reader-access.js";
 import { WalletRecordUpdate } from "../../../src/operations/management/record-updates.js";
 import { listWrite } from "../../../src/operations/management/record-writes.js";

@@ -1,7 +1,7 @@
 import { getBase58Decoder, getBase64Decoder, type Instruction } from "@solana/kit";
 
-import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/zolana/client";
-import type { LatestBlockhash } from "@heliuslabs/zolana/internal";
+import type { ProofDataSourceContext, TreeContext, WalletKeys } from "@heliuslabs/spr/client";
+import type { LatestBlockhash } from "@heliuslabs/spr/internal";
 import {
   addressBytes,
   bigIntBytes,
@@ -30,13 +30,13 @@ import {
   ownerSolanaAccount,
   equalBytes,
   type UtxoReservation,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   MAX_MERGE_INPUTS,
   MERGE_INPUT_COUNT,
   SHIELDED_POOL_PROGRAM_ID,
-} from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/interface";
 import type {
   Address,
   Bytes32,
@@ -47,8 +47,8 @@ import type {
   RequestContext,
   Signature,
   Transaction,
-} from "@heliuslabs/zolana/interface";
-import { ShieldedAddress, type NullifierKey } from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/interface";
+import { ShieldedAddress, type NullifierKey } from "@heliuslabs/spr/keypair";
 import {
   assetField,
   Merge,
@@ -58,8 +58,8 @@ import {
   type ApprovalHandler,
   type TransactionIntent,
   checkKeysIdentity,
-} from "@heliuslabs/zolana/transaction";
-import type { PreparedMerge, Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/transaction";
+import type { PreparedMerge, Wallet, WalletUtxo } from "@heliuslabs/spr/transaction";
 import {
   encodeRelayMergeInputs,
   mergeRequestDigest,
@@ -236,7 +236,7 @@ export function createRingMergeSubmission(
 }
 
 /**
- * Tag 57, the accounts `[ring, tracking]` ahead of SPP's `merge_ring_v2` list, the owner signing at
+ * Tag 57, the accounts `[ring, tracking]` ahead of SPP's `merge_ring` list, the owner signing at
  * Rust `RING_MERGE_OWNER_INDEX` under `ownerSigned`.
  */
 export async function ringMergeInstruction(
@@ -382,7 +382,7 @@ async function buildRingMerge(
               keys: params.keys,
               inputs: selected.slice(0, count),
               outputTreeId: outputTree.treeId,
-              ring: { programId: params.ringProgramId, rail: { kind: "ringV2" } },
+              ring: { programId: params.ringProgramId },
               invalidAnswers: () => ringIntentMismatch("keyAnswers"),
             },
             context,

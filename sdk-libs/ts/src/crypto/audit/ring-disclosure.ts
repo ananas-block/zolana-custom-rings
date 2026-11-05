@@ -1,12 +1,12 @@
 /** The auditor stream of a transfer, sealed and opened over its canonical records, Rust `AuditStreamSeal` and `AuditEnvelope`. */
-import { clampViewingSecret, concatBytes } from "@heliuslabs/zolana/internal";
+import { clampViewingSecret, concatBytes } from "@heliuslabs/spr/internal";
 import {
   ViewingKey,
   type Bytes16,
   type Bytes32,
   type X25519Keypair,
   type X25519PublicKey,
-} from "@heliuslabs/zolana/keypair";
+} from "@heliuslabs/spr/keypair";
 
 import { RingError } from "../../protocol/error.js";
 import {

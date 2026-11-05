@@ -1,7 +1,7 @@
 import { getBase58Decoder, type Signature } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
+import { initializePoseidon } from "@heliuslabs/spr";
 import {
   concatBytes,
   encodeMergeOutputData,
@@ -11,10 +11,10 @@ import {
   poseidon,
   ZERO_32,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes16, Bytes32 } from "@heliuslabs/zolana/interface";
-import { randomSalt, ShieldedAddress, ViewingKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, Utxo, Wallet } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import type { Bytes16, Bytes32 } from "@heliuslabs/spr/interface";
+import { randomSalt, ShieldedAddress, ViewingKey, X25519Keypair } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, Utxo, Wallet } from "@heliuslabs/spr/transaction";
 
 import {
   AnonymousSync,

@@ -1,6 +1,6 @@
 /** Each owner's guard, debit and charged outflow per asset, Rust `zolana_ring_policy::quantities`. */
-import { bytesKey, bytesToBigInt, equalBytes, isZero } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { bytesKey, bytesToBigInt, equalBytes, isZero } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import { ApprovalMask } from "../transaction/transact.js";
 import type { MintPolicy } from "./mint-policy.js";

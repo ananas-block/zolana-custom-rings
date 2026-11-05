@@ -21,11 +21,11 @@ import {
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it, vi } from "vitest";
 
-import { SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/zolana/interface";
-import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
-import { addressBytes, type indexerTypes } from "@heliuslabs/zolana/internal";
-import { SOL_MINT } from "@heliuslabs/zolana/transaction";
-import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/zolana/keypair";
+import { SPL_TOKEN_PROGRAM_ID } from "@heliuslabs/spr/interface";
+import type { Address, Bytes32, Bytes33, Signature } from "@heliuslabs/spr/interface";
+import { addressBytes, type indexerTypes } from "@heliuslabs/spr/internal";
+import { SOL_MINT } from "@heliuslabs/spr/transaction";
+import { ShieldedKeypair, SigningKey, ViewingKey } from "@heliuslabs/spr/keypair";
 import {
   encodeCreateRecordsRegistryRequest,
   encodeGetPendingListApprovalsRequest,

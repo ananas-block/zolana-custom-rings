@@ -1,5 +1,5 @@
 /** Regions of the ring auditor stream, Rust `custom_ring_interface::audit_stream`. */
-import { InterfaceError } from "@heliuslabs/zolana/interface";
+import { InterfaceError } from "@heliuslabs/spr/interface";
 
 export const SINGLE_ASSET_PAYOUT_INPUTS = 1;
 export const SINGLE_ASSET_PAYOUT_OUTPUTS = 16;

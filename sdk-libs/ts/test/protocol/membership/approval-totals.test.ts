@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { bigIntBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { bigIntBytes } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
 
 import digests from "../../../../../test-vectors/policy/approval_totals.json" with { type: "json" };
 import quantities from "../../../../../test-vectors/policy/quantities.json" with { type: "json" };

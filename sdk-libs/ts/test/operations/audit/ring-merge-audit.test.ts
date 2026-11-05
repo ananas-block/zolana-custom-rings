@@ -13,11 +13,11 @@ import {
   hashBytes,
   ZERO_32,
   ZERO_NULLIFIER_PK,
-} from "@heliuslabs/zolana/internal";
-import { initializePoseidon } from "@heliuslabs/zolana";
-import type { Bytes16, Bytes32, Bytes33, Signature } from "@heliuslabs/zolana/interface";
-import { X25519Keypair } from "@heliuslabs/zolana/keypair";
-import type { IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
+} from "@heliuslabs/spr/internal";
+import { initializePoseidon } from "@heliuslabs/spr";
+import type { Bytes16, Bytes32, Bytes33, Signature } from "@heliuslabs/spr/interface";
+import { X25519Keypair } from "@heliuslabs/spr/keypair";
+import type { IndexedShieldedTransaction } from "@heliuslabs/spr/transaction";
 import {
   auditRingMerges,
   classifyMergeNullifier,
@@ -121,7 +121,6 @@ describe("the tag 57 reader", () => {
             ringDataHash,
             salt: new Uint8Array(16) as Bytes16,
             ciphertext: [ZERO_32, ZERO_32, ZERO_32],
-            ringV2: true,
           }),
           outputContext: { hash, tree: treeAddress(TREE), treeId: TREE, leafIndex: 0n },
         },

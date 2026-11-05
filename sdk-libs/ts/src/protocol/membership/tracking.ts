@@ -9,8 +9,8 @@ import {
   poseidon,
   Reader,
   ZERO_32,
-} from "@heliuslabs/zolana/internal";
-import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/zolana/interface";
+} from "@heliuslabs/spr/internal";
+import type { Bytes32, Bytes33, Bytes64 } from "@heliuslabs/spr/interface";
 
 import { domainField, RingDomain } from "../../crypto/derivation/ring-domain.js";
 import { RingError } from "../error.js";

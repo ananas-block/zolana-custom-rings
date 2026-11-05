@@ -6,9 +6,9 @@ import {
 } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { assetField } from "@heliuslabs/zolana/transaction";
-import { initializePoseidon } from "@heliuslabs/zolana";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { assetField } from "@heliuslabs/spr/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
 
 import {
   RingReadRequest,

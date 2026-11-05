@@ -1,9 +1,9 @@
 /** One document holds a wallet's scan progress and everything it covers, one write stores both. */
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
-import { bytesKey, U64_MAX } from "@heliuslabs/zolana/internal";
-import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
-import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
-import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { bytesKey, U64_MAX } from "@heliuslabs/spr/internal";
+import type { Address, Bytes32, RequestContext } from "@heliuslabs/spr/interface";
+import { X25519PublicKey, type ViewTag } from "@heliuslabs/spr/keypair";
+import type { Wallet, WalletUtxo } from "@heliuslabs/spr/transaction";
 
 import { RingError } from "../protocol/error.js";
 import { exactlyOne, unseen } from "./batch.js";

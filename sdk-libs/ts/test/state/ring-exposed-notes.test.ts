@@ -2,11 +2,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { readFileSync } from "node:fs";
 
-import { initializePoseidon } from "@heliuslabs/zolana";
-import { ZERO_NULLIFIER_PK } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/zolana/keypair";
-import { SOL_MINT, Wallet, type WalletUtxo } from "@heliuslabs/zolana/transaction";
+import { initializePoseidon } from "@heliuslabs/spr";
+import { ZERO_NULLIFIER_PK } from "@heliuslabs/spr/internal";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import { ShieldedAddress, ShieldedKeypair, SigningKey } from "@heliuslabs/spr/keypair";
+import { SOL_MINT, Wallet, type WalletUtxo } from "@heliuslabs/spr/transaction";
 import { getBase58Decoder, type Address } from "@solana/kit";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils.js";
 

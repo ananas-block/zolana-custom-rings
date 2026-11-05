@@ -213,8 +213,8 @@ export const RING_ERROR_CODES = [
   "RING_SUBMISSION_UNPROVED",
   "RING_RELAY_FEE_PAYER_FUNDS_DEPOSIT",
 ] as const;
-import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
-import type { ErrorEnvelope } from "@heliuslabs/zolana";
+import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/spr/internal";
+import type { ErrorEnvelope } from "@heliuslabs/spr";
 
 export type RingErrorCode = (typeof RING_ERROR_CODES)[number];
 

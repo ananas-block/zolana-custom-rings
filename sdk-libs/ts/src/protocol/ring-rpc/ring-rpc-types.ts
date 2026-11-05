@@ -1,7 +1,7 @@
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import type { Address, Signature } from "@heliuslabs/zolana/interface";
-import type { indexerTypes } from "@heliuslabs/zolana/internal";
-import type { ShieldedAddress } from "@heliuslabs/zolana/keypair";
+import type { Bytes32 } from "@heliuslabs/spr/interface";
+import type { Address, Signature } from "@heliuslabs/spr/interface";
+import type { indexerTypes } from "@heliuslabs/spr/internal";
+import type { ShieldedAddress } from "@heliuslabs/spr/keypair";
 
 import type { MintPolicy } from "../membership/mint-policy.js";
 

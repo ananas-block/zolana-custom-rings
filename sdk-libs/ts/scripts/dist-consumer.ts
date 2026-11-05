@@ -1,13 +1,9 @@
 export { P256ReaderKey } from "@heliuslabs/zolana-custom-rings";
 export {
-  RING_DEPOSIT_AUDIT_SLOTS,
   admitTransfer,
-  depositStatementElements,
-  encodeRingDepositCapsule,
   memberRecordHash,
   parseAuditorMessage,
   quadPathRoot,
-  readRingDepositCapsule,
   registerKeyStatementHash,
   ringRail,
   ringRailOf,
@@ -16,7 +12,6 @@ export {
 } from "@heliuslabs/zolana-custom-rings/advanced";
 export type {
   TransferStatement,
-  DepositStatement,
   AuditStreamLayout,
   TransferRoots,
   RegisterKeyStatement,
@@ -56,11 +51,6 @@ export {
   createRingDelegateRecoveredSubmission,
   PreparedRingDeposit,
   initializeRingInstruction,
-  sealRingDepositOpenings,
-  openRingDepositOpening,
-  ConfirmedDeposit,
-  ringDepositContextHash,
-  ringDepositPublicInputHash,
   MemberOpeningRead,
   readMemberRecords,
 } from "@heliuslabs/zolana-custom-rings";
@@ -68,7 +58,6 @@ export type {
   RingRecordReadClient,
   RingDelegateTransferClient,
   RingDepositClient,
-  RingDepositOpening,
   RingDelegateTransferParams,
   RingTransactionSubmission,
   RingSubmissionResult,
@@ -83,7 +72,7 @@ export type {
   RecoveredRingNotes,
   RingDelegateRecoveredParams,
 } from "@heliuslabs/zolana-custom-rings";
-export { prepareRingMergeRelay, customRingDepositPayload } from "@heliuslabs/zolana-custom-rings";
+export { prepareRingMergeRelay } from "@heliuslabs/zolana-custom-rings";
 export {
   buildRingDepositTransaction,
   buildRingEntryTransaction,
