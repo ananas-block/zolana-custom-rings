@@ -1,13 +1,8 @@
 import { address, generateKeyPairSigner, type Address } from "@solana/kit";
 import { describe, expect, it } from "vitest";
 
-import { readFileSync } from "node:fs";
-
 import { Reader, SYSTEM_PROGRAM, addressBytes } from "@heliuslabs/zolana/internal";
-import type { Bytes32 } from "@heliuslabs/zolana/interface";
-import { hexToBytes } from "@noble/hashes/utils.js";
 
-import { listTagOf } from "../../../src/crypto/keys/list-salt.js";
 import {
   decodeOwnerGrant,
   ownerGrantInstruction,
