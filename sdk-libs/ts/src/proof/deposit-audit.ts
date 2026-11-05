@@ -40,7 +40,7 @@ import { RingError } from "../protocol/error.js";
 import { domainField, RingDomain } from "../crypto/derivation/ring-domain.js";
 import { ConfirmedDeposit } from "../protocol/transaction/origin.js";
 import type { CredentialRoots } from "../protocol/codec/credential-read.js";
-import { credentialCapacity } from "../protocol/proof/proving-keys.js";
+import { ringCredentialCapacity } from "../protocol/proof/proving-keys.js";
 
 const PAYLOAD_LENGTH = RING_DEPOSIT_OPENING_LENGTH * RING_DEPOSIT_AUDIT_SLOTS;
 const ZERO = new Uint8Array(32) as Bytes32;
@@ -227,7 +227,7 @@ export function depositStatementElements(input: DepositStatement): readonly Byte
     count < 1 ||
     count > RING_DEPOSIT_AUDIT_SLOTS ||
     count > input.credentials.capacity ||
-    credentialCapacity({ family: "deposit", capacity: input.credentials.capacity }) === undefined ||
+    ringCredentialCapacity({ family: "deposit", capacity: input.credentials.capacity }) === undefined ||
     input.ciphertexts.length !== count ||
     input.assets.length !== count ||
     input.ciphertexts.some((ciphertext) => ciphertext.length !== RING_DEPOSIT_OPENING_LENGTH)
