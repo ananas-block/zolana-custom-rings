@@ -5,21 +5,16 @@ import {
   isCanonicalField,
   hashBytes,
   mergePaddedInputCount,
-  mergeOutputBlinding,
-  mergeOutputKey,
   equalBytes,
-  poseidon,
   MERGE_OUTPUT_BODY_LENGTH,
-  decryptMergeOutput,
   readMergeOutputBody,
   seededMergeDummyNullifier,
   seededMergeOutputBlinding,
   ZERO_32,
 } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext, Signature } from "@heliuslabs/zolana/interface";
-import type { NullifierKey, X25519Keypair } from "@heliuslabs/zolana/keypair";
-import type { OutputContext, IndexedShieldedTransaction } from "@heliuslabs/zolana/transaction";
-import { ownerUtxoHash } from "@heliuslabs/zolana/transaction";
+import type { X25519Keypair } from "@heliuslabs/zolana/keypair";
+import type { OutputContext } from "@heliuslabs/zolana/transaction";
 
 import { openMergeRecord, type MergeRingAuthority } from "../../crypto/audit/merge-disclosure.js";
 import { ringIdField } from "../../crypto/derivation/ring-stream.js";
@@ -235,65 +230,3 @@ export function classifyMergeNullifier(
 
 const PADDING: MergeNullifierClass = Object.freeze({ kind: "padding" });
 const UNRESOLVED_REAL: MergeNullifierClass = Object.freeze({ kind: "unresolvedReal" });
-
-/** A verified merge opening when only the registered member hash is known. */
-export interface MergeAuditorOpening {
-  readonly member: Bytes32;
-  readonly asset: Address;
-  readonly amount: bigint;
-  readonly blinding: Bytes32;
-  readonly outputContext: OutputContext;
-  readonly nullifier: Bytes32;
-  readonly ringDataHash?: Bytes32;
-}
-
-/** The merge output the member's key decrypts, `undefined` unless it reproduces the settled commitment. */
-export function recoverMergeOpening(
-  input: Readonly<{
-    member: Bytes32;
-    nullifierKey: NullifierKey;
-    ringProgramId: Address;
-  }>,
-  transaction: IndexedShieldedTransaction,
-): MergeAuditorOpening | undefined {
-  const firstNullifier = transaction.nullifiers[0];
-  const slot = transaction.outputSlots[0];
-  if (
-    firstNullifier === undefined ||
-    slot === undefined ||
-    mergePaddedInputCount(transaction.nullifiers.length) === undefined
-  )
-    return undefined;
-  const body = readMergeOutputBody(slot.payload);
-  const ringDataHash = body?.ringDataHash;
-  if (body === undefined || ringDataHash === undefined) return undefined;
-  const outputKey = mergeOutputKey(input.nullifierKey, firstNullifier);
-  let plaintext;
-  try {
-    plaintext = decryptMergeOutput(body.encrypted, outputKey);
-  } catch {
-    return undefined;
-  } finally {
-    outputKey.fill(0);
-  }
-  const blinding = mergeOutputBlinding(input.nullifierKey, firstNullifier);
-  const commitment = ownerUtxoHash({
-    owner: poseidon([input.member, input.nullifierKey.publicKey()]),
-    asset: plaintext.mint,
-    amount: plaintext.amount,
-    blinding,
-    treeId: outputTreeId(slot.outputContext),
-    ringDataHash,
-    ringProgramId: input.ringProgramId,
-  });
-  if (!equalBytes(commitment, slot.outputContext.hash)) return undefined;
-  return Object.freeze({
-    member: input.member,
-    asset: plaintext.mint,
-    amount: plaintext.amount,
-    blinding,
-    outputContext: slot.outputContext,
-    nullifier: input.nullifierKey.nullifier(slot.outputContext.hash, blinding),
-    ...(ringDataHash.some((byte) => byte !== 0) ? { ringDataHash } : {}),
-  });
-}

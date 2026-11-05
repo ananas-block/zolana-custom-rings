@@ -58,7 +58,7 @@ spr-user-registry-interface = { path = "zolana/program-libs/user-registry-interf
 spr-tree = { path = "zolana/program-libs/tree", version = "0.1.0" }
 spr-keypair = { path = "zolana/sdk-libs/keypair", version = "0.1.0" }
 spr-instruction = { path = "zolana/sdk-libs/instruction", version = "0.1.0" }
-spr-program = { path = "zolana/sdk-libs/program", version = "0.1.0" }
+spr-program = { path = "zolana/sdk-libs/program", version = "0.1.0", default-features = false }
 spr-protocol-instructions = { path = "zolana/protocol-ops/instructions", version = "0.1.0" }
 # The zk crates live in helius-labs/zk-tools (zk-dsl/), pinned by rev.
 spr-zk-dsl = { git = "https://github.com/helius-labs/zk-tools", rev = "a4ebd1699ffa04545e3739f16a51e764992d07d6" }

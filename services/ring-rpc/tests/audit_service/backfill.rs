@@ -1,4 +1,6 @@
 use super::*;
+use sea_orm::{ConnectionTrait, Statement, TransactionTrait};
+use std::{future::poll_fn, pin::pin, task::Poll};
 use zolana_ring_client::rpc::WalletNoteStatus;
 
 #[tokio::test]
@@ -454,21 +456,16 @@ async fn a_restart_over_a_store_resumes_at_the_durable_position_with_its_notes()
     ]);
     let probe = source.clone();
     let store = Store::open("sqlite::memory:", 1).await.expect("store");
-    let hub = |source: StaticSource, store: Store| {
-        Hub::builder(source, identity(GENESIS))
-            .with_origins(origins())
-            .with_store(store)
-            .local(RING, fixture.auditor.clone())
-            .expect("hub")
-    };
-    let before = hub(source.clone(), store.clone())
+    let before = stored_hub(&fixture, source.clone(), store.clone())
         .service(None)
         .expect("service");
     before.backfill_utxos().await.expect("first run");
     let through = history_through(&before).await;
     assert_eq!(stored_amount(&before, &hash).await, Some(500));
 
-    let restarted = hub(source, store).service(None).expect("service");
+    let restarted = stored_hub(&fixture, source, store)
+        .service(None)
+        .expect("service");
     restarted.backfill_utxos().await.expect("resume");
     assert_eq!(stored_amount(&restarted, &hash).await, Some(500));
     assert!(history_through(&restarted).await >= through);
@@ -477,6 +474,125 @@ async fn a_restart_over_a_store_resumes_at_the_durable_position_with_its_notes()
         Some(&None),
         "the first page is not read again"
     );
+}
+
+fn stored_hub(fixture: &Fixture, source: StaticSource, store: Store) -> Hub<StaticSource> {
+    Hub::builder(source, identity(GENESIS))
+        .with_origins(origins())
+        .with_store(store)
+        .local(RING, fixture.auditor.clone())
+        .expect("hub")
+}
+
+/// The audited note on the first of more pages than one pass reads.
+fn durable_history(fixture: &Fixture) -> StaticSource {
+    let mut source = fixture
+        .source()
+        .with_transactions(vec![fixture.audited.clone()]);
+    source.pages = long_history(fixture, None, 1);
+    source
+        .pages
+        .insert(None, paged(vec![fixture.audited.clone()], Some(1), None));
+    source
+}
+
+#[derive(Debug, PartialEq)]
+struct DurableCheckpoint {
+    after_slot: Option<i64>,
+    token: Option<String>,
+    through_slot: i64,
+}
+
+async fn durable_checkpoint(store: &Store) -> DurableCheckpoint {
+    let db = store.connection();
+    let row = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT after_slot,token,through_slot FROM spend_checkpoints",
+        ))
+        .await
+        .expect("checkpoint read")
+        .expect("checkpoint row");
+    DurableCheckpoint {
+        after_slot: row.try_get("", "after_slot").expect("after slot"),
+        token: row.try_get("", "token").expect("token"),
+        through_slot: row.try_get("", "through_slot").expect("through slot"),
+    }
+}
+
+/// Two passes reach the terminal page, the restarted service reads the store next.
+async fn restart_after_the_terminal_page(
+    fixture: &Fixture,
+    source: &StaticSource,
+    store: &Store,
+) -> AuditService<StaticSource> {
+    let before = stored_hub(fixture, source.clone(), store.clone())
+        .service(None)
+        .expect("service");
+    before.backfill_utxos().await.expect("capped pass");
+    before.backfill_utxos().await.expect("terminal pass");
+    stored_hub(fixture, source.clone(), store.clone())
+        .service(None)
+        .expect("service")
+}
+
+/// The retry loads the notes with history down, then resumes at the durable checkpoint.
+async fn assert_the_retry_loads_the_tables(
+    restarted: &AuditService<StaticSource>,
+    source: &StaticSource,
+    store: &Store,
+) {
+    let hash = Hash(source.transactions[0].output_slots[0].output_context.hash);
+    let durable = durable_checkpoint(store).await;
+    let reads = cursors(source).len();
+    source.history_down.store(true, Ordering::Relaxed);
+    assert!(restarted.backfill_utxos().await.is_err());
+    assert_eq!(stored_amount(restarted, &hash).await, Some(500));
+
+    source.history_down.store(false, Ordering::Relaxed);
+    restarted.backfill_utxos().await.expect("resume");
+    assert_eq!(durable_checkpoint(store).await, durable);
+    assert!(
+        !cursors(source)[reads..].contains(&None),
+        "no read starts from the empty position"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_table_read_loads_on_the_retry_and_keeps_the_checkpoint() {
+    let fixture = Fixture::new();
+    let source = durable_history(&fixture);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let restarted = restart_after_the_terminal_page(&fixture, &source, &store).await;
+    let rename = |from: &str, to: &str| format!("ALTER TABLE {from} RENAME TO {to}");
+    let db = store.connection();
+    db.execute_unprepared(&rename("spend_checkpoints", "parked_checkpoints"))
+        .await
+        .expect("park");
+    assert!(restarted.backfill_utxos().await.is_err());
+    db.execute_unprepared(&rename("parked_checkpoints", "spend_checkpoints"))
+        .await
+        .expect("restore");
+
+    assert_the_retry_loads_the_tables(&restarted, &source, &store).await;
+}
+
+#[tokio::test]
+async fn a_cancelled_table_read_loads_on_the_retry_and_keeps_the_checkpoint() {
+    let fixture = Fixture::new();
+    let source = durable_history(&fixture);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let restarted = restart_after_the_terminal_page(&fixture, &source, &store).await;
+    // The pool's one connection is the gate, the table read cannot pass it while held.
+    let held = store.connection().begin().await.expect("hold");
+    {
+        let mut backfill = pin!(restarted.backfill_utxos());
+        let first = poll_fn(|cx| Poll::Ready(backfill.as_mut().poll(cx))).await;
+        assert!(first.is_pending(), "the table read waits at the gate");
+    }
+    held.rollback().await.expect("release");
+
+    assert_the_retry_loads_the_tables(&restarted, &source, &store).await;
 }
 
 #[tokio::test]

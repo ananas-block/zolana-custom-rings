@@ -6,12 +6,12 @@
 //! retires every earlier root at once, and any other write keeps the outgoing root for a proof in flight.
 //!
 //! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/member_registry.rs`.
-//! Read before `program-libs/interface/src/accounts/tracking.rs`, `programs/storage/src/instructions/update.rs`.
+//! Read before `programs/storage/src/instructions/update.rs`.
 //!
 //! Invariants:
 //! 1. An update that touches a list a rule can read, or mint settings, retires every earlier root in the same instruction, and a proof in flight under one of them fails and proves again. `StorageUpdateIxData::reaches_policy` classifies from the write masks, an allow list addition included, and no authority flag selects it.
 //! 2. Any other update keeps the outgoing root for `grace_slots`, and refuses while the oldest kept root is unexpired, so no such update drops a root its grace promised. Such a write changes no list a rule reads, so a long grace keeps no policy fact alive.
-//! 3. A zero grace update on a source with a tracking pin stores the pinned registry's newest revision as `tracking_floor`, and `LiveRoots::tracking` refuses a frame reading a salted list through the source under a lower revision. Without the floor an enrolled owner whose salted entry was just blocked names a tracking root from before its enrollment, proves its row absent and skips the salted read. The floor covers a row the newest tracking root holds at the write, a row applied later takes no cover from it.
+//! 3. Every salted owner write proves credential state and address inclusion, then raises `absence_floor` to the accepted address sequence in the same instruction. A salted read accepts no address root below the source floor, preventing absence for an owner with a private entry.
 //! 4. A revision counts up by one per update and names at most one root.
 
 use bytemuck::{Pod, Zeroable};
@@ -60,10 +60,10 @@ pub struct StorageRegistry {
     pub next_index: [u8; 4],
     /// Immutable, zero serves as a curator only.
     pub ring_id: [u8; 32],
-    /// Immutable, a ring maps a private list only to a source pinned to its own registry.
-    pub tracking_registry: Address,
-    /// The pinned registry's newest revision at the last zero grace update, frames name no older tracking root.
-    pub tracking_floor: Revision,
+    /// Immutable, salted source mappings require the same ring identity.
+    pub private_ring_id: [u8; 32],
+    /// Little endian address sequence, salted reads require a root at or above the floor.
+    pub absence_floor: [u8; 8],
     /// Newest first, only retired roots have an expiry.
     pub roots: [Root; ROOT_HISTORY],
 }
@@ -72,8 +72,8 @@ pub struct StorageRegistry {
 pub struct RootUpdate<'a> {
     pub slot: u64,
     pub data: &'a StorageUpdateIxData<'a>,
-    /// The pinned registry's newest revision, read when [`StorageRegistry::reads_tracking`] holds.
-    pub tracking_revision: Option<Revision>,
+    /// Authenticated sequence of the address root bound by the private write proof.
+    pub absence_checkpoint: Option<u64>,
 }
 
 impl From<u64> for Revision {
@@ -116,7 +116,7 @@ impl StorageRegistry {
         registry.authority = authority;
         registry.grace_slots = ix.grace_slots;
         registry.ring_id = ix.ring_id;
-        registry.tracking_registry = ix.tracking_registry;
+        registry.private_ring_id = ix.private_ring_id;
         registry.next_index = 1u32.to_le_bytes();
         registry.roots[0].hash = MEMBER_REGISTRY_EMPTY_ROOT;
         registry
@@ -158,12 +158,11 @@ impl StorageRegistry {
 
     /// A salted list may read it.
     pub fn is_private(&self) -> bool {
-        self.tracking_registry != Address::default()
+        self.private_ring_id != [0; 32]
     }
 
-    /// A zero grace write on a pinned source takes the pinned registry's revision as its floor.
-    pub fn reads_tracking(&self, data: &StorageUpdateIxData<'_>) -> bool {
-        data.reaches_policy() && self.is_private()
+    pub const fn absence_floor(&self) -> u64 {
+        u64::from_le_bytes(self.absence_floor)
     }
 
     /// Writes nothing on a refusal.
@@ -171,13 +170,20 @@ impl StorageRegistry {
         let RootUpdate {
             slot,
             data,
-            tracking_revision,
+            absence_checkpoint,
         } = update;
-        // 1. A pinned source cannot skip its floor, a zero grace write with no revision refuses.
-        let floor = self
-            .reads_tracking(data)
-            .then(|| tracking_revision.ok_or(StorageError::InvalidTrackingRegistry))
-            .transpose()?;
+        // 1. Every credential write requires its authenticated checkpoint and an immutable ring binding.
+        let floor = if data.credential_writes()? != 0 {
+            if !self.is_private() {
+                return Err(StorageError::PrivateWriteWithoutRing);
+            }
+            Some(absence_checkpoint.ok_or(StorageError::InvalidCredentialRead)?)
+        } else {
+            if absence_checkpoint.is_some() {
+                return Err(StorageError::InvalidCredentialRead);
+            }
+            None
+        };
         // 2. The write masks pick the retirement, the authority's grace reaches only a write no rule reads.
         let retirement = match data.reaches_policy() {
             true => Retirement::Immediate,
@@ -194,7 +200,7 @@ impl StorageRegistry {
             data.apply.new_root,
         )?;
         if let Some(floor) = floor {
-            self.tracking_floor = floor;
+            self.absence_floor = self.absence_floor().max(floor).to_le_bytes();
         }
         self.next_index = data.apply.new_next_index;
         Ok(())
@@ -338,6 +344,14 @@ pub enum StorageError {
     InvalidReaderKey = 9032,
     #[error("auditor key is untagged, not canonical or of low order")]
     InvalidAuditorKey = 9033,
+    #[error("asset write preimage is invalid")]
+    InvalidAssetWrite = 9034,
+    #[error("private write requires a bound ring")]
+    PrivateWriteWithoutRing = 9035,
+    #[error("credential root selection is invalid")]
+    InvalidCredentialRead = 9036,
+    #[error("ring program does not match the private ring")]
+    InvalidPrivateRing = 9037,
 }
 
 impl From<StorageError> for ProgramError {

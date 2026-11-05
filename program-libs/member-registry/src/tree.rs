@@ -6,7 +6,7 @@
 //!
 //! Read after `program-libs/member-registry/src/lib.rs`, `program-libs/member-registry/src/path.rs`.
 //! Read before `program-libs/member-registry/src/memory.rs`, `program-libs/member-registry/src/record.rs`,
-//! `prover/circuits/registry/apply_records.go`, `prover/circuits/registry/apply_enrollments.go`.
+//! `prover/circuits/registry/apply_records.go`.
 
 use core::marker::PhantomData;
 
@@ -151,6 +151,13 @@ pub struct ApplyProofInputs<W = crate::RecordWriteProofInput> {
     pub writes: Vec<W>,
 }
 
+#[must_use]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedTree<T, W = crate::RecordWriteProofInput> {
+    pub tree: T,
+    pub proof: ApplyProofInputs<W>,
+}
+
 pub trait RecordTree<L: IndexedLeaf = MemberRecord, const H: usize = QUAD_HEIGHT>:
     RecordStore<L, H>
 {
@@ -231,38 +238,24 @@ pub trait RecordTree<L: IndexedLeaf = MemberRecord, const H: usize = QUAD_HEIGHT
         })
     }
 
-    /// `entries` in chain order, one the program never chains fails before any write.
+    /// Requires isolated staging storage, discarded on failure.
     fn apply(
-        &mut self,
+        mut self,
         chain_start: [u8; 32],
         entries: &[L::Entry],
-    ) -> Result<ApplyProofInputs<L::WriteProof>, Self::Error>
+    ) -> Result<AppliedTree<Self, L::WriteProof>, Self::Error>
     where
+        Self: Sized,
         L: WritableLeaf<H>,
     {
-        entries.iter().try_for_each(L::check_entry)?;
-        let old_root = self.root()?;
-        let old_next_index = self.next_index()?;
-        let mut tree = Growing {
-            store: self,
-            next_index: old_next_index,
+        let next_index = self.next_index()?;
+        let proof = Growing {
+            store: &mut self,
+            next_index,
             leaf: PhantomData,
-        };
-        let mut chain_end = chain_start;
-        let mut writes = Vec::with_capacity(entries.len());
-        for entry in entries {
-            writes.push(tree.apply(entry)?);
-            chain_end = L::chained(&chain_end, entry).map_err(RecordTreeError::from)?;
         }
-        Ok(ApplyProofInputs {
-            old_root,
-            new_root: tree.filled().node(NodePosition::root(H))?,
-            old_next_index,
-            new_next_index: tree.next_index,
-            chain_start,
-            chain_end,
-            writes,
-        })
+        .apply_batch(chain_start, entries)?;
+        Ok(AppliedTree { tree: self, proof })
     }
 }
 
@@ -337,6 +330,31 @@ impl<L: IndexedLeaf, const H: usize, S: RecordStore<L, H> + ?Sized> Growing<'_, 
 }
 
 impl<L: WritableLeaf<H>, const H: usize, S: RecordStore<L, H> + ?Sized> Growing<'_, S, L, H> {
+    fn apply_batch(
+        &mut self,
+        chain_start: [u8; 32],
+        entries: &[L::Entry],
+    ) -> Result<ApplyProofInputs<L::WriteProof>, S::Error> {
+        entries.iter().try_for_each(L::check_entry)?;
+        let old_root = self.filled().node(NodePosition::root(H))?;
+        let old_next_index = self.next_index;
+        let mut chain_end = chain_start;
+        let mut writes = Vec::with_capacity(entries.len());
+        for entry in entries {
+            writes.push(self.apply(entry)?);
+            chain_end = L::chained(&chain_end, entry).map_err(RecordTreeError::from)?;
+        }
+        Ok(ApplyProofInputs {
+            old_root,
+            new_root: self.filled().node(NodePosition::root(H))?,
+            old_next_index,
+            new_next_index: self.next_index,
+            chain_start,
+            chain_end,
+            writes,
+        })
+    }
+
     /// One write in the order the apply circuit proves its steps.
     fn apply(&mut self, entry: &L::Entry) -> Result<L::WriteProof, S::Error> {
         let member = L::entry_member(entry);

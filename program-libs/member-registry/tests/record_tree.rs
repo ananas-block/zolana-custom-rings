@@ -5,8 +5,8 @@ use custom_ring_interface::{
 };
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
-    quad_node, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition, OpeningCheck,
-    QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
+    quad_node, AppliedTree, Canopy, IndexedRecord, MemberRecord, MemberRegistryTree, NodePosition,
+    OpeningCheck, QuadPath, RecordOpening, RecordStore, RecordTree, RecordTreeError, ZERO_SUBTREES,
 };
 use zolana_ring_policy::ListId;
 
@@ -45,10 +45,14 @@ fn a_fresh_tree_is_the_registry_genesis_root() {
 
 #[test]
 fn an_insert_relinks_the_low_record_and_fills_the_next_index() {
-    let mut tree = MemberRegistryTree::new().unwrap();
-    let first = tree.apply([0; 32], &[write(9, ALLOW, ALLOW)]).unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
+    let AppliedTree { tree, proof: first } =
+        tree.apply([0; 32], &[write(9, ALLOW, ALLOW)]).unwrap();
     let relinked = tree.root().unwrap();
-    let inputs = tree
+    let AppliedTree {
+        tree,
+        proof: inputs,
+    } = tree
         .apply(first.chain_end, &[write(4, BLOCK, BLOCK)])
         .unwrap();
     let insert = inputs.writes[0];
@@ -73,10 +77,15 @@ fn an_insert_relinks_the_low_record_and_fills_the_next_index() {
 
 #[test]
 fn an_update_keeps_the_list_bits_outside_its_mask() {
-    let mut tree = MemberRegistryTree::new().unwrap();
-    tree.apply([0; 32], &[write(5, ALLOW | BLOCK, ALLOW | BLOCK)])
-        .unwrap();
-    let inputs = tree.apply([0; 32], &[write(5, BLOCK, 0)]).unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
+    let tree = tree
+        .apply([0; 32], &[write(5, ALLOW | BLOCK, ALLOW | BLOCK)])
+        .unwrap()
+        .tree;
+    let AppliedTree {
+        tree,
+        proof: inputs,
+    } = tree.apply([0; 32], &[write(5, BLOCK, 0)]).unwrap();
     let update = inputs.writes[0];
     assert!(update.exists);
     assert_eq!((update.old_lists, update.slot.index), (ALLOW | BLOCK, 1));
@@ -87,9 +96,12 @@ fn an_update_keeps_the_list_bits_outside_its_mask() {
 
 #[test]
 fn an_absent_member_whose_write_leaves_no_list_stays_absent() {
-    let mut tree = MemberRegistryTree::new().unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
     let before = tree.root().unwrap();
-    let inputs = tree.apply([0; 32], &[write(7, ALLOW, 0)]).unwrap();
+    let AppliedTree {
+        tree,
+        proof: inputs,
+    } = tree.apply([0; 32], &[write(7, ALLOW, 0)]).unwrap();
     let noop = inputs.writes[0];
     assert!(!noop.exists);
     assert_eq!(noop.low, MemberRecord::SENTINEL);
@@ -100,22 +112,23 @@ fn an_absent_member_whose_write_leaves_no_list_stays_absent() {
 
 #[test]
 fn the_tree_refuses_writes_the_program_never_chains() {
-    let mut tree = MemberRegistryTree::new().unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
     let before = tree.clone();
     assert_eq!(
-        tree.apply([0; 32], &[write(6, ALLOW, ALLOW | BLOCK)]),
+        tree.clone()
+            .apply([0; 32], &[write(6, ALLOW, ALLOW | BLOCK)]),
         Err(RecordTreeError::ValueOutsideMask)
     );
     let mut zero = write(6, ALLOW, ALLOW);
     zero.member = [0; 32];
     assert_eq!(
-        tree.apply([0; 32], &[zero]),
+        tree.clone().apply([0; 32], &[zero]),
         Err(RecordTreeError::MemberOutOfRange)
     );
     let mut max = zero;
     max.member = FIELD_MAX;
     assert_eq!(
-        tree.apply([0; 32], &[max]),
+        tree.clone().apply([0; 32], &[max]),
         Err(RecordTreeError::MemberOutOfRange)
     );
     assert_eq!(tree, before);
@@ -127,9 +140,11 @@ fn the_tree_refuses_writes_the_program_never_chains() {
 
 #[test]
 fn openings_resolve_present_and_absent_members_under_their_root() {
-    let mut tree = MemberRegistryTree::new().unwrap();
-    tree.apply([0; 32], &[write(4, ALLOW, ALLOW), write(9, BLOCK, BLOCK)])
-        .unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
+    let tree = tree
+        .apply([0; 32], &[write(4, ALLOW, ALLOW), write(9, BLOCK, BLOCK)])
+        .unwrap()
+        .tree;
     let root = tree.root().unwrap();
     let [four, five, seven, nine, ten] = [4, 5, 7, 9, 10].map(member);
     let present = tree.opening(&four).unwrap();
@@ -162,9 +177,11 @@ fn openings_resolve_present_and_absent_members_under_their_root() {
 
 #[test]
 fn a_record_pool_opens_each_record_once_and_refuses_a_forged_subject() {
-    let mut tree = MemberRegistryTree::new().unwrap();
-    tree.apply([0; 32], &[write(4, ALLOW, ALLOW), write(9, BLOCK, BLOCK)])
-        .unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
+    let tree = tree
+        .apply([0; 32], &[write(4, ALLOW, ALLOW), write(9, BLOCK, BLOCK)])
+        .unwrap()
+        .tree;
     let root = tree.root().unwrap();
     let members = [9, 6, 4, 9].map(member);
     let pool = tree
@@ -196,9 +213,9 @@ fn a_record_pool_opens_each_record_once_and_refuses_a_forged_subject() {
 
 #[test]
 fn records_rebuild_the_tree_they_came_from() {
-    let mut tree = MemberRegistryTree::new().unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
     let entries: Vec<RecordWrite> = (1..=40).map(|byte| write(byte * 5, ALLOW, ALLOW)).collect();
-    tree.apply([0; 32], &entries).unwrap();
+    let tree = tree.apply([0; 32], &entries).unwrap().tree;
     let rebuilt = MemberRegistryTree::from_records(tree.records().to_vec()).unwrap();
     assert_eq!(rebuilt, tree);
     let mut duplicated = tree.records().to_vec();
@@ -296,9 +313,9 @@ impl RecordStore for PreloadedStore {
 
 #[test]
 fn a_store_preloaded_by_sibling_positions_applies_like_the_full_tree() {
-    let mut tree = MemberRegistryTree::new().unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
     let seeded: Vec<RecordWrite> = (1..=30).map(|byte| write(byte * 7, ALLOW, ALLOW)).collect();
-    tree.apply([0; 32], &seeded).unwrap();
+    let tree = tree.apply([0; 32], &seeded).unwrap().tree;
     let batch = [
         write(50, BLOCK, BLOCK),
         write(51, ALLOW, ALLOW),
@@ -306,9 +323,9 @@ fn a_store_preloaded_by_sibling_positions_applies_like_the_full_tree() {
         write(52, BLOCK, BLOCK),
         write(53, ALLOW, 0),
     ];
-    let mut store = PreloadedStore::for_batch(&tree, &batch);
-    let expected = tree.clone().apply([5; 32], &batch).unwrap();
-    assert_eq!(store.apply([5; 32], &batch), Ok(expected));
+    let store = PreloadedStore::for_batch(&tree, &batch);
+    let expected = tree.clone().apply([5; 32], &batch).unwrap().proof;
+    assert_eq!(store.apply([5; 32], &batch).unwrap().proof, expected);
 
     let mut short = PreloadedStore::for_batch(&tree, &batch);
     let low = tree.low_record(&batch[0].member).unwrap().index;
@@ -350,7 +367,10 @@ fn a_full_tree_applies_updates_and_no_ops_but_no_insert() {
             .extend(positions.into_iter().flatten().map(|at| (at, [1; 32])));
     }
     let frozen = ListId::Frozen.record_bit();
-    let inputs = full
+    let AppliedTree {
+        tree: full,
+        proof: inputs,
+    } = full
         .apply([0; 32], &[write(10, BLOCK, BLOCK), write(7, frozen, 0)])
         .unwrap();
     assert!(inputs.writes[0].exists);
@@ -359,7 +379,8 @@ fn a_full_tree_applies_updates_and_no_ops_but_no_insert() {
     assert_eq!(noop.slot, noop.low_path);
     assert_eq!(inputs.new_next_index, MEMBER_REGISTRY_CAPACITY);
     assert_eq!(
-        full.apply([0; 32], &[write(7, frozen, frozen)]),
+        full.apply([0; 32], &[write(7, frozen, frozen)])
+            .map(|applied| applied.proof),
         Err(RecordTreeError::Full)
     );
 }
@@ -367,7 +388,7 @@ fn a_full_tree_applies_updates_and_no_ops_but_no_insert() {
 #[test]
 fn mint_settings_survive_relinks_and_list_writes_and_clear_explicitly() {
     use zolana_ring_policy::MintPolicy;
-    let mut tree = MemberRegistryTree::new().unwrap();
+    let tree = MemberRegistryTree::new().unwrap();
     let policy = MintPolicy {
         threshold: 10,
         cap: 20,
@@ -379,27 +400,33 @@ fn mint_settings_survive_relinks_and_list_writes_and_clear_explicitly() {
             ..Default::default()
         },
     };
-    tree.apply(
-        [0; 32],
-        &[RecordWrite {
-            mint_policy: Some(policy),
-            ..write(5, 0, 0)
-        }],
-    )
-    .unwrap();
-    tree.apply([0; 32], &[write(7, ALLOW, ALLOW), write(5, BLOCK, BLOCK)])
-        .unwrap();
+    let tree = tree
+        .apply(
+            [0; 32],
+            &[RecordWrite {
+                mint_policy: Some(policy),
+                ..write(5, 0, 0)
+            }],
+        )
+        .unwrap()
+        .tree;
+    let tree = tree
+        .apply([0; 32], &[write(7, ALLOW, ALLOW), write(5, BLOCK, BLOCK)])
+        .unwrap()
+        .tree;
     let before = record(&tree, 5).unwrap();
     assert_eq!(before.mint_policy, policy);
     assert_eq!(before.next, member(7));
-    tree.apply(
-        [0; 32],
-        &[RecordWrite {
-            mint_policy: Some(MintPolicy::EMPTY),
-            ..write(5, 0, 0)
-        }],
-    )
-    .unwrap();
+    let tree = tree
+        .apply(
+            [0; 32],
+            &[RecordWrite {
+                mint_policy: Some(MintPolicy::EMPTY),
+                ..write(5, 0, 0)
+            }],
+        )
+        .unwrap()
+        .tree;
     assert_eq!(
         record(&tree, 5).unwrap(),
         MemberRecord {

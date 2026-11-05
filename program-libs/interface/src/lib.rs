@@ -10,7 +10,7 @@
 //!
 //! 1. `docs/spec.md`, `docs/design/proof-composition.md`. What a ring enforces, and the side enforcing each guarantee.
 //! 2. `accounts/state.rs`. The ring account, its pinned table, and the registries a frame may read.
-//! 3. `accounts/member_registry.rs`, `accounts/storage.rs`, `accounts/tracking.rs`, `proof/auditor_key.rs`. The policy and tracking trees, the root history, zero grace, the floor and the auditor key check.
+//! 3. `accounts/member_registry.rs`, `accounts/storage.rs`, `accounts/credential.rs`, `proof/auditor_key.rs`. The policy roots, credential commitments, absence floor and auditor key check.
 //! 4. `instructions/transact.rs`. The frame, each section named against SPP's `TransactIxData`.
 //! 5. `proof/statement.rs`, `proof/domain.rs`. The statement in element order, with its Go twins.
 //! 6. `proof/audit_stream.rs`, `proof/disclosure.rs`, `codec/output.rs`, `codec/stream.rs`. What the auditor and a recipient read of each slot.
@@ -35,6 +35,10 @@ pub mod blinding;
 mod bytes;
 #[path = "instructions/cosign.rs"]
 pub mod cosign;
+#[path = "accounts/credential.rs"]
+pub mod credential;
+#[path = "proof/credential_read.rs"]
+pub mod credential_read;
 #[path = "instructions/deposit.rs"]
 pub mod deposit;
 #[path = "instructions/deposit_audit.rs"]
@@ -43,6 +47,8 @@ pub mod deposit_audit;
 pub mod disclosure;
 #[path = "proof/domain.rs"]
 pub mod domain;
+#[path = "instructions/enrollment.rs"]
+pub mod enrollment;
 pub mod error;
 #[path = "accounts/frame_buffer.rs"]
 pub mod frame_buffer;
@@ -70,8 +76,9 @@ pub mod storage;
 pub mod storage_instruction;
 #[path = "codec/stream.rs"]
 pub mod stream;
-#[path = "accounts/tracking.rs"]
-pub mod tracking;
+#[path = "accounts/owner_grant.rs"]
+pub mod owner_grant;
+pub use owner_grant::OwnerGrant;
 #[path = "instructions/transact.rs"]
 pub mod transact;
 #[path = "proof/verification.rs"]
@@ -94,9 +101,12 @@ pub fn proving_key_hashes() -> impl Iterator<Item = (&'static str, [u8; 32])> {
 pub use anonymous_exit::*;
 pub use audit_stream::*;
 pub use auditor_key::is_auditor_key;
+pub use credential::{AuditCredential, Enrollment, CREDENTIAL_PDA_SEED};
+pub use credential_read::*;
 pub use deposit::*;
 pub use deposit_audit::*;
 pub use disclosure::*;
+pub use enrollment::{EnrollIxData, EnrollRequest};
 pub use error::CustomRingError;
 pub use frame_buffer::*;
 pub use instruction::*;

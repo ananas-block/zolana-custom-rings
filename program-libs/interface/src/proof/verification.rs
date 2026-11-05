@@ -1,9 +1,9 @@
-//! The one Groth16 check behind every ring proof, and the enrollment check the storage program runs.
+//! The Groth16 check behind ring proofs and the credential proof required by ring enrollment.
 //!
 //! A ring proof has one public input, the statement hash the caller rebuilt, and a wrong element fails here.
 //!
 //! Read after `program-libs/interface/src/proof/key_catalog.rs`. Read before
-//! `programs/custom-ring/src/instructions/verification/verifier.rs`, `programs/storage/src/instructions/enroll.rs`.
+//! `programs/custom-ring/src/instructions/verification/verifier.rs`, `programs/custom-ring/src/instructions/enrollment`.
 
 use groth16_solana::{
     decompression::{decompress_g1, decompress_g2},
@@ -12,8 +12,8 @@ use groth16_solana::{
 use solana_program_error::ProgramError;
 
 use crate::{
-    key_catalog::RingCircuit, storage::StorageError, storage_instruction::EnrollIxData,
-    tracking::owner_member, verifying_key, CustomRingError, CustomRingProof, RegisterKeyStatement,
+    key_catalog::RingCircuit, storage::StorageError, verifying_key, AuditCredential,
+    CustomRingError, CustomRingProof,
 };
 
 type ProgramResult = Result<(), ProgramError>;
@@ -46,30 +46,19 @@ impl RingProof<'_> {
     }
 }
 
-/// The registry supplies ring and auditor key and the signer the member, a proof for any other one fails here.
+/// The verified fields are the same credential value passed to the SPP output builder.
 #[must_use]
 pub struct RegisterKeyCheck<'a> {
-    pub ring_id: &'a [u8; 32],
-    pub auditor_pubkey: &'a [u8; crate::TAGGED_X25519_KEY_LEN],
-    pub owner: &'a solana_address::Address,
-    pub ix: &'a EnrollIxData,
+    pub credential: &'a AuditCredential,
     pub proof: &'a CustomRingProof,
 }
 
 impl RegisterKeyCheck<'_> {
     pub fn verify(self) -> ProgramResult {
-        let member = owner_member(self.owner)?;
-        let statement = RegisterKeyStatement {
-            ring_id: self.ring_id,
-            member: &member,
-            nullifier_pk: &self.ix.nullifier_pk,
-            list_tag: &self.ix.list_tag,
-            auditor_pubkey: self.auditor_pubkey,
-            eph_u: &self.ix.eph_u,
-            ciphertext: &self.ix.ciphertext,
-        }
-        .hash()
-        .map_err(|_| StorageError::HashingFailed)?;
+        let statement = self
+            .credential
+            .register_key_hash()
+            .map_err(|_| StorageError::HashingFailed)?;
         RingProof {
             proof: self.proof,
             statement,

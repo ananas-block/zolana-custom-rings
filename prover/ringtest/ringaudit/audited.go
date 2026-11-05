@@ -155,35 +155,24 @@ func (a Audit) RealInputs() int {
 	return count
 }
 
-func (a Audit) defaultBits() uint64 {
+func (a Audit) inputBits(selected func(Utxo) bool) uint64 {
 	bits := uint64(0)
 	for i, input := range a.Inputs {
-		if input.Utxo.isExit() {
+		if selected(input.Utxo) {
 			bits |= 1 << i
 		}
 	}
 	return bits
 }
 
+func (a Audit) defaultBits() uint64 {
+	return a.inputBits(Utxo.isExit)
+}
+
 // Stream mirrors audit.AuditWires.SealStream.
 func (a Audit) Stream(t testing.TB) Stream {
 	t.Helper()
-	ranges := a.Shape.Ranges()
-	plaintext := append(slices.Clone(a.Keys.txViewingSk[:]), byte(a.RealInputs()))
-	if a.Shape.Entry {
-		plaintext = binary.BigEndian.AppendUint64(plaintext, a.defaultBits())
-		for _, input := range a.Inputs {
-			plaintext = append(plaintext, input.entry(t)...)
-		}
-	}
-	plaintext = append(plaintext, make([]byte, ranges.RecordOffset(0)-len(plaintext))...)
-	for _, slot := range a.Outputs {
-		plaintext = append(plaintext, slot.Record(t)...)
-	}
-	for _, slot := range a.Outputs {
-		plaintext = append(plaintext, slot.Tail(t)...)
-	}
-	return Stream{Ranges: ranges, Salt: a.Salt, Ciphertext: a.Keys.TransferCiphertext(t, plaintext, a.Salt)}
+	return a.Seal(t, a.Plaintexts(t))
 }
 
 // Head is what the program holds for the statement's head.

@@ -109,7 +109,6 @@ export const RING_ERROR_CODES = [
   "RING_SETTLEMENT_ACCOUNTS_INVALID",
   "RING_ENTRY_INPUT_DATA",
   "RING_ENTRY_RING_INPUT",
-  "RING_ANONYMOUS_RECIPIENT_CURVE",
   "RING_REGISTRY_OUT_OF_SYNC",
   "RING_REGISTRY_ROOT_CHANGED",
   "RING_REGISTRY_PAGE_GAP",
@@ -182,6 +181,7 @@ export const RING_ERROR_CODES = [
   "RING_FIT_CPI_BYTES",
   "RING_FIT_UNPARSED_FRAME",
   "RING_FRAME_BUFFER_CLOSE",
+  "RING_HELD_KEY_NOT_IN_HISTORY",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

@@ -279,8 +279,6 @@ pub enum RingError {
     InvalidAnonymousSlot,
     #[error("the read cache names a note the transfer does not spend")]
     CachedInputUnknown,
-    #[error("an anonymous ring requires an Ed25519 recipient")]
-    AnonymousRecipient,
     #[error("ring address {address} pays into ring {ring}, the transfer runs in another")]
     ForeignRingAddress { address: Address, ring: Address },
     #[error("merge inputs belong to another tree")]

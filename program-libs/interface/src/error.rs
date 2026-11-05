@@ -124,6 +124,14 @@ ring_errors! {
     FramePayerNotWriter = 8526 => "the SPP payer of a settlement is not the buffer writer",
     InvalidSignerDataCounts = 8527 => "signer data counts are zero under their bit or pass the encoding",
     TooManyAnonymousParties = 8528 => "the co-signers and deposit funders pass the statement's party cells",
+    InvalidCredentialPda = 8529 => "credential PDA is invalid",
+    InvalidEnrollmentAccounts = 8530 => "enrollment accounts do not match the required layout",
+    InvalidAddressTree = 8531 => "address tree is invalid",
+    InvalidCredentialRead = 8532 => "credential read layout is invalid",
+    InvalidCredentialRoots = 8533 => "credential root table is invalid",
+    InvalidAddressCheckpoint = 8534 => "address checkpoint is invalid",
+    AbsenceRootBelowFloor = 8535 => "address root sequence is below the absence floor",
+    SaltedSourceOtherRing = 8536 => "salted source serves another ring",
 }
 
 impl From<CustomRingError> for ProgramError {

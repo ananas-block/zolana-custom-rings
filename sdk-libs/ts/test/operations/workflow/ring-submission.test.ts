@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import {
   address,
   generateKeyPairSigner,
@@ -13,6 +15,7 @@ import type { RingSubmissionStatus, RingSubmissionTransport } from "../../../src
 import { RingProgramError } from "../../../src/protocol/error.js";
 import {
   createKitRingSubmissionTransport,
+  REPROOF,
   RingTransactionSubmission,
   type RingSubmissionAttempt,
 } from "../../../src/operations/workflow/submission.js";
@@ -33,6 +36,20 @@ const STALE_ROOT: RingSubmissionStatus = {
   instructionIndex: 0,
   customCode: RingProgramError.rootNotServed,
 };
+
+/** The `(CustomRingError, Reproof)` rows of the Rust SDK's one retry table, as TS codes. */
+const RUST_REPROOF = [
+  ...readFileSync(
+    new URL("../../../../sdk/src/operations/submission.rs", import.meta.url),
+    "utf8",
+  ).matchAll(/^ {4}\(CustomRingError::(\w+), Reproof::(Fixes|IfMoved)\),$/gmu),
+].map(([, error = "", reproof = ""]) => {
+  const code = new Map<string, number>(Object.entries(RingProgramError)).get(
+    `${error.slice(0, 1).toLowerCase()}${error.slice(1)}`,
+  );
+  if (code === undefined) throw new Error(`no TS code for ${error}`);
+  return [code, reproof === "Fixes" ? "fixes" : "ifMoved"] as const;
+});
 
 const OWN_REGISTRY = address("Stor111111111111111111111111111111111111111");
 const CURATOR_REGISTRY = address("Cura111111111111111111111111111111111111111");
@@ -196,19 +213,24 @@ describe("ring submission ownership", () => {
     expect(f.submission.viewingHistory?.toJson()).toBe(viewingHistory(1).toJson());
   });
 
-  it.each([RingProgramError.rootNotServed, RingProgramError.unboundRegistry])(
-    "rebuilds after the stale proof code %i",
-    async (customCode) => {
-      const f = await fixture();
-      const result = await f.submission.send({
-        sign: f.sign,
-        send: f.send,
-        status: async () => ({ kind: "failed", instructionIndex: 0, customCode }),
-      });
-      expect(result).toMatchObject({ kind: "failed", attempts: 3, customCode });
-      expect(f.build).toHaveBeenCalledTimes(3);
-    },
-  );
+  it("classifies stale proofs by the rows of Rust `REPROOF`", () => {
+    expect([...REPROOF]).toEqual(RUST_REPROOF);
+    expect(REPROOF.get(RingProgramError.trackingRootBelowFloor)).toBe("fixes");
+  });
+
+  it.each([
+    ...RUST_REPROOF.filter(([, reproof]) => reproof === "fixes").map(([code]) => [code, 3]),
+    [RingProgramError.unauthorizedAuthority, 1],
+  ])("answers the ring refusal %i with %i attempts", async (customCode, attempts) => {
+    const f = await fixture();
+    const result = await f.submission.send({
+      sign: f.sign,
+      send: f.send,
+      status: async () => ({ kind: "failed", instructionIndex: 0, customCode }),
+    });
+    expect(result).toMatchObject({ kind: "failed", attempts, customCode });
+    expect(f.build).toHaveBeenCalledTimes(attempts);
+  });
 
   it("treats a refusal returned by send as a confirmed failure", async () => {
     const f = await fixture();

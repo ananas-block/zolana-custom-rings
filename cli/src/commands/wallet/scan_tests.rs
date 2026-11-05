@@ -353,21 +353,43 @@ impl Rpc for NoRpc {}
 
 impl Member {
     fn scan(&self, zolana: &Zolana<NoRpc, Ledger>) -> Vec<[u8; 32]> {
+        self.scan_in(zolana, RingMode::Anonymous)
+            .spendable
+            .utxos()
+            .map(|utxo| utxo.utxo_hash)
+            .collect()
+    }
+
+    /// Registers nothing up front, the chain's assets name the ledger's mints.
+    fn scan_in(&self, zolana: &Zolana<NoRpc, Ledger>, mode: RingMode) -> WalletNotes {
         let assets = RingAssets::new([]).unwrap();
         ScanAt {
             keys: &zolana_ring_keys::RotatingRingKeys::new(&self.keys).unwrap(),
             assets: &assets,
             chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
             slot: 9,
-            store: Some(&self.store),
+            store: &self.store,
+            mode,
             ring: RING,
         }
         .fetch(zolana)
         .unwrap()
-        .spendable
-        .utxos()
-        .map(|utxo| utxo.utxo_hash)
-        .collect()
+    }
+
+    fn confidential_scan(&self, zolana: &Zolana<NoRpc, Ledger>) -> Vec<[u8; 32]> {
+        self.scan_in(zolana, RingMode::Confidential)
+            .spendable
+            .utxos()
+            .map(|utxo| utxo.utxo_hash)
+            .collect()
+    }
+
+    /// Moves each payment to the confidential 8 B slot tag.
+    fn confidential_tags(&self, ledger: &mut Ledger) {
+        let tag = custom_ring_interface::stream::slot_tag(self.keys.viewing_pubkey().u());
+        for tx in &mut ledger.transactions {
+            tx.output_slots[0].view_tag = tag;
+        }
     }
 
     fn payment_from_2(&self, ledger: &mut Ledger, asset: Mint) -> [u8; 32] {
@@ -415,33 +437,23 @@ fn an_anonymous_scan_adds_payments_and_the_change_of_a_default_ring_spend() {
     assert!(current.known_senders().is_empty());
 }
 
-/// A confidential ring holds no anonymous wallet, each slot publishes the 8 B tag alone.
+/// A confidential ring keeps a ledger, each slot publishes the 8 B tag alone.
 #[test]
-fn a_confidential_ring_wallet_finds_a_payment_under_its_slot_tag() {
+fn a_confidential_ring_wallet_finds_a_payment_under_its_slot_tag_and_resumes_past_it() {
     let wallet = Member::new(1, "confidential-scan");
     let mut ledger = Ledger::default();
     let paid = wallet.payment_from_2(&mut ledger, Mint::SOL);
-    let viewing_u = wallet.keys.viewing_pubkey().u();
-    for tx in &mut ledger.transactions {
-        tx.output_slots[0].view_tag = custom_ring_interface::stream::slot_tag(viewing_u);
-    }
+    wallet.confidential_tags(&mut ledger);
     let zolana = ledger.client();
-    let assets = RingAssets::new([]).unwrap();
-    let held: Vec<[u8; 32]> = ScanAt {
-        keys: &zolana_ring_keys::RotatingRingKeys::new(&wallet.keys).unwrap(),
-        assets: &assets,
-        chain_assets: &|| Ok(RingAssets::new(zolana.indexer().mints.clone())?),
-        slot: 9,
-        store: None,
-        ring: RING,
-    }
-    .fetch(&zolana)
-    .unwrap()
-    .spendable
-    .utxos()
-    .map(|utxo| utxo.utxo_hash)
-    .collect();
-    assert_eq!(held, [paid]);
+    assert_eq!(wallet.confidential_scan(&zolana), [paid]);
+    let stored = wallet.store.load().unwrap();
+    assert_eq!(stored.history().current().tag_position(), Some(u64::MAX));
+    assert!(stored.history().current().ring_positions().is_empty());
+    assert_eq!(
+        wallet.confidential_scan(&zolana),
+        [paid],
+        "the ledger answers past its position"
+    );
 }
 
 /// A zero-key merge under the owner's tag, its commitment.
@@ -503,23 +515,15 @@ fn publish_owner_merge(ledger: &mut Ledger, owner: &ShieldedKeypair, first: [u8;
 
 #[test]
 fn a_seeded_merge_reads_exposed_once_on_either_ring_mode() {
-    let wallet = Member::new(1, "seeded-merge");
+    let owner = keypair(1);
     let mut ledger = Ledger::default();
-    let merged = publish_owner_merge(&mut ledger, &wallet.keys, nullifier(40));
+    let merged = publish_owner_merge(&mut ledger, &owner, nullifier(40));
     let zolana = ledger.client();
-    let assets = RingAssets::new([]).unwrap();
-    let keys = zolana_ring_keys::RotatingRingKeys::new(&wallet.keys).unwrap();
-    for store in [None, Some(&wallet.store)] {
-        let notes = ScanAt {
-            keys: &keys,
-            assets: &assets,
-            chain_assets: &|| Ok(RingAssets::new([])?),
-            slot: 9,
-            store,
-            ring: RING,
-        }
-        .fetch(&zolana)
-        .unwrap();
+    for (mode, test) in [
+        (RingMode::Confidential, "seeded-merge-confidential"),
+        (RingMode::Anonymous, "seeded-merge-anonymous"),
+    ] {
+        let notes = Member::new(1, test).scan_in(&zolana, mode);
         let exposed: Vec<[u8; 32]> = notes
             .exposed_if_spent
             .iter()
@@ -545,6 +549,25 @@ fn a_note_in_a_mint_registered_after_the_registry_read_is_kept() {
     let zolana = ledger.client();
     assert_eq!(wallet.scan(&zolana), [paid]);
     assert_eq!(wallet.scan(&zolana), [paid], "a second scan");
+}
+
+#[test]
+fn a_confidential_note_in_a_mint_registered_after_the_registry_read_is_kept() {
+    let wallet = Member::new(1, "late-mint-confidential");
+    let mint = Mint {
+        asset: Address::new_from_array([0x6d; 32]),
+        asset_id: 9,
+    };
+    let mut ledger = Ledger {
+        mints: vec![mint],
+        ..Ledger::default()
+    };
+    let paid = wallet.payment_from_2(&mut ledger, mint);
+    wallet.confidential_tags(&mut ledger);
+    let zolana = ledger.client();
+    assert_eq!(wallet.confidential_scan(&zolana), [paid]);
+    assert!(wallet.store.load().unwrap().pending_notes().is_empty());
+    assert_eq!(wallet.confidential_scan(&zolana), [paid], "a second scan");
 }
 
 #[test]

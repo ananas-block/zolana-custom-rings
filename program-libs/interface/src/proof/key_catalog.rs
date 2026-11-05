@@ -29,9 +29,6 @@ pub enum RingCircuit {
     ApplyRecords {
         writes: u8,
     },
-    ApplyEnrollments {
-        writes: u8,
-    },
     RegisterKey,
     Deposit {
         capacity: u8,
@@ -218,7 +215,7 @@ impl TransferShape {
 
 /// Addresses SPP takes beside its nullifier PDAs, zolana/docs/spec.md.
 const SPP_ADDRESSES: usize = 4;
-/// Ring program, ring, ring config, own, curator, tracking.
+/// The fixed reservation excludes variable credential tree accounts.
 const RING_ADDRESSES: usize = 6;
 
 /// What takes a v1 transaction's addresses beside its owner signers.
@@ -274,7 +271,7 @@ impl TransferSpend {
     /// The wide flag a wallet seals under ahead of every record read, `pools` from [`UnreadSubjects`].
     ///
     /// The wallet knows its rail, shape, live owners, legs, assets and the ring's source map. It reads
-    /// no tracking row, so it cannot tell who holds a salted record, and a leg's destination may not
+    /// no credential, so it cannot tell who holds a salted record, and a leg's destination may not
     /// exist yet.
     ///
     /// A bound past the narrow row is a possibility, never a need. Where both rows seal one stream
@@ -345,12 +342,6 @@ impl RingCircuit {
             writes: apply_width(pending),
         }
     }
-
-    pub const fn apply_enrollments(pending: u64) -> Self {
-        Self::ApplyEnrollments {
-            writes: apply_width(pending),
-        }
-    }
 }
 
 const fn apply_width(pending: u64) -> u8 {
@@ -386,7 +377,7 @@ pub struct UnreadSubjects {
     pub owners: usize,
     /// Distinct live input, output and public assets.
     pub assets: usize,
-    /// The table reads a salted list, an owner may then open a salted record and a tracking row.
+    /// The table reads a salted list, an owner may then open a salted record and a credential.
     pub salted: bool,
 }
 
@@ -395,7 +386,7 @@ impl UnreadSubjects {
     pub const fn pools(self) -> RecordPools {
         let (owner_records, tracking) = match self.salted {
             true => (2 * self.owners, self.owners),
-            // Rows and output owners fit the tracking pool by the shape, no owner reads a row.
+            // Input and output owners fit the credential capacity selected by the shape.
             false => (self.owners, 0),
         };
         let records = owner_records + self.assets;
@@ -421,6 +412,19 @@ impl RingCircuit {
         match self {
             Self::Transfer { owners, .. } => Some(owners),
             _ => None,
+        }
+    }
+
+    pub fn credential_capacity(self) -> Option<usize> {
+        if !RING_KEYS.iter().any(|key| key.circuit == self) {
+            return None;
+        }
+        match self {
+            Self::Transfer { .. } => self.record_pools().map(|pools| pools.tracking),
+            Self::Deposit { capacity } => Some(usize::from(capacity)),
+            Self::Merge => Some(1),
+            Self::ApplyRecords { writes } => Some(usize::from(writes)),
+            Self::RegisterKey => None,
         }
     }
 

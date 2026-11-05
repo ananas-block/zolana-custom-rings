@@ -16,6 +16,8 @@ package audit
 
 import (
 	"github.com/consensys/gnark/frontend"
+
+	"github.com/helius-labs/zolana-custom-rings/prover/circuits/shared"
 )
 
 // Flags of the audit statement's layout value, mirrored by AuditLayout::value in program-libs/interface/src/proof/disclosure.rs.
@@ -56,6 +58,7 @@ const (
 	StreamFirstCounter  = 2
 	EnvelopeKeyLen      = 32
 	RealInputCountLen   = 1
+	AddressInputBitsLen = shared.InputBitmapBits / 8
 	DefaultInputBitsLen = 8
 	fieldLen            = 32
 	amountLen           = 8
@@ -72,14 +75,18 @@ const (
 )
 
 func (s StreamShape) Ranges() StreamRanges {
+	if err := shared.ValidateInputCapacity(s.InputClass); err != nil {
+		panic(err)
+	}
 	return StreamRanges{StreamShape: s}
 }
 
 func (r StreamRanges) EnvelopeHeadLen() int {
+	head := EnvelopeKeyLen + RealInputCountLen + AddressInputBitsLen
 	if r.Entry {
-		return EnvelopeKeyLen + RealInputCountLen + DefaultInputBitsLen
+		return head + DefaultInputBitsLen
 	}
-	return EnvelopeKeyLen + RealInputCountLen
+	return head
 }
 
 func (r StreamRanges) entryLen() int {

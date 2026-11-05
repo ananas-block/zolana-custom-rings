@@ -28,8 +28,8 @@ import (
 type Spend struct {
 	Senders []frontend.Variable
 	Inputs  []shared.Output
-	// Tracking binds each owner's salt.
-	Tracking TrackingPool
+	// Credentials bind each owner's salt.
+	Credentials CredentialPool
 }
 
 // ApprovalMask reads zero while Outflow is off.

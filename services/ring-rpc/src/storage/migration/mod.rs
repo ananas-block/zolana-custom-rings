@@ -62,7 +62,7 @@ impl MigrationTrait for Schema {
             ),
             "CREATE UNIQUE INDEX relay_reservations_relay ON relay_reservations(relay_id)".to_owned(),
             "CREATE INDEX relay_reservations_touched ON relay_reservations(touched_slot)".to_owned(),
-            format!("CREATE TABLE relay_relays (relay_id {blob} PRIMARY KEY, status TEXT NOT NULL, state TEXT NOT NULL)"),
+            format!("CREATE TABLE relay_relays (relay_id {blob} PRIMARY KEY, status TEXT NOT NULL, state TEXT NOT NULL, revision BIGINT NOT NULL)"),
             format!("CREATE TABLE replay_nonces (ring {blob} NOT NULL, nonce {blob} NOT NULL, signed_at BIGINT NOT NULL, PRIMARY KEY(ring, nonce))"),
             format!("CREATE TABLE spend_checkpoints (ring {blob} NOT NULL PRIMARY KEY, after_slot BIGINT, token VARCHAR(256), through_slot BIGINT NOT NULL, block_time BIGINT NOT NULL)"),
             format!("CREATE TABLE spend_integrity_faults (ring {blob} NOT NULL, nullifier {blob} NOT NULL, slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, PRIMARY KEY(ring, nullifier, tx_signature, event_index))"),

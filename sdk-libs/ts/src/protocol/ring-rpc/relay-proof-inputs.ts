@@ -90,7 +90,7 @@ export interface RelayProofInputs {
   readonly assets: AssetRegistry;
   /** Encoding drops the sender's, Ring RPC derives it from `nullifierKey`. */
   readonly listSalts: readonly RingListSalt[];
-  /** The public co-owners whose keys the seal holds. */
+  /** The public co-owners whose keys the seal holds, encoding sends only those a spend names. */
   readonly coOwners: readonly CoOwner[];
   /** The relayer rebuilds the totals and proves their digest under it, Rust `approval_blinder`. */
   readonly approvalBlinder?: Bytes32;
@@ -128,15 +128,20 @@ export function encodeRelayProofInputs(value: RelayProofInputs): Uint8Array {
     txViewingSecret.fill(0);
   }
   writer.u8(value.inputs.length, "inputs.length");
-  value.inputs.forEach((input, index) => writeInput(writer, { input, index, value }));
+  // 1. Each spend matches its owner by address and nullifier key, the co-owner secrets below follow the match.
+  const spending = new Set(
+    value.inputs.map((input, index) => writeInput(writer, { input, index, value })),
+  );
   writer.u8(value.outputs.length, "outputs.length");
   value.outputs.forEach((output, index) => writeOutput(writer, output, index, value.assets));
   writeExternalData(writer, value.externalData, value.interfaceTransferAccounts);
   writer.bytes(value.blindingSeed, 32, "blindingSeed").u16(value.outputTreeId, "outputTreeId");
+  // 2. A held co-owner no spend names keeps its nullifier secret from the relayer.
+  const disclosed = value.coOwners.filter((coOwner) => spending.has(coOwner));
   writeRelayListSalts(writer, value.listSalts, value.sender)
     .u8(value.wideOwners ? 1 : 0, "wideOwners")
-    .u8(value.coOwners.length, "coOwners.length");
-  for (const { owner, nullifierKey } of value.coOwners) {
+    .u8(disclosed.length, "coOwners.length");
+  for (const { owner, nullifierKey } of disclosed) {
     const secret = nullifierKey.secretBytes();
     writer
       .bytes(addressBytes(owner), 32, "coOwner.owner")
@@ -295,24 +300,24 @@ function writePlan(writer: Writer, plan: AnonymousPlan): void {
   for (const preimage of plan.dummyPreimages()) writer.bytes(preimage, 32, "plan.dummyPreimage");
 }
 
-/** A spend of the sender, a dummy or compact padding, the service derives hash and nullifier. */
+/** A spend of the sender or a held co-owner, a dummy or compact padding, the service derives hash and nullifier. */
 function writeInput(
   writer: Writer,
   slot: Readonly<{ input: ProofInputUtxo; index: number; value: RelayProofInputs }>,
-): void {
+): CoOwner | undefined {
   const { input, index, value } = slot;
   if (input.isAddress() || input.cacheSlot !== undefined) throw refused("input", index);
   if (input.isCompact()) {
     writer.u8(2, "input").u16(input.treeId, "input.treeId");
-    return;
+    return undefined;
   }
   if (input.isDummy()) {
     writer.u8(1, "input").bytes(input.utxo.blinding, 32, "input.blinding");
     writer.u16(input.treeId, "input.treeId");
-    return;
+    return undefined;
   }
   writer.u8(0, "input");
-  writeSpend(writer, {
+  return writeSpend(writer, {
     input,
     index,
     leafIndex: value.leafIndexes[index],
@@ -333,7 +338,7 @@ function writeSpend(
     coOwners: readonly CoOwner[];
     assets: AssetRegistry;
   }>,
-): void {
+): CoOwner | undefined {
   const { input, index, leafIndex, sender, assets } = spend;
   if (
     input.isAddress() ||
@@ -366,6 +371,7 @@ function writeSpend(
   optionalHash(writer, input.ringDataHash, "input.ringDataHash");
   writer.u16(input.treeId, "input.treeId").u64(leafIndex, "input.leafIndex");
   optionalAddress(writer, coOwner?.owner, "input.coOwner");
+  return coOwner;
 }
 
 function writeOutput(

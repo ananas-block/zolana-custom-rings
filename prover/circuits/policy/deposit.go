@@ -4,7 +4,7 @@
 // bind what it creates, a blocked recipient or a delisted asset would otherwise enter the ring through
 // public funds.
 //
-// Read after policy/rules.go, policy/tracking.go. Read before deposit.go.
+// Read after policy/rules.go, policy/credentials.go. Read before deposit.go.
 //
 // Properties:
 // 1. While policy_hash is nonzero, every live recipient and deposited asset meets the rules under the bound roots.
@@ -29,7 +29,7 @@ func NewDepositPolicy(deposits, saltedKeys int) (Policy, error) {
 }
 
 // ScreenDeposit runs the payment section alone, public funds spend no input and every deposit reads as a receipt.
-func (p *Policy) ScreenDeposit(api frontend.API, rc frontend.Rangechecker, tracking TrackingPool, deposits []shared.Output) {
+func (p *Policy) ScreenDeposit(api frontend.API, rc frontend.Rangechecker, credentials CredentialPool, deposits []shared.Output) {
 	g := Rail{ThresholdsActive: 0, Delegate: 0}.Gates(api, p.PolicyHash)
-	p.screenPayments(api, newComparator(rc), g, Spend{Tracking: tracking}, slotPayments(deposits))
+	p.screenPayments(api, newComparator(rc), g, Spend{Credentials: credentials}, slotPayments(deposits))
 }

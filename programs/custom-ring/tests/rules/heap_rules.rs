@@ -1,12 +1,23 @@
-//! The widest frames of every transfer key reach the pairing within Pinocchio's heap, the validator sweep settles each key's widest policy legs.
+//! Buffered proof refusals do not establish settlement.
+
+#[path = "../../../../program-tests/custom-ring/src/resource_frames.rs"]
+mod resource_frames;
+
+use resource_frames::{MaximumPayload, Payload};
+
+use std::collections::HashSet;
 
 use custom_ring_interface::{
+    frame_digest,
     key_catalog::{FrameKey, TransferShape, TRANSFER_SHAPES},
-    tag, CustomRingError, RingPolicy, RingRail, RingTransactData, RootRead,
+    settle_buffered_data, tag, CustomRingError, FrameBufferHeader, RecipientBody, Replies,
+    RingPolicy, RingRail, RingTransactData, RootRead, SlotBody, DATA_TAIL_LEN, MAX_CPI_DATA_LEN,
+    MAX_FRAME_LEN, MIN_REPLY_LEN,
 };
 use solana_address::Address;
-use solana_instruction::{error::InstructionError, AccountMeta};
+use solana_instruction::{error::InstructionError, AccountMeta, Instruction};
 use solana_keypair::Signer;
+use solana_message::v1;
 use solana_transaction_error::TransactionError;
 use spl_token_2022_interface::pod::PodAccount;
 use spr_interface::{
@@ -15,7 +26,7 @@ use spr_interface::{
 };
 
 use crate::{
-    common::{policy_pda, transact, Ring, Sent, Setup},
+    common::{policy_pda, Ring, Sent, Setup, PROGRAM},
     transact_rules::{spp_list, Fixture},
 };
 
@@ -54,6 +65,7 @@ struct Wide {
     entry: bool,
     in_proof: bool,
     wide: bool,
+    payload: Payload,
 }
 
 impl Wide {
@@ -63,7 +75,7 @@ impl Wide {
             Legs::Spl(count) => (count, "spl"),
         };
         format!(
-            "{} {}x{} {legs} {kind}{}{}{}{}{}",
+            "{} {}x{} {legs} {kind}{}{}{}{}{}{}",
             self.rail,
             self.inputs,
             self.outputs,
@@ -72,6 +84,11 @@ impl Wide {
             if self.entry { " entry" } else { "" },
             if self.in_proof { " in-proof" } else { "" },
             if self.wide { " wide" } else { "" },
+            match self.payload {
+                Payload::Base => "",
+                Payload::MaximumBytes => " maximum bytes",
+                Payload::MaximumMessages => " maximum messages",
+            },
         )
     }
 }
@@ -111,6 +128,7 @@ fn cases() -> Vec<Wide> {
             entry: false,
             in_proof: false,
             wide: shape.wide,
+            payload: Payload::Base,
         };
         push(policy, shape);
         push(
@@ -149,6 +167,7 @@ fn cases() -> Vec<Wide> {
                 exempt: false,
                 entry: shape.entry,
                 in_proof: false,
+                payload: Payload::Base,
                 wide: FrameKey {
                     rail: RingRail::Anonymous,
                     inputs: usize::from(shape.inputs),
@@ -162,6 +181,14 @@ fn cases() -> Vec<Wide> {
             shape,
         );
     }
+    let maximum_payloads: Vec<_> = cases
+        .iter()
+        .flat_map(|case| {
+            [Payload::MaximumBytes, Payload::MaximumMessages]
+                .map(|payload| Wide { payload, ..*case })
+        })
+        .collect();
+    cases.extend(maximum_payloads);
     cases
 }
 
@@ -250,7 +277,38 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
     let owners: Vec<[u8; 32]> = (0..MAX_INTERFACE_TRANSFERS)
         .map(|leg| [0x70 + leg as u8; 32])
         .collect();
-    let data = frame(&fixture, &owners, case);
+    let mut data = frame(&fixture, &owners, case);
+    let policy: RingPolicy = ring.read(&policy_pda());
+    let body = RecipientBody {
+        ring_data_hash: Some([0x5a; 32]),
+        ..RecipientBody::default()
+    }
+    .encode();
+    let tail = [0x7b; DATA_TAIL_LEN];
+    let replies = vec![0x72; data.outputs.len() * MIN_REPLY_LEN];
+    let message = vec![0x73; MAX_CPI_DATA_LEN];
+    let message_tag = [0x74; 32];
+    if case.payload != Payload::Base {
+        data.has_data = true;
+        for output in &mut data.outputs {
+            output.tail = Some(&tail);
+            output.body = SlotBody::Recipient(&body);
+        }
+        if case.rail == RingRail::Anonymous {
+            data.replies = Some(Replies {
+                len: MIN_REPLY_LEN as u16,
+                region: &replies,
+            });
+        }
+        fixture.fit_stream(&mut data);
+        MaximumPayload {
+            data: &mut data,
+            policy: &policy,
+            message: &message,
+            view_tag: &message_tag,
+        }
+        .fill(case.payload);
+    }
     let payer = ring.payer.pubkey();
     let owner_run = match (case.rail, case.in_proof) {
         (RingRail::Confidential, false) => vec![AccountMeta::new_readonly(payer, true)],
@@ -258,7 +316,6 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
     };
     let mut spp = spp_list(&payer, &data, &owner_run);
     spp.extend(settlements(ring, &data, &owners));
-    let policy: RingPolicy = ring.read(&policy_pda());
     let accounts = [
         vec![AccountMeta::new_readonly(policy_pda(), false)],
         ring.registries(RootRead::transfer(&policy, false)),
@@ -272,43 +329,58 @@ fn prepare(ring: &mut Ring, case: Wide) -> Sending {
     }
 }
 
-/// The runtime refuses a transaction past its ceilings before any instruction runs.
-fn fits(sent: &Sent) -> bool {
-    !matches!(sent, Err((error, _)) if !matches!(error, TransactionError::InstructionError(..)))
-}
-
-/// Sends `case` with the most legs one transaction carries.
-fn send_widest(case: Wide) -> (Wide, Sent) {
-    let mut legs = case.legs.count();
-    loop {
-        let case = Wide {
-            legs: case.legs.with(legs),
-            ..case
-        };
-        let mut ring = Ring::new(case.setup);
-        let sending = prepare(&mut ring, case);
-        let sent = ring.send(
-            transact(tag::TRANSFER, sending.accounts, sending.bytes),
-            &[],
-        );
-        if fits(&sent) || legs == 0 {
-            return (sending.case, sent);
-        }
-        legs -= 1;
+fn buffered_instruction(ring: &mut Ring, sending: Sending) -> Instruction {
+    let buffer = Address::new_unique();
+    let frame = [vec![tag::TRANSFER], sending.bytes].concat();
+    assert!(frame.len() <= MAX_FRAME_LEN, "{}", sending.case.name());
+    let account = [
+        bytemuck::bytes_of(&FrameBufferHeader::new(ring.payer.pubkey())),
+        &frame,
+    ]
+    .concat();
+    ring.store(buffer, PROGRAM, account);
+    Instruction {
+        program_id: PROGRAM,
+        accounts: [
+            vec![
+                AccountMeta::new(buffer, false),
+                AccountMeta::new_readonly(PROGRAM, false),
+            ],
+            sending.accounts,
+        ]
+        .concat(),
+        data: settle_buffered_data(&frame_digest(&frame).unwrap()),
     }
 }
 
-/// Settlement allocates CPI account metadata past the pairing.
+fn send_widest(case: Wide) -> (Wide, usize, Sent) {
+    let mut ring = Ring::new(case.setup);
+    let sending = prepare(&mut ring, case);
+    let instruction = buffered_instruction(&mut ring, sending);
+    let addresses = instruction
+        .accounts
+        .iter()
+        .map(|account| account.pubkey)
+        .chain([PROGRAM, ring.payer.pubkey()])
+        .collect::<HashSet<_>>()
+        .len();
+    (case, addresses, ring.send(instruction, &[]))
+}
+
 #[test]
-fn the_widest_frames_of_every_key_reach_the_pairing() {
+fn buffered_catalog_maxima_reach_pairing_or_refuse_excess_addresses() {
     let pairing = InstructionError::Custom(CustomRingError::ProofVerificationFailed as u32);
     let missed: Vec<String> = cases()
         .into_iter()
         .map(send_widest)
-        .filter(|(_, sent)| {
-            !matches!(sent, Err((TransactionError::InstructionError(0, error), _)) if *error == pairing)
+        .filter(|(_, addresses, sent)| {
+            if *addresses > usize::from(v1::MAX_ADDRESSES) {
+                !matches!(sent, Err((TransactionError::SanitizeFailure, _)))
+            } else {
+                !matches!(sent, Err((TransactionError::InstructionError(0, error), _)) if *error == pairing)
+            }
         })
-        .map(|(case, sent)| format!("{}, got {sent:?}", case.name()))
+        .map(|(case, addresses, sent)| format!("{}, addresses {addresses}, got {sent:?}", case.name()))
         .collect();
     assert!(missed.is_empty(), "{missed:#?}");
 }

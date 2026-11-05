@@ -13,6 +13,8 @@ mod buffered;
 mod client;
 #[path = "validation/co_signer.rs"]
 mod co_signer;
+#[path = "operations/delegate_source.rs"]
+mod delegate_source;
 #[path = "operations/deposit.rs"]
 mod deposit;
 mod error;
@@ -73,6 +75,7 @@ pub use crate::{
     },
     buffered::{close_frame_buffer, BufferedFrame},
     client::{RingClient, RingIndexerBackend},
+    delegate_source::{DelegateSourceError, ResolvedSource, SourceEnrollment, TrackingEnrollment},
     deposit::{
         fetch_asset_id_async, DepositOutput, DepositRecipient, PreparedRingDeposit, RelayedDeposit,
         RingDeposit, RingDepositBatch, RingDepositBatchReceipt, RingDepositReceipt,

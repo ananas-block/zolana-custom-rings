@@ -36,16 +36,28 @@ Breaking
   service clients reject malformed or conflicting credentials during construction
   and preserve unrelated URL queries → forward method paths unchanged and supply
   the API key in one place.
+- `syncRingWallet` takes the `AnonymousWallet` the anonymous scan also stores, its `ViewingHistory` keys gain a `tagPosition` and its document a required `mergeRetries` list under the names the Rust client uses, and `openRingNotes` returns notes of unregistered mints in `pendingOpenings` in place of a `pending` count → create the wallet with `AnonymousWallet.create(wallet, ViewingHistory.create(viewingPublicKey, createdAt))`, store `toJson()` after each sync, and rebuild each stored document with a sync.
+- `MergeLedger`, its `ConfirmedMerge`, `MergeInput`, `KnownMergeInput`, `MergeTransition` and `AuditedMergeOutput` types, `recoverMergeOpening`, `MergeAuditorOpening`, `KnownUtxos.merged` and the `merged` kind of `InputOpening` are gone, a ring merge record opens its output in full → read a merge output from `KnownUtxoIndex.utxo` by its commitment.
+- `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
+- `RingTransactionSubmission.sendPersisted`, `reconcileRingSubmissions` and `closeAbandonedFrameBuffers` take a `RingBufferLedger` as `buffers`, holding each buffer write and close until its signature resolves → load one with `RingBufferLedger.load(store)` from its own store beside the wallet store and pass it to all three.
 
 Added
 
+- `syncRingWallet` raises `RING_HELD_KEY_NOT_IN_HISTORY` before any ring read when the keys hold a viewing key the wallet's `ViewingHistory` has no entry for, so add that key with `withRotatedKey` or `withImportedKey` first.
 - `RingRpcRefusal.budgetUnset` names `-32210`, a Ring RPC whose operator set no relay budget refuses a relayed enrollment, a buffered frame and a token account create with it.
 - `prepareRingTransferRelay`, `prepareRingExitRelay`, `prepareRingEntryRelay`, `prepareRingWithdrawalRelay`, `prepareRingMergeRelay` and `prepareEnrollRelay` send an operation through the Ring RPC relay, and `createRingTransferSubmission`, `createRingExitSubmission`, `createRingEntrySubmission`, `createRingWithdrawalSubmission` and `createRingDepositSubmission` prove and send one with no relay.
 - `BufferedFrame` and `withBufferedSettlement` settle a frame past one transaction from a buffer its payer writes, `closeAbandonedFrameBuffers` returns the rent of an abandoned buffer, and `TransactionFit` and `decideAddressCeiling` report and refuse a transaction before any proof.
 - `CoSignerApproval` with `CoSignerRule` and `ApprovalOpening` lets an outside co-signer read the proven bits or exact totals under `withExactApproval`, `OwnerApproval` with `RelayTransferTerms` lets a public owner check its own slots, and `FunderApproval` with `RelayFunderTerms` lets a public funder check its deposit legs.
 - `RingRpc.getWalletStatus`, `RingRpc.getWalletActivity` and `RingRpc.getSpendCoverage` read a wallet's notes, its history and a ring's unresolved spends, and `ringFullScan` and `RingAuditPage.skipped` read a whole ring with no tag read and list each row that does not open.
+- `resolveViewingKey` reads an owner's current viewing key from the user registry, returns `undefined` only when the owner has not registered, and refuses a malformed key or a nullifier key other than the one passed.
+- `RingMergeSettingsRequest` signs an owner's merge settings for a mint and `RingRpc.setMergeSettings` sends them, a zero `targetNoteCount` stops Ring RPC merging that mint, and `RingRpcRefusal.sourceNote` names `-32227`, a recovered delegate note its source does not own.
 
 Fixed
 
-- `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, now that commitment stays in `unopened` and a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done.
+- `recoverRingMemberNotes` failed on one output no registered asset rebuilds and on one row it could not decode, and it lost every zero-key note and every merge output whose seed the nullifier key does not derive, now that commitment stays in `unopened`, a row left unread raises `RING_RECOVERY_INCOMPLETE` once the read is done, and each owned note opens from the auditor's record alone.
+- `syncRingWallet` refused every sync after a payment of an unregistered mint arrived and read the whole ring history on each sync, now that note waits in `AnonymousWallet.pendingOpenings()` until its mint registers and a later sync reads only rows past its last position.
 - A hand-built `RuleTable` skipped the checks `decodeRuleTable` runs, now policy writes, `policyTableProofInputs` and its hash rerun `buildRuleTable` and refuse such a table with `RING_RULE_TABLE_INVALID`.
+- `buildRingMergeTransaction` and `PreparedRingDeposit.prepare` on an anonymous ring refused a PDA owner before any proof, now both build for one, and a zero-key merge names the PDA as the signer its program signs through CPI.
+- `LocalRingKeys.destroy` left the list salt key usable, now it wipes that key too and every method needing a secret raises `KEYPAIR_INVALID_SECRET_KEY` afterward.
+- A restarted wallet could read its upload buffer as abandoned while a write or close it had sent could still land, now `closeAbandonedFrameBuffers` waits until each such write and close resolves.
+- A submission gave up on a proof refused for a tracking root below its floor, now it proves again after `trackingRootBelowFloor` as after a revoked root.

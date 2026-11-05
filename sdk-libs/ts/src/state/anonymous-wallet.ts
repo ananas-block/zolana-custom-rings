@@ -3,19 +3,14 @@ import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { bytesKey } from "@heliuslabs/zolana/internal";
 import type { Address, Bytes32, RequestContext } from "@heliuslabs/zolana/interface";
 import { X25519PublicKey, type ViewTag } from "@heliuslabs/zolana/keypair";
-import {
-  deserializeWallet,
-  serializeWallet,
-  Wallet,
-  type WalletUtxo,
-} from "@heliuslabs/zolana/transaction";
+import type { Wallet, WalletUtxo } from "@heliuslabs/zolana/transaction";
 
 import { RingError } from "../protocol/error.js";
 import { exactlyOne, unseen } from "./batch.js";
 import { mintBalances, noteState, type MintBalance, type NoteState } from "./exposed-notes.js";
 import { consumeScan, type AnonymousScan } from "./anonymous-sync.js";
-import { registeredMint } from "../operations/workflow/recover.js";
 import type { RingKeys } from "./ring-keys.js";
+import { RingWallet, type NoteCommit, type NoteDelta } from "./ring-wallet.js";
 import { parseExact, viewTagStream, ViewingHistory, type EntryStream } from "./viewing-history.js";
 
 /** A reply read from a note, what a sender wrote about itself and nothing the proof binds. */
@@ -26,35 +21,49 @@ export interface PendingClaim {
   readonly claimedNullifierPk: Bytes32;
 }
 
+/** What one confidential sync stores beside its notes, Rust `ScanCommit`. */
+export interface ConfidentialCommit extends NoteDelta {
+  /** The held keys the sync read and the slot their tag reads are complete through. */
+  readonly tagPosition?: Readonly<{ keys: readonly X25519PublicKey[]; afterSlot: bigint }>;
+  /** Stored retries whose spend row the sync read again. */
+  readonly retried: readonly Bytes32[];
+}
+
 export class AnonymousWallet {
-  /** Holds the notes and spends, a transfer selects from it. */
-  readonly wallet: Wallet;
-  /** Notes under a mint the registry lacks, a transfer never selects from it. */
-  readonly #pending: Wallet;
+  readonly #notes: RingWallet;
   #history: ViewingHistory;
   #claims: readonly PendingClaim[];
+  /** Spent by a merge whose output named an unregistered mint, each confidential sync reads the spend again. A Rust sync writes them, a TS sync stores such an output as pending. */
+  #mergeRetries: ReadonlyMap<string, Bytes32>;
 
   private constructor(
     fields: Readonly<{
-      wallet: Wallet;
-      pending: Wallet;
+      notes: RingWallet;
       history: ViewingHistory;
       claims: readonly PendingClaim[];
+      mergeRetries: readonly Bytes32[];
     }>,
   ) {
-    this.wallet = fields.wallet;
-    this.#pending = fields.pending;
+    this.#notes = fields.notes;
     this.#history = fields.history;
     this.#claims = fields.claims;
+    this.#mergeRetries = new Map(
+      fields.mergeRetries.map((nullifier) => [bytesKey(nullifier), nullifier]),
+    );
   }
 
   static create(wallet: Wallet, history: ViewingHistory): AnonymousWallet {
     return new AnonymousWallet({
-      wallet,
-      pending: new Wallet({ identity: wallet.identity, registry: wallet.registry }),
+      notes: RingWallet.create(wallet),
       history,
       claims: [],
+      mergeRetries: [],
     });
+  }
+
+  /** Holds the notes and spends, a transfer selects from it. */
+  get wallet(): Wallet {
+    return this.#notes.wallet;
   }
 
   history(): ViewingHistory {
@@ -78,9 +87,9 @@ export class AnonymousWallet {
     return mintBalances(this.wallet.utxos());
   }
 
-  /** Stored and unspendable, `promotePending` moves each once its mint registers, no rescan needed. */
+  /** Stored and unspendable, the next absorb or `promotePending` moves each once its mint registers. */
   pendingOpenings(): readonly WalletUtxo[] {
-    return this.#pending.utxos();
+    return this.#notes.pendingOpenings();
   }
 
   /** Replies the wallet has not confirmed, none reads as a verified sender. */
@@ -100,22 +109,6 @@ export class AnonymousWallet {
   async absorb(scan: AnonymousScan): Promise<void> {
     return this.wallet._withSyncLock(async () => {
       consumeScan(scan, this.#history);
-      const state = this.wallet._state();
-      const nullifiers = new Set([...state.nullifiers, ...scan.spentNullifiers.map(bytesKey)]);
-      const pendingState = this.#pending._state();
-      const hashes = new Set(
-        [...state.utxos, ...pendingState.utxos].map((entry) => bytesKey(entry.outputContext.hash)),
-      );
-      const fresh = scan.utxos.filter((entry) =>
-        unseen(hashes, bytesKey(entry.outputContext.hash)),
-      );
-      const freshPending = scan.pendingOpenings.filter((entry) =>
-        unseen(hashes, bytesKey(entry.outputContext.hash)),
-      );
-      const marked = (notes: readonly WalletUtxo[]): readonly WalletUtxo[] =>
-        notes.map((entry) =>
-          nullifiers.has(bytesKey(entry.nullifier)) ? { ...entry, spent: true } : entry,
-        );
       const claimed = new Set(this.#claims.map((claim) => bytesKey(claim.utxoHash)));
       const claims = scan.senderClaims
         .filter((claim) => unseen(claimed, bytesKey(claim.utxoHash)))
@@ -127,36 +120,47 @@ export class AnonymousWallet {
             claimedNullifierPk: reply.nullifierPk,
           }),
         );
-      this.wallet._replace({
-        ...state,
-        utxos: marked([...state.utxos, ...fresh]),
-        nullifiers,
-      });
-      this.#pending._replace({
-        ...pendingState,
-        utxos: marked([...pendingState.utxos, ...freshPending]),
-      });
+      this.#notes._absorb(
+        {
+          notes: [...scan.utxos, ...scan.pendingOpenings],
+          spentNullifiers: scan.spentNullifiers,
+        },
+        this.wallet,
+        (commit) => this.wallet._replace({ ...this.wallet._state(), ...commit }),
+      );
       this.#claims = [...this.#claims, ...claims];
       this.#history = this.#history._withScanProgress(scan.history);
     });
   }
 
+  /** @internal */
+  _mergeRetries(): readonly Bytes32[] {
+    return [...this.#mergeRetries.values()];
+  }
+
+  /**
+   * @internal Lands one confidential sync, the caller holds the sync lock.
+   *
+   * `write` stores the wallet fields and the core checkpoints, a refusal there leaves the positions and retries unmoved.
+   */
+  _absorbConfidential(
+    commit: ConfidentialCommit,
+    base: Wallet,
+    write: (fields: NoteCommit) => void,
+  ): void {
+    this.#notes._absorb(commit, base, write);
+    const { tagPosition } = commit;
+    if (tagPosition !== undefined)
+      this.#history = this.#history._withTagPosition(tagPosition.keys, tagPosition.afterSlot);
+    // A retry leaves only once the indexer returned its spend row, a lagging indexer keeps it stored.
+    const retries = new Map(this.#mergeRetries);
+    for (const nullifier of commit.retried) retries.delete(bytesKey(nullifier));
+    this.#mergeRetries = retries;
+  }
+
   /** Moves each pending note whose mint now registers into the spendable notes, the moved ones returned. */
   promotePending(): Promise<readonly WalletUtxo[]> {
-    return this.wallet._withSyncLock(async () => {
-      const state = this.wallet._state();
-      const pendingState = this.#pending._state();
-      const registered = (entry: WalletUtxo): boolean =>
-        registeredMint(this.wallet.registry, entry.utxo.asset) !== undefined;
-      const moved = pendingState.utxos.filter(registered);
-      if (moved.length === 0) return moved;
-      this.wallet._replace({ ...state, utxos: [...state.utxos, ...moved] });
-      this.#pending._replace({
-        ...pendingState,
-        utxos: pendingState.utxos.filter((entry) => !registered(entry)),
-      });
-      return moved;
-    });
+    return this.#notes.promotePending();
   }
 
   /** Only raises a tag counter or adds a key. */
@@ -203,30 +207,29 @@ export class AnonymousWallet {
       claimedOwnerKey: bytesToHex(claim.claimedOwnerKey),
       claimedNullifierPk: bytesToHex(claim.claimedNullifierPk),
     }));
+    const { wallet, pending } = this.#notes._documentFields();
     return (
       `{"history":${this.#history.toJson()},` +
-      `"wallet":${JSON.stringify(serializeWallet(this.wallet))},` +
-      `"pending":${JSON.stringify(serializeWallet(this.#pending))},` +
-      `"claims":${JSON.stringify(claims)}}`
+      `"wallet":${JSON.stringify(wallet)},` +
+      `"pending":${JSON.stringify(pending)},` +
+      `"claims":${JSON.stringify(claims)},` +
+      `"mergeRetries":${JSON.stringify([...this.#mergeRetries.keys()].sort())}}`
     );
   }
 
   static fromJson(text: string): AnonymousWallet {
     const stored = document(parseExact(text));
-    const { history, wallet, pending, claims } = stored;
-    const known = ["history", "wallet", "pending", "claims"];
-    if (
-      Object.keys(stored).some((key) => !known.includes(key)) ||
-      typeof wallet !== "string" ||
-      typeof pending !== "string"
-    )
+    const { history, wallet, pending, claims, mergeRetries } = stored;
+    const known = ["history", "wallet", "pending", "claims", "mergeRetries"];
+    if (Object.keys(stored).some((key) => !known.includes(key)))
       throw invalid("the document names other fields");
     if (!Array.isArray(claims)) throw invalid("claims is not a list");
+    if (!Array.isArray(mergeRetries)) throw invalid("mergeRetries is not a list");
     return new AnonymousWallet({
-      wallet: deserializeWallet(wallet),
-      pending: deserializeWallet(pending),
+      notes: RingWallet._fromDocument(wallet, pending),
       history: ViewingHistory._fromValue(history),
       claims: claims.map(storedClaim),
+      mergeRetries: mergeRetries.map(field),
     });
   }
 }

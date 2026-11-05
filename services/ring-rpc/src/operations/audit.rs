@@ -8,10 +8,7 @@ use spr_client::GetShieldedTransactionsByTagsResponse;
 use spr_hasher::primitives::hash_bytes;
 use spr_indexer_api::{Base64String, Hash, Limit};
 use spr_keypair::{hash::owner_hash, NullifierKey, PublicKey, X25519Keypair, X25519Pubkey};
-use spr_transaction::{
-    instructions::{merge::MergeSeed, transact::canonical_shape},
-    ShieldedTransaction,
-};
+use spr_transaction::{instructions::transact::canonical_shape, ShieldedTransaction};
 use zolana_ring_client::{
     auditor_view_tag, confirmed_merge,
     history::{HistoryCursor, HistoryPosition, HistoryQuery, HistoryStream, PageEnd},
@@ -26,9 +23,9 @@ use zolana_ring_client::{
         SetReaderGrantRequest, SkippedReason, SkippedTransaction, SpendCoverageAttestation,
         WalletStatusAttestation, AUDIT_PAGE_LIMIT,
     },
-    AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxo,
-    CreatedUtxos, DepositNote, InputOpening, KnownUtxo, MergeRecordOutput, ReaderKey, RingOrigin,
-    RowDisposition, SealedNullifierKey, TransactionAudit, UtxoOwner,
+    AuditError, AuditedInput, AuditedTransaction, ConfirmedEventKind, ConfirmedMerge, CreatedUtxos,
+    DepositNote, InputOpening, ReaderKey, RingOrigin, RowDisposition, SealedNullifierKey,
+    TransactionAudit,
 };
 use zolana_ring_indexer::{
     rpc::{RingRecordPathView, MAX_RING_MEMBER_PAGE_LIMIT},
@@ -546,28 +543,33 @@ impl<S: TransactionSource> AuditService<S> {
     }
 
     /// Reads the durable tables once per store, a restart resumes where the last commit stopped.
-    async fn load_tables(
+    ///
+    /// A failed or cancelled read leaves the position `None`, the retry reads the tables before
+    /// any page commits behind the durable checkpoint.
+    async fn load_tables<'a>(
         &self,
         store: &AuditStore,
-        position: &mut HistoryPosition,
-    ) -> Result<(), RingRpcError> {
+        loaded: &'a mut Option<HistoryPosition>,
+    ) -> Result<&'a mut HistoryPosition, RingRpcError> {
         let Some(database) = self.shared.database.as_ref() else {
-            return Ok(());
+            return Ok(loaded.get_or_insert_default());
         };
-        if !store.loads_tables() {
-            return Ok(());
+        match loaded {
+            Some(position) => Ok(position),
+            None => {
+                let seal = self.note_seal()?;
+                let tables = LoadSpends {
+                    db: database.connection(),
+                    ring: self.ring,
+                    seal: &seal,
+                }
+                .load()
+                .await?;
+                let position = tables.checkpoint.position;
+                store.seed(tables);
+                Ok(loaded.insert(position))
+            }
         }
-        let seal = self.note_seal()?;
-        let loaded = LoadSpends {
-            db: database.connection(),
-            ring: self.ring,
-            seal: &seal,
-        }
-        .load()
-        .await?;
-        *position = loaded.checkpoint.position;
-        store.seed(loaded);
-        Ok(())
     }
 
     fn note_seal(&self) -> Result<NoteSeal, RingRpcError> {
@@ -605,8 +607,8 @@ impl<S: TransactionSource> AuditService<S> {
     async fn read_history(&self, store: &AuditStore, mode: RingMode) -> Result<(), RingRpcError> {
         let source = &self.shared.source;
         let limit = Page::new(None, None)?.limit();
-        let mut position = store.backfill.lock().await;
-        self.load_tables(store, &mut position).await?;
+        let mut backfill = store.backfill.lock().await;
+        let position = self.load_tables(store, &mut backfill).await?;
         self.retry_unread(store, mode, limit).await?;
         let opener = |owner_key: &[u8; 32]| self.open_tracked_key(owner_key);
         for _ in 0..MAX_BACKFILL_PAGES {
@@ -839,7 +841,7 @@ impl<S: TransactionSource> AuditService<S> {
             created_in,
             work,
         } = row;
-        let record = &merge.disclosed;
+        let record = merge.disclosed();
         observe_all(work, tx, created_in, |position| {
             match tx
                 .nullifiers
@@ -850,7 +852,7 @@ impl<S: TransactionSource> AuditService<S> {
                 false => InputRead::Padding,
             }
         });
-        let note = merge_record_note(&merge, record);
+        let note = merge.output().and_then(|output| output.created_utxo()).ok();
         match note {
             Some(note) => {
                 work.open(created_in, [note]);
@@ -1260,30 +1262,4 @@ fn origin_is_bound(origin: &RingOrigin, tx: &ShieldedTransaction) -> bool {
     origin
         .bind_transaction(&mut bound, tx.ring_program_id.unwrap_or_default())
         .is_ok()
-}
-
-/// The record's fields rebuilt the commitment in the client reader, the seed gives the blinding.
-fn merge_record_note(merge: &ConfirmedMerge, record: &MergeRecordOutput) -> Option<CreatedUtxo> {
-    let blinding = MergeSeed::from_bytes(record.seed)
-        .and_then(|seed| seed.output_blinding(&merge.first_nullifier))
-        .ok()?;
-    Some(CreatedUtxo {
-        commitment: merge.output_commitment,
-        slot_index: 0,
-        leaf_index: merge.leaf_index,
-        utxo: KnownUtxo {
-            owner_key: record.owner_key,
-            owner: UtxoOwner::Keyed {
-                nullifier_pk: record.nullifier_pk,
-            },
-            asset: hash_bytes(record.mint.as_array()).ok()?,
-            mint: Some(record.mint),
-            amount: record.amount,
-            blinding,
-            data_hash: [0; 32],
-            ring_data_hash: merge.ring_data_hash,
-            tree_id: merge.tree_id,
-        },
-        ring_note: true,
-    })
 }

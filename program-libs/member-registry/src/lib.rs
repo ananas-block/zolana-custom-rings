@@ -7,7 +7,7 @@
 //!
 //! Read after `docs/design/records-and-roots.md`, `program-libs/interface/src/accounts/member_registry.rs`.
 //! Read before `program-libs/member-registry/src/path.rs`, `program-libs/member-registry/src/tree.rs`,
-//! `program-libs/member-registry/src/record.rs`, `program-libs/member-registry/src/tracking.rs`,
+//! `program-libs/member-registry/src/record.rs`,
 //! `program-libs/member-registry/src/record_pool.rs`.
 //!
 //! Invariants.
@@ -20,22 +20,21 @@ mod memory;
 mod path;
 mod record;
 mod record_pool;
-mod tracking;
 mod tree;
 
 use spr_hasher::HasherError;
 use thiserror::Error;
 
 pub use memory::{MemberRegistryTree, MemoryTree};
-pub use path::{quad_node, NodePosition, QuadPath, QuadPathOf, TrackingPath, ZERO_SUBTREES};
-pub use record::{MemberRecord, RecordWriteProofInput};
-pub use record_pool::{Canopy, PoolSubject, RecordPool, RecordPoolOf, SharedPath, SharedProof};
-pub use tracking::{
-    TrackingOpening, TrackingPool, TrackingRecord, TrackingTree, TrackingWriteProofInput,
+pub use path::{quad_node, NodePosition, QuadPath, QuadPathOf, ZERO_SUBTREES};
+pub use record::{
+    MemberRecord, RecordCredentials, RecordStatementContext, RecordStatementError,
+    RecordWriteProofInput,
 };
+pub use record_pool::{Canopy, PoolSubject, RecordPool, RecordPoolOf, SharedPath, SharedProof};
 pub use tree::{
-    ApplyProofInputs, IndexedLeaf, IndexedRecord, OpeningCheck, RecordOpening, RecordStore,
-    RecordTree, WritableLeaf, WriteStep,
+    AppliedTree, ApplyProofInputs, IndexedLeaf, IndexedRecord, OpeningCheck, RecordOpening,
+    RecordStore, RecordTree, WritableLeaf, WriteStep,
 };
 
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -68,8 +67,6 @@ pub enum RecordTreeError {
     PoolCapacity,
     #[error("the record pool proof has the wrong shape")]
     PoolShape,
-    #[error("a tracking entry changes a final field or names a zero key")]
-    TrackingKeyChanged,
 }
 
 impl From<HasherError> for RecordTreeError {

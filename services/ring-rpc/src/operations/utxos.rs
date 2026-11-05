@@ -2,10 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        PoisonError, RwLock,
-    },
+    sync::{PoisonError, RwLock},
     time::Duration,
 };
 
@@ -49,10 +46,8 @@ pub(crate) struct AuditStore {
     assets: RwLock<Option<RingAssets>>,
     /// Owners whose key arrived, kept until a committed page derived their notes.
     late_owners: RwLock<BTreeSet<[u8; 32]>>,
-    /// Set once the book holds the table's rows.
-    loaded: AtomicBool,
-    /// One backfill and tracked key refresh at a time.
-    pub(crate) backfill: AsyncMutex<HistoryPosition>,
+    /// One backfill and tracked key refresh at a time, `None` until the durable tables load.
+    pub(crate) backfill: AsyncMutex<Option<HistoryPosition>>,
 }
 
 #[derive(Default)]
@@ -463,11 +458,6 @@ impl AuditStore {
         self.book.read().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// `true` once per store, the caller reads the tables into the book.
-    pub(crate) fn loads_tables(&self) -> bool {
-        !self.loaded.swap(true, Ordering::AcqRel)
-    }
-
     pub(crate) fn seed(&self, loaded: LoadedSpends) {
         let LoadedSpends {
             checkpoint,
@@ -700,25 +690,11 @@ impl AuditStore {
 
     /// The audit view of a merge the checkpoint opened.
     pub(crate) fn merge_output(&self, merge: &ConfirmedMerge) -> Option<AuditedMergeOutput> {
-        let book = self.read_book();
-        let note = book.notes.get(&merge.output_commitment)?;
-        Some(AuditedMergeOutput {
-            commitment: merge.output_commitment,
-            slot: merge.slot,
-            tx_signature: merge.tx_signature,
-            event_index: merge.event_index,
-            tree_id: merge.tree_id,
-            leaf_index: merge.leaf_index,
-            first_nullifier: merge.first_nullifier,
-            ring_data_hash: merge.ring_data_hash,
-            owner_key: note.utxo.owner_key,
-            owner: note.utxo.owner,
-            asset: note.utxo.asset,
-            mint: merge.disclosed.mint,
-            amount: note.utxo.amount,
-            real_nullifiers: merge.disclosed.real_nullifiers.clone(),
-            seed: merge.disclosed.seed,
-        })
+        let opened = self
+            .read_book()
+            .notes
+            .contains_key(&merge.output_commitment());
+        opened.then(|| merge.output().ok()).flatten()
     }
 
     /// Fails closed, a note no row names to `wallet` reads as another party's and an address as no party's.

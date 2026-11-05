@@ -65,7 +65,7 @@ func TestDefaultBitsAndEvidenceFollowTheSlots(t *testing.T) {
 	if realInputs != 2 || bits != 0b10 {
 		t.Fatalf("the reader read R = %d, default bits %b", realInputs, bits)
 	}
-	head := audit.EnvelopeKeyLen + audit.RealInputCountLen
+	head := s.Shape.Ranges().EnvelopeHeadLen() - audit.DefaultInputBitsLen
 	for name, edit := range map[string]func(*ringaudit.Plaintexts){
 		"default bit cleared":        func(p *ringaudit.Plaintexts) { p.Envelope[head+7] = 0 },
 		"default bit on a ring note": func(p *ringaudit.Plaintexts) { p.Envelope[head+7] = 0b11 },
@@ -113,7 +113,7 @@ func TestEntryEvidenceServesMixedOwners(t *testing.T) {
 	s.Inputs[0] = ringaudit.Input{Utxo: ringaudit.SpentUtxo(t, ringtest.MustSolanaPkField(t, other), spptest.MustNullifierPk(t, big.NewInt(9)), big.NewInt(0), 30, 53), OwnerKey: other, Mint: ringaudit.FixtureMint}
 	c.RequireSolved(t, s.Circuit(t))
 	plaintext := s.Keys.Open(t, s.Stream(t))
-	head := audit.EnvelopeKeyLen + audit.RealInputCountLen + audit.DefaultInputBitsLen
+	head := s.Shape.Ranges().EnvelopeHeadLen()
 	if !bytes.Equal(plaintext[head:head+32], other[:]) || !bytes.Equal(plaintext[head+audit.EntryInputLen:head+audit.EntryInputLen+32], ringaudit.DefaultOwnerKey[:]) {
 		t.Fatal("an evidence entry names another owner")
 	}

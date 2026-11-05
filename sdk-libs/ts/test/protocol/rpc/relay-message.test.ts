@@ -219,6 +219,24 @@ function signer(address: Address): TransactionPartialSigner & { calls: number } 
   return fake as unknown as TransactionPartialSigner & { calls: number };
 }
 
+function recording(address: Address): TransactionPartialSigner & { signed: Uint8Array[] } {
+  const fake = {
+    address,
+    signed: [] as Uint8Array[],
+    signTransactions: async (transactions: readonly { messageBytes: Uint8Array }[]) => {
+      fake.signed.push(...transactions.map(({ messageBytes }) => Uint8Array.from(messageBytes)));
+      return [{ [address]: new Uint8Array(64) }];
+    },
+  };
+  return fake as unknown as TransactionPartialSigner & { signed: Uint8Array[] };
+}
+
+function overwrite(bytes: Uint8Array): void {
+  bytes.forEach((byte, index) => {
+    bytes[index] = byte ^ 0xff;
+  });
+}
+
 function relay(): RingRelayClient & { submitRelay: ReturnType<typeof vi.fn> } {
   return {
     getRelayQuote: vi.fn(),
@@ -643,6 +661,38 @@ describe("relay message check", () => {
       ).toBe("Recipients");
     });
 
+    it("signs the checked settling message after the caller overwrites its array", async () => {
+      const expected = await delegate(delegates.request);
+      const honest = inlineOf("honest");
+      const settle = await settling(honest);
+      const checked = settle.slice();
+      const verified = checkSettledMessage(expected, settle, held(data(honest)), DELEGATE);
+      overwrite(settle);
+      const delegateSigner = recording(DELEGATE);
+      await verified.sign(delegateSigner);
+      expect(delegateSigner.signed).toEqual([checked]);
+    });
+
+    it("reads and signs the pending message across the buffer read", async () => {
+      const expected = await delegate(delegates.request);
+      const honest = inlineOf("honest");
+      const settle = await settling(honest);
+      const checked = settle.slice();
+      const pending = new PendingRelaySignature(RELAY_ID, settle, expected);
+      const delegateSigner = recording(DELEGATE);
+      await pending.signOnChain(
+        relay(),
+        {
+          getAccount: async () => {
+            overwrite(settle);
+            return { data: held(data(honest)) };
+          },
+        } as never,
+        delegateSigner,
+      );
+      expect(delegateSigner.signed).toEqual([checked]);
+    });
+
     it("signs on chain after reading the buffer and refuses a missing one", async () => {
       const expected = await delegate(delegates.request);
       const honest = inlineOf("honest");
@@ -666,6 +716,27 @@ describe("relay message check", () => {
         details: { mismatch: "SettlesBuffer" },
       });
     });
+  });
+
+  it("signs the checked inline, deposit and enroll bytes after the caller overwrites its array", async () => {
+    const { feePayer, instructionData, ...named } = enrolls.request;
+    const enroll = await expectedEnroll(
+      { ...named, instructionData: new Uint8Array(base64.encode(instructionData)) },
+      feePayer,
+    );
+    for (const [expected, cases, address] of [
+      [await deposit(deposits.request), deposits.cases, deposits.request.depositor],
+      [await delegate(delegates.request), delegates.cases, DELEGATE],
+      [enroll, enrolls.cases, enrolls.request.owner],
+    ] as const) {
+      const caller = message(cases, "honest");
+      const checked = caller.slice();
+      const verified = checkRelayMessage(expected, caller, address);
+      overwrite(caller);
+      const recorder = recording(address);
+      await verified.sign(recorder);
+      expect(recorder.signed).toEqual([checked]);
+    }
   });
 
   it("signs the honest messages the relay builds", async () => {

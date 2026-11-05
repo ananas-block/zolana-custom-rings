@@ -4,7 +4,8 @@ use custom_ring_interface::tracking::{TrackingEntry, TRACKING_EMPTY_ROOT};
 use serde::{Deserialize, Serialize};
 use spr_hasher::primitives::right_align;
 use zolana_ring_member_registry::{
-    RecordTree, TrackingPath, TrackingRecord, TrackingTree, TrackingWriteProofInput,
+    AppliedTree, ApplyProofInputs, RecordTree, TrackingPath, TrackingRecord, TrackingTree,
+    TrackingWriteProofInput,
 };
 
 const VECTORS: &str = concat!(
@@ -131,13 +132,7 @@ fn write_vector(write: &TrackingWriteProofInput) -> Write {
     }
 }
 
-fn apply(
-    tree: &mut TrackingTree,
-    name: &str,
-    chain_start: [u8; 32],
-    entries: &[TrackingEntry],
-) -> Application {
-    let inputs = tree.apply(chain_start, entries).unwrap();
+fn application(name: &str, inputs: ApplyProofInputs<TrackingWriteProofInput>) -> Application {
     let statement = inputs.statement().unwrap();
     Application {
         name: name.to_string(),
@@ -154,20 +149,24 @@ fn apply(
 }
 
 fn compute_vectors() -> TrackingVectors {
-    let mut tree = TrackingTree::new().unwrap();
-    let inserts = apply(
-        &mut tree,
-        "inserts_in_named_order",
-        [0x11; 32],
-        &[entry(0x20, 1), entry(0x10, 1), entry(0x30, 1)],
-    );
-    let rotation = apply(&mut tree, "one_rotation", [0x12; 32], &[entry(0x10, 2)]);
-    let mixed = apply(
-        &mut tree,
-        "rotation_and_insert",
-        [0x13; 32],
-        &[entry(0x20, 2), entry(0x18, 1), entry(0x20, 3)],
-    );
+    let tree = TrackingTree::new().unwrap();
+    let AppliedTree { tree, proof } = tree
+        .apply(
+            [0x11; 32],
+            &[entry(0x20, 1), entry(0x10, 1), entry(0x30, 1)],
+        )
+        .unwrap();
+    let inserts = application("inserts_in_named_order", proof);
+    let AppliedTree { tree, proof } = tree.apply([0x12; 32], &[entry(0x10, 2)]).unwrap();
+    let rotation = application("one_rotation", proof);
+    let proof = tree
+        .apply(
+            [0x13; 32],
+            &[entry(0x20, 2), entry(0x18, 1), entry(0x20, 3)],
+        )
+        .unwrap()
+        .proof;
+    let mixed = application("rotation_and_insert", proof);
     TrackingVectors {
         description: "Tracking tree applications with every proof input. Produced by program-libs/member-registry/tests/tracking_records_vector.rs.".to_string(),
         empty_root: hex::encode(TRACKING_EMPTY_ROOT),

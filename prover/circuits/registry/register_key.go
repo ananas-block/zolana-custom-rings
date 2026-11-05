@@ -68,5 +68,9 @@ func (c *RegisterKeyCircuit) Define(api frontend.API) error {
 
 // statement mirrors RegisterKeyStatement::elements in program-libs/interface/src/proof/statement.rs.
 func (c *RegisterKeyCircuit) statement(api frontend.API, nullifierPk, listTag frontend.Variable, sealed shared.Sealed) []frontend.Variable {
-	return append([]frontend.Variable{shared.RegisterKeyDomain, c.RingID, c.Member, nullifierPk, listTag}, sealed.StatementFields(api)...)
+	return (Credential{
+		RingID: c.RingID, Member: c.Member, NullifierPk: nullifierPk, ListTag: listTag,
+		Aud: [2]frontend.Variable(sealed.Auditor), Eph: [2]frontend.Variable(sealed.Eph),
+		CtHash: gadget.HashBoundedBytes(api, sealed.Ciphertext),
+	}).Elements(shared.RegisterKeyDomain)
 }

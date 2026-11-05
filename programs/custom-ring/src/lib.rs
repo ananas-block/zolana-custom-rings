@@ -76,6 +76,7 @@ pub fn process_instruction(
     let ix_tag = InstructionTag::try_from(*ix_tag)?;
 
     match ix_tag {
+        InstructionTag::Enroll => process_enroll_ix(program_id, accounts, ix_data),
         InstructionTag::Initialize => process_initialize_ix(program_id, accounts, ix_data),
         InstructionTag::Transfer | InstructionTag::AuthorityTransfer => {
             process_transfer_ix(program_id, accounts, ix_data, ix_tag)

@@ -1,12 +1,12 @@
 //! Verifies a ring deposit and forwards SPP's deposit data unchanged.
 //!
 //! SPP verifies no proof on a deposit. It appends the owner commitment the data names, whatever that
-//! commitment opens to. The ring proof alone shows the auditor opens each commitment and its owner meets tracking and the rules.
+//! commitment opens to. The ring proof alone binds each auditor opening, credential and applicable policy rule.
 //!
 //! The instruction guarantees:
 //!
 //! 1. The statement covers the program id, the target tree, every SPP data byte and each deposited mint.
-//! 2. The tracking root comes from the ring's pin, and a policy ring also binds its own root, its policy and any curator root.
+//! 2. Credential roots come from authenticated SPP trees, and a policy ring also binds its policy roots and table.
 //! 3. A record covering the deposit class signs when the ring configured one.
 //! 4. `ring_auth` sits only in SPP's `ring_config` slot, and the depositor signs.
 //!
@@ -16,8 +16,8 @@
 //! Read after `instructions/accounts/loader.rs`. Read before `instructions/settlement/deposit_audit.rs`.
 
 use custom_ring_interface::{
-    cosign::CoSignDemand, ring_deposit_assets, CustomRingError, DepositRegistry, RootRead,
-    RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
+    cosign::CoSignDemand, key_catalog::RingCircuit, ring_deposit_assets, CustomRingError,
+    DepositRegistry, RootRead, RING_DEPOSIT_DEPOSITOR_INDEX, RING_DEPOSIT_RING_CONFIG_INDEX,
 };
 use pinocchio::{
     error::ProgramError,
@@ -31,7 +31,8 @@ use crate::instructions::{
     deposit_audit::{AuditedDeposit, DepositVerification},
     instruction_runtime::RingAuth,
     loader::{
-        check_funding_signer, load_policy, validate_spp_program, CoSignerSlot, RegistrySlots,
+        check_funding_signer, load_policy, validate_spp_program, CoSignerSlot, CredentialAccounts,
+        RegistrySlots,
     },
 };
 
@@ -49,14 +50,25 @@ pub fn process_deposit_ix(
     let mut iter = AccountIterator::new(accounts);
     let ring = load_policy(program_id, iter.next_account("ring")?)?;
     let registries = RegistrySlots {
+        program_id,
         ring: &ring,
         read: RootRead::deposit(&ring),
     }
     .load(|| Ok(iter.next_account("registry")?))?;
     let roots = registries.roots(Clock::get()?.slot);
-    // 2. Every deposit binds the tracking root, a policy ring also its own root, its policy and any curator root.
-    // A revision the ring does not read must be zero, a frame names no unbound registry.
-    let tracking_root = roots.tracking(audited.tracking_revision)?;
+    // 2. Private sources set the address floor, and SPP state roots bind every present credential.
+    // Unread policy revisions remain zero, the frame names no unbound registry.
+    let credentials = CredentialAccounts {
+        program_id,
+        read: &audited.credential_read,
+        capacity: RingCircuit::Deposit {
+            capacity: audited.key_capacity,
+        }
+        .credential_capacity()
+        .ok_or(CustomRingError::RingShapeUnkeyed)?,
+        absence_floor: registries.absence_floor,
+    }
+    .load(|| Ok(iter.next_account("credential_tree")?))?;
     let own_root = roots.own_if_read(
         audited.own_revision,
         CustomRingError::UnexpectedMemberRegistryRoot,
@@ -104,7 +116,7 @@ pub fn process_deposit_ix(
         program_id,
         tree: tree.address(),
         auditor_pubkey: &ring.auditor_pubkey,
-        tracking_root: &tracking_root,
+        credentials: &credentials,
         registry,
         assets: &assets,
         audited: &audited,

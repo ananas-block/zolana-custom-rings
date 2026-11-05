@@ -712,26 +712,24 @@ fn a_deposited_note_opens_and_a_merge_record_resolves_alone_in_the_ledger() {
     );
     let merge = merged(&transfer, &spent[1]);
     let confirmed_merge = merge.merge().unwrap().expect("a record merge");
-    let record = &confirmed_merge.disclosed;
+    let record = confirmed_merge.disclosed();
     assert_eq!(record.amount, spent[1].utxo.amount);
     assert_eq!(record.real_nullifiers, [field(0x74)]);
+    assert_eq!(record.seed, MERGE_SEED);
     let mut ledger = MergeLedger::default();
-    let hash = confirmed_merge.output_commitment;
+    let hash = confirmed_merge.output_commitment();
     assert!(ledger.apply(confirmed_merge).is_some());
-    let output = ledger.output(&hash).expect("resolved with no input");
-    assert_eq!(output.amount, spent[1].utxo.amount);
+    let opened = ledger
+        .output(&hash)
+        .expect("resolved with no input")
+        .opening()
+        .unwrap();
     assert_eq!(
-        output.asset,
+        opened.asset,
         hash_bytes(spent[1].utxo.asset_address.as_array()).unwrap()
     );
-    assert_eq!(output.seed, MERGE_SEED);
-    let opened = output
-        .opening(
-            transfer.ring,
-            &spr_keypair::NullifierKey::from_secret([0; 31]),
-        )
-        .unwrap();
-    assert_eq!(opened, None, "another owner's key opens nothing");
+    assert_eq!(opened.commitment(Some(transfer.ring)).unwrap(), hash);
+    assert_eq!(opened.amount, spent[1].utxo.amount);
 }
 
 fn page_after(pages: &[Vec<ShieldedTransaction>], token: Option<PaginationToken>) -> usize {
@@ -820,7 +818,7 @@ async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_eve
     assert_eq!(page.next_cursor, None);
     assert_eq!(page.merges.len(), 1);
     let merge_hash = merge.transaction.output_slots[0].output_context.hash;
-    assert_eq!(page.merges[0].output_commitment, merge_hash);
+    assert_eq!(page.merges[0].output_commitment(), merge_hash);
     let merges = MergeAudit::new(transfer.ring, &auditor)
         .run(&history, &ConfirmedOrigins(origins.clone()))
         .await
@@ -828,7 +826,7 @@ async fn the_created_utxo_scan_opens_every_deposit_and_the_merge_audit_reads_eve
     assert_eq!(
         merges
             .iter()
-            .map(|merge| merge.output_commitment)
+            .map(|merge| merge.output_commitment())
             .collect::<Vec<_>>(),
         [merge_hash]
     );

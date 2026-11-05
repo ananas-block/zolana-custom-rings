@@ -10,7 +10,8 @@ use solana_address::Address;
 use spr_client::{AsyncRpc, IndexerRpcConfig};
 use spr_event::EncryptedRingDepositOutput;
 use spr_event_parser::decode_encrypted_ring_deposit_output_data;
-use spr_keypair::{NullifierKey, ShieldedAddress, X25519Keypair};
+use spr_interface::ZERO_NULLIFIER_PUBKEY;
+use spr_keypair::{hash::owner_hash, NullifierKey, ShieldedAddress, X25519Keypair};
 use spr_transaction::{
     instructions::merge::{
         merge_circuit_width, merge_output_blinding, merge_output_key, MergeOutputPlaintext,
@@ -116,25 +117,54 @@ impl<'a> RingRecovery<'a> {
 }
 
 impl SourceMember<'_> {
-    /// The UTXO at `context` and whether it reproduces the leaf there.
+    /// The key a note of `owner` sits under, `None` for another owner.
+    fn nullifier_pk_of(&self, owner: [u8; 32]) -> Result<Option<[u8; 32]>, AuditError> {
+        // A zero-key note of the member's signing key is still the member's note.
+        for nullifier_pk in [self.address.nullifier_pubkey, ZERO_NULLIFIER_PUBKEY] {
+            if owner_hash(&self.address.signing_pubkey, &nullifier_pk)? == owner {
+                return Ok(Some(nullifier_pk));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A zero-key note's nullifier needs no secret, anyone with the opening derives it.
+    fn nullifier(
+        &self,
+        nullifier_pk: &[u8; 32],
+        commitment: &[u8; 32],
+        blinding: &[u8; 32],
+    ) -> Result<[u8; 32], AuditError> {
+        let zero_key;
+        let key = if *nullifier_pk == ZERO_NULLIFIER_PUBKEY {
+            zero_key = NullifierKey::from_secret([0; 31]);
+            &zero_key
+        } else {
+            self.nullifier_key
+        };
+        Ok(key.nullifier(commitment, blinding)?)
+    }
+
+    /// The UTXO at `context` under `nullifier_pk` and whether it reproduces the leaf there.
     fn wallet_utxo(
         &self,
         utxo: Utxo,
+        nullifier_pk: [u8; 32],
         context: &OutputContext,
         hashes: UtxoDataHashes,
         tx: &ShieldedTransaction,
         slot_index: u32,
     ) -> Result<(WalletUtxo, bool), AuditError> {
         let commitment = utxo.hash(
-            &self.address.nullifier_pubkey,
+            &nullifier_pk,
             &hashes.data_hash.unwrap_or_default(),
             &hashes.ring_data_hash.unwrap_or_default(),
             context.tree_id,
         )?;
         let held = WalletUtxo {
-            nullifier: utxo.nullifier(&context.hash, self.nullifier_key)?,
+            nullifier: self.nullifier(&nullifier_pk, &context.hash, &utxo.blinding)?,
             utxo,
-            nullifier_pubkey: self.address.nullifier_pubkey,
+            nullifier_pubkey: nullifier_pk,
             utxo_hash: context.hash,
             tx_viewing_key: None,
             data_hash: hashes.data_hash,
@@ -196,7 +226,6 @@ impl<'a> MemberRecovery<'a> {
         if self.source.nullifier_key.pubkey()? != self.source.address.nullifier_pubkey {
             return Err(AuditError::NullifierKeyMismatch);
         }
-        let owner_hash = self.source.address.owner_hash()?;
         let recovery = &self.recovery;
         let history = self.ring_history(indexer, origin).await?;
         let mut found = Found::default();
@@ -228,7 +257,7 @@ impl<'a> MemberRecovery<'a> {
         let unsupported_deposits = self.deposited_utxos(&history, assets, &mut found)?;
         for confirmed in &history {
             if confirmed.1.requires_audit() {
-                self.audited_utxos(confirmed, owner_hash, assets, &mut found)?;
+                self.audited_utxos(confirmed, assets, &mut found)?;
             }
         }
         let spent = history
@@ -278,7 +307,6 @@ impl<'a> MemberRecovery<'a> {
     fn audited_utxos(
         &self,
         (transaction, origin): &(ShieldedTransaction, RingOrigin),
-        owner_hash: [u8; 32],
         assets: &RingAssets,
         found: &mut Found,
     ) -> Result<(), AuditError> {
@@ -307,7 +335,10 @@ impl<'a> MemberRecovery<'a> {
                 continue;
             };
             let context = &output.context;
-            if opened.owner_hash()? != owner_hash || !found.seen.insert(context.hash) {
+            let Some(nullifier_pk) = self.source.nullifier_pk_of(opened.owner_hash()?)? else {
+                continue;
+            };
+            if !found.seen.insert(context.hash) {
                 continue;
             }
             let mint = match opened
@@ -327,8 +358,7 @@ impl<'a> MemberRecovery<'a> {
                 found.unresolved.push((
                     context.hash,
                     self.source
-                        .nullifier_key
-                        .nullifier(&context.hash, &opened.blinding)?,
+                        .nullifier(&nullifier_pk, &context.hash, &opened.blinding)?,
                 ));
                 continue;
             };
@@ -340,10 +370,14 @@ impl<'a> MemberRecovery<'a> {
                 ring_program_id: Some(self.recovery.ring_program_id),
                 ..self.source.utxo(mint, opened.amount, opened.blinding)
             };
-            match self
-                .source
-                .wallet_utxo(utxo, context, hashes, transaction, output.slot_index)?
-            {
+            match self.source.wallet_utxo(
+                utxo,
+                nullifier_pk,
+                context,
+                hashes,
+                transaction,
+                output.slot_index,
+            )? {
                 (held, true) => found.candidates.push(held),
                 (held, false) => found.unresolved.push((context.hash, held.nullifier)),
             }
@@ -389,7 +423,6 @@ impl<'a> MemberRecovery<'a> {
         found: &mut Found,
     ) -> Result<Vec<[u8; 32]>, AuditError> {
         let ring = self.recovery.ring_program_id;
-        let owner_hash = self.source.address.owner_hash()?;
         let mut processed = HashSet::new();
         let mut unsupported = Vec::new();
         let deposits = history
@@ -414,9 +447,9 @@ impl<'a> MemberRecovery<'a> {
                     unsupported.push(context.hash);
                     continue;
                 };
-                if opening.owner_hash != owner_hash {
+                let Some(nullifier_pk) = self.source.nullifier_pk_of(opening.owner_hash)? else {
                     continue;
-                }
+                };
                 let asset = Address::new_from_array(output.asset);
                 // The deposit proof binds the raw mint, the commitment needs no registry id.
                 let mint = match assets.registry().mint(&asset) {
@@ -436,9 +469,14 @@ impl<'a> MemberRecovery<'a> {
                     data_hash: output.data_hash,
                     ring_data_hash: Some(output.ring_data_hash),
                 };
-                let (held, opens) =
-                    self.source
-                        .wallet_utxo(utxo, context, hashes, transaction, slot_index)?;
+                let (held, opens) = self.source.wallet_utxo(
+                    utxo,
+                    nullifier_pk,
+                    context,
+                    hashes,
+                    transaction,
+                    slot_index,
+                )?;
                 if !opens {
                     return Err(AuditError::DepositOpeningMismatch);
                 }
@@ -446,9 +484,7 @@ impl<'a> MemberRecovery<'a> {
                     context.hash,
                     KnownUtxo {
                         owner_key: opening.owner_key,
-                        owner: UtxoOwner::Keyed {
-                            nullifier_pk: self.source.address.nullifier_pubkey,
-                        },
+                        owner: UtxoOwner::Keyed { nullifier_pk },
                         asset: spr_hasher::primitives::hash_bytes(asset.as_array())?,
                         mint: Some(asset),
                         amount: output.amount,
@@ -522,7 +558,6 @@ impl<'h> MergeRecovery<'_, 'h> {
             })
             .map(|(transaction, _)| transaction)
             .collect();
-        let owner_hash = source.address.owner_hash()?;
         loop {
             let previous = found.seen.len();
             let source_nullifiers = found.nullifiers();
@@ -531,68 +566,50 @@ impl<'h> MergeRecovery<'_, 'h> {
                 if found.seen.contains(&output.hash) {
                     continue;
                 }
-                let inherited = found.known.merge_output(&output.hash).cloned();
-                let owned = inherited.as_ref().is_some_and(|merged| {
-                    merged.owner.hash(&merged.owner_key).ok() == Some(owner_hash)
-                });
-                if !owned
-                    && !transaction
-                        .nullifiers
-                        .iter()
-                        .any(|nullifier| source_nullifiers.contains(nullifier))
-                {
-                    continue;
-                }
-                let successor = match inherited {
-                    Some(merged) => match merged.opening(ring, source.nullifier_key)? {
-                        Some(opening) if opening.owner_hash()? == owner_hash => {
-                            if let Some(mint) = opening.mint {
-                                let utxo = Utxo {
-                                    ring_program_id: Some(ring),
-                                    ..source.utxo(
-                                        spr_transaction::Mint::new(mint, 0),
-                                        opening.amount,
-                                        opening.blinding,
-                                    )
-                                };
-                                Some(RecoveredMerge {
-                                    note: WalletUtxo {
-                                        nullifier: source
-                                            .nullifier_key
-                                            .nullifier(&output.hash, &opening.blinding)?,
-                                        utxo,
-                                        nullifier_pubkey: source.address.nullifier_pubkey,
-                                        utxo_hash: output.hash,
-                                        tx_viewing_key: None,
+                let successor = match found.known.merge_output(&output.hash).cloned() {
+                    // 1. A sealed record opens its output without input history, the only path to a zero-key merge.
+                    Some(merged) => {
+                        let owner =
+                            source.nullifier_pk_of(merged.owner.hash(&merged.owner_key)?)?;
+                        match owner {
+                            Some(nullifier_pk) => {
+                                let opening = merged.opening()?;
+                                // Rebuild checked this commitment, the leaf check adds nothing.
+                                let (note, _) = source.wallet_utxo(
+                                    Utxo {
+                                        ring_program_id: Some(ring),
+                                        ..source.utxo(
+                                            spr_transaction::Mint::new(merged.mint, 0),
+                                            opening.amount,
+                                            opening.blinding,
+                                        )
+                                    },
+                                    nullifier_pk,
+                                    output,
+                                    UtxoDataHashes {
                                         data_hash: None,
                                         ring_data_hash: Some(opening.ring_data_hash),
-                                        tree_id: output.tree_id,
-                                        leaf_index: output.leaf_index,
-                                        latest_tree_id: None,
-                                        slot: transaction.slot,
-                                        tx_signature: transaction.tx_signature,
-                                        slot_index: 0,
                                     },
-                                    opening,
-                                })
-                            } else if let Some(note) = merge_successor(source, transaction, ring)? {
-                                Some(RecoveredMerge::from_note(note)?)
-                            } else {
-                                found.seen.insert(output.hash);
-                                found.unresolved.push((
-                                    output.hash,
-                                    source
-                                        .nullifier_key
-                                        .nullifier(&output.hash, &opening.blinding)?,
-                                ));
-                                continue;
+                                    transaction,
+                                    0,
+                                )?;
+                                Some(RecoveredMerge { note, opening })
                             }
+                            // 2. Another owner's record, the member's spends alone never claim its output.
+                            None => None,
                         }
-                        _ => None,
-                    },
-                    None => merge_successor(source, transaction, ring)?
-                        .map(RecoveredMerge::from_note)
-                        .transpose()?,
+                    }
+                    // 3. With no record, only a merge spending a source note opens under the nullifier key.
+                    None if transaction
+                        .nullifiers
+                        .iter()
+                        .any(|nullifier| source_nullifiers.contains(nullifier)) =>
+                    {
+                        merge_successor(source, transaction, ring)?
+                            .map(RecoveredMerge::from_note)
+                            .transpose()?
+                    }
+                    None => None,
                 };
                 let Some(RecoveredMerge { mut note, opening }) = successor else {
                     continue;
@@ -689,7 +706,13 @@ fn merge_successor(
         data_hash: None,
         ring_data_hash: Some(ring_data_hash),
     };
-    let (successor, opens) =
-        source.wallet_utxo(utxo, &slot.output_context, hashes, transaction, 0)?;
+    let (successor, opens) = source.wallet_utxo(
+        utxo,
+        source.address.nullifier_pubkey,
+        &slot.output_context,
+        hashes,
+        transaction,
+        0,
+    )?;
     Ok(opens.then_some(successor))
 }

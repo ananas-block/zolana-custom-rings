@@ -56,6 +56,7 @@ import {
 } from "../operations/management/reader-access.js";
 import { verifyRecordUpdate } from "../protocol/ring-rpc/record-update.js";
 import {
+  decodeMergeSettings,
   decodePendingListApprovalsPage,
   decodeRecordsRegistry,
   decodeRecordUpdateStatus,
@@ -67,12 +68,14 @@ import {
   encodeCreateRecordsRegistryRequest,
   encodeGetPendingListApprovalsRequest,
   encodeGetListSaltRequest,
+  encodeMergeSettings,
   encodePrepareAuthorityTransferRequest,
   encodePrepareRelayRequest,
   encodeRecordUpdateStatusRequest,
   encodeRefuseListApprovalRequest,
   encodeRelayQuoteRequest,
   encodeRelayStatusRequest,
+  encodeSetMergeSettingsRequest,
   encodeSetReaderGrantRequest,
   encodeSubmitRecordUpdateRequest,
   encodeSubmitRelayRequest,
@@ -86,6 +89,7 @@ import {
   type GetPendingListApprovalsRequest,
   type PendingListApprovalsPage,
   type GetListSaltRequest,
+  type MergeSettings,
   type PrepareAuthorityTransferRequest,
   type PrepareRelayRequest,
   type ReaderGrantAction,
@@ -96,6 +100,7 @@ import {
   type RelayQuoteRequest,
   type RelayStatus,
   type RelayStep,
+  type SetMergeSettingsRequest,
   type SetReaderGrantRequest,
   type SubmitRecordUpdateRequest,
   type SubmitRelayRequest,
@@ -131,6 +136,7 @@ const AUDITOR_KEY_REQUEST_DOMAIN = "zolana/ring-rpc-auditor-key-request";
 const AUDITED_UTXOS_DOMAIN = "zolana/ring-rpc-audited-utxos";
 const AUTHORITY_TRANSFER_DOMAIN = "zolana/ring-rpc-authority-transfer";
 const LIST_SALT_DOMAIN = "zolana/ring-rpc-list-salt";
+const MERGE_SETTINGS_DOMAIN = "zolana/ring-rpc-merge-settings";
 const POLICY_AUTHORITY_DOMAIN = "zolana/ring-rpc-policy-authority";
 const READER_GRANT_DOMAIN = "zolana/ring-rpc-reader-grant";
 const WALLET_STATUS_DOMAIN = "zolana/ring-rpc-wallet-status";
@@ -648,6 +654,78 @@ export class RingReaderGrantRequest {
       ...(wallet === undefined ? {} : { wallet }),
       reader: base64Decoder.decode(readerKeyBytes(reader)) as indexerTypes.Base64String,
       action,
+      timestamp,
+      nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
+      signature: base58Decoder.decode(signature) as Signature,
+    });
+  }
+}
+
+/** Mirrors Rust `MergeSettingsAttestation::message`. */
+export function mergeSettingsAttestation(
+  input: Readonly<{
+    target: RingReadTarget;
+    owner: Address;
+    settings: MergeSettings;
+    timestamp: bigint;
+    nonce: Bytes32;
+  }>,
+): Uint8Array {
+  return encoder.encode(
+    [
+      MERGE_SETTINGS_DOMAIN,
+      ...targetLines(input.target),
+      `owner: ${input.owner}`,
+      `mint: ${input.settings.mint}`,
+      `target notes: ${input.settings.targetNoteCount}`,
+      `minimum average: ${input.settings.minAverageAmount}`,
+      `timestamp: ${input.timestamp}`,
+      `nonce: ${base64Decoder.decode(input.nonce)}`,
+    ].join("\n"),
+  );
+}
+
+/** Mirrors Rust `MergeSettingsRequest`, the signer is the owner whose notes Ring RPC merges. */
+export class RingMergeSettingsRequest {
+  readonly #target: RingReadTarget;
+  readonly #settings: MergeSettings;
+  #timestamp?: bigint;
+
+  private constructor(target: RingReadTarget, settings: MergeSettings) {
+    this.#target = checkedReadTarget(target);
+    // The wire codec refuses a value the Rust request cannot carry before any signature.
+    encodeMergeSettings(settings);
+    this.#settings = Object.freeze({ ...settings });
+  }
+
+  /** A zero `targetNoteCount` stops managed merges of the mint. */
+  static forSettings(target: RingReadTarget, settings: MergeSettings): RingMergeSettingsRequest {
+    return new RingMergeSettingsRequest(target, settings);
+  }
+
+  /** Unix seconds, the RPC rejects a clock more than its skew away. */
+  at(timestamp: bigint): this {
+    this.#timestamp = checkedUnixTimestamp(timestamp, "timestamp");
+    return this;
+  }
+
+  async sign(owner: MessagePartialSigner): Promise<SetMergeSettingsRequest> {
+    const timestamp = timestampOrNow(this.#timestamp);
+    const nonce = freshNonce();
+    const signature = await signMessage(
+      owner,
+      mergeSettingsAttestation({
+        target: this.#target,
+        owner: owner.address,
+        settings: this.#settings,
+        timestamp,
+        nonce,
+      }),
+    );
+    return Object.freeze({
+      ring: this.#target.ringProgramId,
+      owner: owner.address,
+      settings: this.#settings,
       timestamp,
       nonce: base64Decoder.decode(nonce) as indexerTypes.Base64String,
       signature: base58Decoder.decode(signature) as Signature,
@@ -1801,6 +1879,20 @@ export class RingRpc {
   ): Promise<ReaderGrantAction> {
     return decodeReaderGrantAction(
       await this.#call(RingRpcMethod.setReaderGrant, encodeSetReaderGrantRequest(request), context),
+    );
+  }
+
+  /** A request from `RingMergeSettingsRequest.sign`, answered with the settings the service stored. */
+  async setMergeSettings(
+    request: SetMergeSettingsRequest,
+    context?: RequestContext,
+  ): Promise<MergeSettings> {
+    return decodeMergeSettings(
+      await this.#call(
+        RingRpcMethod.setMergeSettings,
+        encodeSetMergeSettingsRequest(request),
+        context,
+      ),
     );
   }
 
