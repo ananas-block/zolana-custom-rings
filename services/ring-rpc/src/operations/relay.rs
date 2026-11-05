@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use custom_ring_interface::{
@@ -857,7 +857,7 @@ impl Relay {
         // 1. The transport is decided, a frame the relay cannot carry costs nothing.
         let Some(frame) = self.wide_frame(proven, setup)? else {
             if setup_rent > 0 {
-                let fee = message_fee_of(&proven.instruction);
+                let fee = message_fee_of(&proven.instruction, self.fee_payer());
                 self.fund(Fund {
                     lease: lease.ok_or(RelayError::OwnerSignature)?,
                     lamports: setup_rent.saturating_add(fee),
@@ -874,10 +874,9 @@ impl Relay {
         };
         let lease = lease.ok_or(RelayError::OwnerSignature)?;
         let writes = frame.writes().map_err(RelayError::proof)?;
-        let settle = frame.settle();
         // 2. The row funds under the lease, the stored proof and buffer identity commit with the charge. A
         // crash from here on leaves a row that names the buffer to close.
-        let cost = self.frame_cost(proven, &settle, writes.len()).await?;
+        let cost = self.frame_cost(proven, &frame, writes.len()).await?;
         let held = self
             .fund(Fund {
                 lease,
@@ -908,7 +907,7 @@ impl Relay {
             .await?;
         }
         // 4. The settlement replaces the frame, the writes hold what it reads.
-        proven.instruction = settle;
+        proven.instruction = frame.settle();
         proven.budget =
             ComputeBudgetConfig::new(compute_unit_limit(InstructionTag::SettleBuffered));
         Ok(())
@@ -943,31 +942,20 @@ impl Relay {
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
-    /// The allowance covers one clean run with a signature to spare, a retry costs only when the chain took
-    /// and failed a send, and a send past the allowance refuses instead of spending the rent the row must return.
+    /// The allowance is exact, a retry costs only when the chain took and failed a send, and a send past
+    /// the allowance refuses instead of spending the rent the row must return.
     async fn frame_cost(
         &self,
         proven: &ProvenRelay,
-        settle: &Instruction,
+        frame: &BufferedFrame,
         writes: usize,
     ) -> Result<FrameCost, RingRpcError> {
         let rent = self
             .chain
             .rent_exempt_lamports(FRAME_BUFFER_HEADER_LEN + proven.instruction.data.len())
             .await?;
-        let settle_signers = settle
-            .accounts
-            .iter()
-            .filter(|account| account.is_signer)
-            .count();
-        let fees_of = |signatures: usize| {
-            u64::try_from(signatures)
-                .unwrap_or(u64::MAX)
-                .saturating_mul(LAMPORTS_PER_SIGNATURE)
-        };
-        // One signature for the close and one to spare, the settlement's metas already name the fee payer.
-        let closing_fees = fees_of(settle_signers + 2);
-        let fee_allowance = fees_of(writes).saturating_add(closing_fees);
+        let closing_fees = closing_fees(frame, self.fee_payer());
+        let fee_allowance = signature_fees(writes).saturating_add(closing_fees);
         Ok(FrameCost {
             lamports: rent.saturating_add(fee_allowance),
             fee_allowance,
@@ -1871,20 +1859,32 @@ impl RelayPayload {
 }
 
 /// Modelled at the base fee, the relay sets no priority fee.
-fn message_fee(message: &VersionedMessage) -> u64 {
-    u64::from(message.header().num_required_signatures).saturating_mul(LAMPORTS_PER_SIGNATURE)
+fn signature_fees(signatures: usize) -> u64 {
+    u64::try_from(signatures)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(LAMPORTS_PER_SIGNATURE)
 }
 
-/// One signature per signer meta and one more, a fee payer the instruction names counts twice.
-fn message_fee_of(instruction: &Instruction) -> u64 {
-    let signers = instruction
+fn message_fee(message: &VersionedMessage) -> u64 {
+    signature_fees(usize::from(message.header().num_required_signatures))
+}
+
+/// The fee of a message holding `instruction`, the compiler counts the fee payer and each other signer once.
+fn message_fee_of(instruction: &Instruction, fee_payer: Address) -> u64 {
+    let signers: HashSet<Address> = instruction
         .accounts
         .iter()
         .filter(|account| account.is_signer)
-        .count();
-    u64::try_from(signers + 1)
-        .unwrap_or(u64::MAX)
-        .saturating_mul(LAMPORTS_PER_SIGNATURE)
+        .map(|account| account.pubkey)
+        .chain([fee_payer])
+        .collect();
+    signature_fees(signers.len())
+}
+
+/// A settlement that lands and fails still leaves the close paid for.
+fn closing_fees(frame: &BufferedFrame, fee_payer: Address) -> u64 {
+    message_fee_of(&frame.settle(), fee_payer)
+        .saturating_add(message_fee_of(&frame.close(), fee_payer))
 }
 
 /// The size the associated token program allocates for a mint, its required extensions included.
@@ -2066,5 +2066,38 @@ mod tests {
         .reservation();
 
         assert_eq!(reservation, ReservationAfterWrite::Keep);
+    }
+
+    /// The payer heads SPP's list and a co-owner can repeat, each still signs once.
+    #[test]
+    fn the_closing_fees_match_the_compiled_settlement_and_close() {
+        let fee_payer = Address::new_from_array([1; 32]);
+        let owner = Address::new_from_array([2; 32]);
+        let inline = Instruction {
+            program_id: Address::new_from_array([3; 32]),
+            accounts: vec![
+                AccountMeta::new(fee_payer, true),
+                AccountMeta::new_readonly(owner, true),
+                AccountMeta::new_readonly(owner, true),
+                AccountMeta::new_readonly(Address::new_from_array([4; 32]), false),
+            ],
+            data: wide_frame::wide_frame(custom_ring_interface::tag::TRANSFER),
+        };
+        let frame = BufferedFrame::for_writer(&inline, fee_payer).expect("frame");
+        let compiled = |instruction: Instruction| {
+            let budget = ComputeBudgetConfig::new(200_000);
+            compile_message(&fee_payer, &[instruction], Default::default(), budget)
+                .map(|message| message_fee(&message))
+                .expect("compiled")
+        };
+
+        assert_eq!(
+            message_fee_of(&frame.settle(), fee_payer),
+            2 * LAMPORTS_PER_SIGNATURE
+        );
+        assert_eq!(
+            closing_fees(&frame, fee_payer),
+            compiled(frame.settle()) + compiled(frame.close())
+        );
     }
 }
