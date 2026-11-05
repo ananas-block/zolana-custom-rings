@@ -53,7 +53,6 @@ pub struct EnrollmentApplierParts {
     pub rings: Vec<Address>,
 }
 
-/// Shared by every ring task.
 struct Applier {
     chain: Arc<dyn StorageChain>,
     payer: Keypair,
@@ -187,7 +186,7 @@ impl RegistryPass<'_> {
         if owners.is_empty() {
             return Ok(());
         }
-        // 3. Proving takes long. Only an apply moves a named account out of pending, and it moves the root too.
+        // 3. Proving takes long, an apply landed meanwhile moves the root and leaves the proof unsent.
         let proved = self.chain.prove_enrollments(self.registry, &owners).await?;
         let current = self.tracking().await?;
         if current.is_none_or(|current| current.newest().revision != proved.revision) {

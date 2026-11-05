@@ -1,4 +1,4 @@
-//! The Ring RPC methods the ring policy authority signs. They page and refuse the updates pending list approval and create the records registry.
+//! The Ring RPC methods the ring policy authority signs.
 //! Read `record_update` after for the pending state, and `record_writer` for how an approval lands.
 
 use solana_address::Address;

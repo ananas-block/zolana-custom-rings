@@ -1,14 +1,11 @@
 //! The notes a ring's auditor opened, their nullifiers, and the keys its enrollments hold.
 //!
-//! Each page also names the notes it moved in an owner's active set, the page commit writes them
-//! to `storage/owner_notes.rs`. Wallet reads page over that set. A wallet read takes its rows and
-//! its history slot from one snapshot, a database snapshot or one hold of the mirror's lock, so a
-//! commit between the two never pairs older rows with newer coverage or the reverse.
+//! A wallet read takes its rows and its history slot from one snapshot, never older rows with newer
+//! coverage.
 //!
-//! Beside a database the mirror is a bounded cache of the projection, storage answers what it
-//! evicted. Only commits and reloads fill the cache, a read never does.
+//! Beside a database the mirror is a bounded cache only commits and reloads fill.
 //!
-//! Read before `operations/page_work.rs`, it records and replays a page against this store.
+//! Read before `operations/page_work.rs`, it records and replays a page against the store.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -28,8 +25,8 @@ use zolana_ring_client::{
     history::HistoryPosition,
     rpc::{
         AuditedUtxoView, DecryptedInput, DecryptedInputClass, GetSpendCoverageResponse,
-        GetWalletStatusResponse, InputParty, SpendCoverageTotals, WalletBalance,
-        WalletEnrollment, WalletNote, WalletNoteStatus, WALLET_SNAPSHOT_CURSOR_VERSION,
+        GetWalletStatusResponse, InputParty, SpendCoverageTotals, WalletBalance, WalletEnrollment,
+        WalletNote, WalletNoteStatus, WALLET_SNAPSHOT_CURSOR_VERSION,
     },
     AuditedMergeOutput, ConfirmedMerge, CreatedNotes, DepositOwner, DepositOwners, KnownUtxo,
     UtxoOwner,
@@ -201,7 +198,7 @@ pub(crate) struct LateOwner {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LateProgress {
     Done,
-    /// The next page resumes after this key.
+    /// The next page resumes after the key.
     After([u8; 32]),
 }
 
@@ -449,8 +446,8 @@ impl IndexedNote {
         .status()
     }
 
-    /// `None` for a note the wallet no longer lists. A note past the history slot stays out, so a
-    /// spent input and its change never both count.
+    /// `None` for a spent note or one past the history slot, a spent input and its change never both
+    /// count.
     fn listed_status(&self, through: u64) -> Option<WalletNoteStatus> {
         if self.note.created_in.slot > through {
             return None;
@@ -607,8 +604,7 @@ impl AuditStore {
         self.read_book().history_scope()
     }
 
-    /// Takes one snapshot's rows. Unread frames and faults are replaced whole, a frame the
-    /// holder read since leaves with them.
+    /// Takes one snapshot's rows, unread frames and faults replaced whole.
     pub(crate) fn refresh(&self, loaded: LoadedSpends, revision: i64) {
         let LoadedSpends {
             checkpoint,
@@ -896,8 +892,12 @@ impl AuditStore {
             });
         }
         let mut details = CoverageDetails::new(cursor);
-        details.unresolved(book.rows.values()
-            .filter(|row| matches!(row.state, SpendState::UnresolvedReal)).copied());
+        details.unresolved(
+            book.rows
+                .values()
+                .filter(|row| matches!(row.state, SpendState::UnresolvedReal))
+                .copied(),
+        );
         details.unread(book.unread.iter().copied());
         details.faults(book.faults.iter().copied());
         details.apply(&mut response);
@@ -931,9 +931,15 @@ impl AuditStore {
         let scan = SpendableScan::new(notes)?;
         match &self.backing {
             Backing::Memory => scan.visit_memory(&self.read_book(), visit),
-            Backing::Database { store, ring, seal, .. } => {
+            Backing::Database {
+                store, ring, seal, ..
+            } => {
                 let snapshot = read_snapshot(store.connection()).await?;
-                let reads = ProjectionReads { db: &snapshot, ring: *ring, seal };
+                let reads = ProjectionReads {
+                    db: &snapshot,
+                    ring: *ring,
+                    seal,
+                };
                 scan.visit_database(&reads, &mut visit).await?;
                 snapshot.commit().await?;
             }
@@ -959,13 +965,21 @@ impl AuditStore {
                 }
                 selected
             }
-            Backing::Database { store, ring, seal, .. } => {
+            Backing::Database {
+                store, ring, seal, ..
+            } => {
                 let snapshot = read_snapshot(store.connection()).await?;
-                let reads = ProjectionReads { db: &snapshot, ring: *ring, seal };
-                scan.visit_database(&reads, |note| totals.record(note)).await?;
+                let reads = ProjectionReads {
+                    db: &snapshot,
+                    ring: *ring,
+                    seal,
+                };
+                scan.visit_database(&reads, |note| totals.record(note))
+                    .await?;
                 let mut selected = totals.select();
                 if !selected.is_empty() {
-                    scan.visit_database(&reads, |note| selected.record(note)).await?;
+                    scan.visit_database(&reads, |note| selected.record(note))
+                        .await?;
                 }
                 snapshot.commit().await?;
                 selected
@@ -1259,10 +1273,19 @@ impl<'a> SpendableScan<'a> {
     fn new(query: SpendableNotes<'a>) -> Result<Self, RingRpcError> {
         let nullifier_pubkey = query.nullifier_key.pubkey()?;
         let mints = query.mints.iter().map(|mint| (mint.asset, *mint)).collect();
-        let range = Member::owner_tag(&query.owner_key).ok().map(|member| OwnerRange {
-            member: *member.as_bytes(), after: None, limit: OWNER_ROW_BATCH,
-        });
-        Ok(Self { query, nullifier_pubkey, mints, range })
+        let range = Member::owner_tag(&query.owner_key)
+            .ok()
+            .map(|member| OwnerRange {
+                member: *member.as_bytes(),
+                after: None,
+                limit: OWNER_ROW_BATCH,
+            });
+        Ok(Self {
+            query,
+            nullifier_pubkey,
+            mints,
+            range,
+        })
     }
 
     fn candidate(&self, indexed: &IndexedNote) -> Option<WalletUtxo> {
@@ -1272,7 +1295,10 @@ impl<'a> SpendableScan<'a> {
         let mint = self.mints.get(&utxo.mint?)?;
         if indexed.spent_at.is_some()
             || utxo.owner_key != self.query.owner_key
-            || utxo.owner != (UtxoOwner::Keyed { nullifier_pk: self.nullifier_pubkey })
+            || utxo.owner
+                != (UtxoOwner::Keyed {
+                    nullifier_pk: self.nullifier_pubkey,
+                })
             || utxo.data_hash != [0; 32]
             || self.query.held.contains(&nullifier)
         {
@@ -1280,8 +1306,12 @@ impl<'a> SpendableScan<'a> {
         }
         Some(WalletUtxo {
             utxo: Utxo {
-                owner: PublicKey::from_ed25519(&utxo.owner_key), asset: *mint, amount: utxo.amount,
-                blinding: utxo.blinding, ring_program_id: Some(self.query.ring), data: Data::default(),
+                owner: PublicKey::from_ed25519(&utxo.owner_key),
+                asset: *mint,
+                amount: utxo.amount,
+                blinding: utxo.blinding,
+                ring_program_id: Some(self.query.ring),
+                data: Data::default(),
             },
             nullifier_pubkey: self.nullifier_pubkey,
             utxo_hash: indexed.commitment,
@@ -1299,17 +1329,27 @@ impl<'a> SpendableScan<'a> {
     }
 
     fn visit_memory(&self, book: &SpendBook, mut visit: impl FnMut(WalletUtxo)) {
-        let Some(mut range) = self.range else { return; };
+        let Some(mut range) = self.range else {
+            return;
+        };
         loop {
             let page = book.owner_page(range);
             let last = page.notes.last().map(|note| note.key);
-            for note in page.notes.iter().filter_map(|indexed| self.candidate(indexed)) {
+            for note in page
+                .notes
+                .iter()
+                .filter_map(|indexed| self.candidate(indexed))
+            {
                 if book.rows.get(&note.nullifier).is_none() {
                     visit(note);
                 }
             }
-            if !page.more { break; }
-            let Some(last) = last else { break; };
+            if !page.more {
+                break;
+            }
+            let Some(last) = last else {
+                break;
+            };
             range.after = Some(last);
         }
     }
@@ -1319,20 +1359,41 @@ impl<'a> SpendableScan<'a> {
         reads: &ProjectionReads<'_, sea_orm::DatabaseTransaction>,
         mut visit: impl FnMut(WalletUtxo),
     ) -> Result<(), RingRpcError> {
-        let Some(mut range) = self.range else { return Ok(()); };
+        let Some(mut range) = self.range else {
+            return Ok(());
+        };
         loop {
-            let page = OwnerNotesPage { ring: reads.ring, seal: reads.seal, range }.read(reads.db).await?;
+            let page = OwnerNotesPage {
+                ring: reads.ring,
+                seal: reads.seal,
+                range,
+            }
+            .read(reads.db)
+            .await?;
             let last = page.notes.last().map(|note| note.key);
-            let candidates: Vec<_> = page.notes.iter().filter_map(|indexed| self.candidate(indexed)).collect();
+            let candidates: Vec<_> = page
+                .notes
+                .iter()
+                .filter_map(|indexed| self.candidate(indexed))
+                .collect();
             let nullifiers: Vec<_> = candidates.iter().map(|note| note.nullifier).collect();
-            let spent: HashSet<_> = reads.rows(&nullifiers).await?.into_iter().map(|row| row.nullifier).collect();
+            let spent: HashSet<_> = reads
+                .rows(&nullifiers)
+                .await?
+                .into_iter()
+                .map(|row| row.nullifier)
+                .collect();
             for note in candidates {
                 if !spent.contains(&note.nullifier) {
                     visit(note);
                 }
             }
-            if !page.more { break; }
-            let Some(last) = last else { break; };
+            if !page.more {
+                break;
+            }
+            let Some(last) = last else {
+                break;
+            };
             range.after = Some(last);
         }
         Ok(())

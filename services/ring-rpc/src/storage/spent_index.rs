@@ -393,8 +393,8 @@ pub(crate) struct ProjectionWriter<'a> {
 }
 
 impl ProjectionWriter<'_> {
-    /// Fences the lease, then takes the next revision. The revision row lock orders the writer's
-    /// transactions, so a follower that read revision `r` holds every row written at or below it.
+    /// The revision row lock orders the writer's transactions, so a follower that read revision
+    /// `r` holds every row written at or below it.
     async fn begin(&self) -> Result<(DatabaseTransaction, i64), DbErr> {
         let now = self
             .clock
@@ -534,7 +534,10 @@ impl ProjectionWriter<'_> {
         }
         let first_unread = first_unread(&transaction, *ring).await?;
         transaction.commit().await?;
-        Ok(CommittedPage { revision, first_unread })
+        Ok(CommittedPage {
+            revision,
+            first_unread,
+        })
     }
 
     /// A page's enrollments and the tracking cursor past it commit together.

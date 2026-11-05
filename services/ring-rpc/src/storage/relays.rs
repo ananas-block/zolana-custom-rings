@@ -1,8 +1,5 @@
-//! Stored relays, a write lands only over the revision its writer read.
-//!
-//! Read `RelayState::apply` first, every change after the insert passes through it. `RelayStore::commit`
-//! then writes the result over the revision the state was read at, a writer that read an older revision
-//! changes nothing.
+//! Stored relays, every change passes `RelayState::apply` and lands only over the revision its writer
+//! read.
 
 use sea_orm::{ConnectionTrait, DbErr, QueryResult, Statement, Value};
 use serde::{Deserialize, Serialize};
@@ -98,7 +95,7 @@ pub(crate) enum RelayEvent {
     Reverted {
         reason: String,
     },
-    /// Refused at preflight or expired, the chain took nothing.
+    /// Expired unlanded, the chain took nothing.
     Dropped {
         reason: String,
     },

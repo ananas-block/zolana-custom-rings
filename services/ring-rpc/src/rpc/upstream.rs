@@ -228,11 +228,8 @@ impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
     }
 }
 
-/// The commitment a tracking read takes.
-///
-/// A confirmed root can leave the chain with its fork, so only a finalized root feeds the stored
-/// projection. The program serves a retired root for its whole grace, far past the finalization
-/// lag, so the indexer still proves the leaves under a finalized root at its confirmed tip.
+/// Only a finalized root feeds the stored projection, a retired root stays served past the
+/// finalization lag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Finality {
     Confirmed,

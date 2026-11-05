@@ -17,8 +17,7 @@ use zolana_secret_file::{create_new, read_key32, Access, SecretFileError, Visibi
 
 use crate::{
     client_rate::ClientLimitArgs, cosign::ApproveClass, keys::KeySource, origins::OriginTransport,
-    server::BindPolicy,
-    wallet_snapshots::WalletSnapshotLimits,
+    server::BindPolicy, wallet_snapshots::WalletSnapshotLimits,
 };
 
 #[derive(Debug, Parser)]

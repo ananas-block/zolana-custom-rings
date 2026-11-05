@@ -1,5 +1,3 @@
-//! Record updates refuse an update pending list approval past its window or awaiting the reader list in database mode, unpaired or too long mint limits and limits for an unrecorded asset, and an authority write whose signer lost the policy role, send only an entry the rules refuse on as an immediate update, send an authority grant at once, hold an authority update behind an earlier wallet update on its record, hold every update while the ring account is unread, send a graced batch signed for the cli window at its batch window over a full history, hold an update pending list approval for its allow entry, page the updates pending list approval, apply a batch that lands after its status lookup once, requeue an expired batch once, send a salted owner write with its tracking revision and the pinned tracking registry, and send nothing without a private write source.
-
 use std::{collections::VecDeque, sync::atomic::AtomicU64};
 
 use bytemuck::Zeroable;
@@ -15,10 +13,11 @@ use solana_account::Account;
 use solana_transaction::versioned::VersionedTransaction;
 use zolana_ring_client::rpc::{
     GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, GetRecordUpdateStatusRequest,
-    ListApprovalScope, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry, RecordUpdateStatus,
-    RefuseListApprovalRequest, REFUSE_LIST_APPROVAL,
-    SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_LIST_APPROVALS,
-    PENDING_LIST_APPROVALS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, SUBMIT_RECORD_UPDATE,
+    ListApprovalScope, ReadTarget, ReaderAccess, RecordUpdate, RecordUpdateEntry,
+    RecordUpdateStatus, RefuseListApprovalRequest, SubmitRecordUpdateRequest,
+    SubmitRecordUpdateResponse, WalletGrant, GET_PENDING_LIST_APPROVALS,
+    PENDING_LIST_APPROVALS_PAGE_LIMIT, RECORD_UPDATE_SLOTS, REFUSE_LIST_APPROVAL,
+    SUBMIT_RECORD_UPDATE,
 };
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -539,7 +538,13 @@ async fn pending_list_approvals_page_oldest_first_after_a_cursor() {
             .module
             .call::<_, GetPendingListApprovalsResponse>(GET_PENDING_LIST_APPROVALS, as_object(page))
     };
-    let read = || GetPendingListApprovalsRequest::read(ListApprovalScope { target, authority: authority().pubkey(), registry: REGISTRY });
+    let read = || {
+        GetPendingListApprovalsRequest::read(ListApprovalScope {
+            target,
+            authority: authority().pubkey(),
+            registry: REGISTRY,
+        })
+    };
 
     let first = list(read().sign(&authority()).expect("signed list"))
         .await
@@ -620,14 +625,22 @@ async fn rebinding_records_keeps_pending_wallet_grants_in_the_signed_registry() 
     let old_page = list(signed).await.expect("old registry");
     assert_eq!(old_page.pending.len(), 1);
     assert_eq!(old_page.pending[0].update_id, pending.update_id);
-    let new_page = list(GetPendingListApprovalsRequest::read(scope(replacement))
-        .sign(&authority()).expect("signed list"))
-        .await.expect("new registry");
+    let new_page = list(
+        GetPendingListApprovalsRequest::read(scope(replacement))
+            .sign(&authority())
+            .expect("signed list"),
+    )
+    .await
+    .expect("new registry");
     assert!(new_page.pending.is_empty());
-    assert!(list(GetPendingListApprovalsRequest::read(scope(replacement))
-        .with_cursor(pending.update_id.clone())
-        .sign(&authority()).expect("signed cursor"))
-        .await.is_err());
+    assert!(list(
+        GetPendingListApprovalsRequest::read(scope(replacement))
+            .with_cursor(pending.update_id.clone())
+            .sign(&authority())
+            .expect("signed cursor")
+    )
+    .await
+    .is_err());
     let approval = RecordUpdate {
         genesis_hash: Hash(GENESIS),
         ring: RING.into(),
@@ -642,14 +655,29 @@ async fn rebinding_records_keeps_pending_wallet_grants_in_the_signed_registry() 
     assert!(applied.accounts.contains(&replacement));
     assert_eq!(applied.writes.len(), 1);
     assert_eq!(applied.members, [*owner.as_bytes()]);
-    assert_eq!(records.status(&pending).await, RecordUpdateStatus::PendingListApproval);
-    let refuse = |registry| RefuseListApprovalRequest::refusal(scope(registry), pending.update_id.clone())
-        .sign(&authority()).expect("signed refusal");
-    assert!(records.module.call::<_, RecordUpdateStatus>(REFUSE_LIST_APPROVAL, as_object(refuse(replacement)))
-        .await.is_err());
-    records.module.call::<_, RecordUpdateStatus>(REFUSE_LIST_APPROVAL, as_object(refuse(REGISTRY)))
-        .await.expect("old registry refusal");
-    assert!(matches!(records.status(&pending).await, RecordUpdateStatus::Refused { .. }));
+    assert_eq!(
+        records.status(&pending).await,
+        RecordUpdateStatus::PendingListApproval
+    );
+    let refuse = |registry| {
+        RefuseListApprovalRequest::refusal(scope(registry), pending.update_id.clone())
+            .sign(&authority())
+            .expect("signed refusal")
+    };
+    assert!(records
+        .module
+        .call::<_, RecordUpdateStatus>(REFUSE_LIST_APPROVAL, as_object(refuse(replacement)))
+        .await
+        .is_err());
+    records
+        .module
+        .call::<_, RecordUpdateStatus>(REFUSE_LIST_APPROVAL, as_object(refuse(REGISTRY)))
+        .await
+        .expect("old registry refusal");
+    assert!(matches!(
+        records.status(&pending).await,
+        RecordUpdateStatus::Refused { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1170,9 +1198,13 @@ async fn a_wallet_update_pending_list_approval_lands_with_its_allow_entry() {
         .call(
             GET_PENDING_LIST_APPROVALS,
             as_object(
-                GetPendingListApprovalsRequest::read(ListApprovalScope { target, authority: authority().pubkey(), registry: REGISTRY })
-                    .sign(&authority())
-                    .expect("signed list"),
+                GetPendingListApprovalsRequest::read(ListApprovalScope {
+                    target,
+                    authority: authority().pubkey(),
+                    registry: REGISTRY,
+                })
+                .sign(&authority())
+                .expect("signed list"),
             ),
         )
         .await

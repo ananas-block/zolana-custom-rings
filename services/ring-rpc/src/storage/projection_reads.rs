@@ -38,7 +38,10 @@ pub(crate) struct ProjectionReads<'a, C = DatabaseConnection> {
 }
 
 impl<C: ConnectionTrait> ProjectionReads<'_, C> {
-    pub(crate) async fn due_repairs(&self, now: u64) -> Result<Vec<(CreatedIn, RepairAttempt)>, DbErr> {
+    pub(crate) async fn due_repairs(
+        &self,
+        now: u64,
+    ) -> Result<Vec<(CreatedIn, RepairAttempt)>, DbErr> {
         let now = i64::try_from(now)
             .map_err(|_| DbErr::Custom("repair time exceeds the column range".into()))?;
         let limit = i64::try_from(MAX_REPAIRED_FRAMES)

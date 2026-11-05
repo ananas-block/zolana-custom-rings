@@ -188,10 +188,10 @@ impl<S> Shared<S> {
         stores
             .entry(ring)
             .or_insert_with(|| {
-                Arc::new(AuditStore::new(self.backing(ring)).with_wallet_snapshots(
-                    self.wallet_snapshots.clone(),
-                    self.snapshot_limits,
-                ))
+                Arc::new(
+                    AuditStore::new(self.backing(ring))
+                        .with_wallet_snapshots(self.wallet_snapshots.clone(), self.snapshot_limits),
+                )
             })
             .clone()
     }
@@ -508,8 +508,6 @@ impl<S: TransactionSource> Hub<S> {
     }
 
     /// Every `interval`, the first at once, backfills the local ring and every ring a read opened.
-    ///
-    /// Each ring runs on its own task, a ring still backfilling sits out the tick.
     pub async fn run_utxo_backfill(self: Arc<Self>, interval: Duration)
     where
         S: 'static,
@@ -519,7 +517,10 @@ impl<S: TransactionSource> Hub<S> {
         loop {
             ticks.tick().await;
             if let Err(error) = self.cleanup_wallet_snapshots().await {
-                log::warn!("wallet snapshot cleanup failed because {}", redacted(&error));
+                log::warn!(
+                    "wallet snapshot cleanup failed because {}",
+                    redacted(&error)
+                );
             }
             rings.spawn_idle(self.backfill_rings(), |ring| {
                 let hub = self.clone();

@@ -42,8 +42,7 @@ const MAX_LOAD_ROUNDS: usize = 4;
 /// Late owners one page derives, the rest wait in the queue for a later page.
 pub(crate) const MAX_LATE_OWNERS: usize = 8;
 
-/// Rows one page opens of each late owner. With `MAX_LATE_OWNERS` it bounds a page's
-/// derivation reads, a larger owner resumes after the last row on the next page.
+/// Rows one page opens per late owner, a larger owner resumes after its last row on the next page.
 pub(crate) const MAX_LATE_NOTES: usize = 128;
 
 /// The steps of one page, replayed by `finish` once every key they read is at hand.
@@ -276,9 +275,7 @@ impl Replay<'_> {
         self.apply(Observation { hit, ..observation }.apply(existing.as_ref()));
     }
 
-    /// Reads `MAX_LATE_NOTES` rows of each of the first `MAX_LATE_OWNERS` queued owners. The
-    /// queue order and the loaded ranges are fixed across replays, so every replay asks for the
-    /// same ranges and the load rounds converge.
+    /// The queue order and the loaded ranges hold across replays, so the load rounds converge.
     fn late_keys(&mut self) {
         let queued: Vec<LateOwner> = self
             .store

@@ -173,7 +173,7 @@ A transfer's flows come from the frame the co-signer signs, opened with the audi
 
 `keygen --kind co-signer` prints the co-signer public key for the ring's `CoSigner` record, and `serve` logs it at start.
 
-Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice, `-32163` unreadable limits, `-32164` a message with anything but one readable ring transfer, `-32165` no approved class the operation demands and `-32296` an asset with no record.
+Co-signer errors are `-32160` disabled, `-32161` over a limit, `-32162` an asset named twice, `-32163` unreadable limits, `-32164` a message with anything but one readable ring transfer, `-32165` no approved class the operation demands, `-32166` a released reservation and `-32296` an asset with no record.
 
 ## Managed merge
 

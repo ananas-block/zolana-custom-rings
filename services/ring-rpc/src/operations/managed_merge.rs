@@ -105,7 +105,6 @@ impl MergeTarget {
         }
         selection.finish()
     }
-
 }
 
 #[derive(Default)]
@@ -137,7 +136,8 @@ impl MergeSummary {
         let asset = *self.asset.get_or_insert(note.utxo.asset.asset);
         self.note_count += 1;
         self.total += u128::from(note.utxo.amount);
-        if note.utxo.asset.asset == asset && note.utxo.amount > 0
+        if note.utxo.asset.asset == asset
+            && note.utxo.amount > 0
             && note.nullifier_pubkey != spr_interface::ZERO_NULLIFIER_PUBKEY
         {
             *self.trees.entry(note.tree_id()).or_default() += 1;
@@ -147,28 +147,41 @@ impl MergeSummary {
     fn select(self, target: MergeTarget) -> Option<MergeSelection> {
         let by_average = match target.min_average_amount {
             0 => self.note_count,
-            least => usize::try_from(self.total / u128::from(least)).unwrap_or(usize::MAX).max(1),
+            least => usize::try_from(self.total / u128::from(least))
+                .unwrap_or(usize::MAX)
+                .max(1),
         };
         let keep = by_average.min(usize::try_from(target.note_count.get()).unwrap_or(usize::MAX));
         let width = self.note_count.checked_sub(keep)?.checked_add(1)?;
-        let (tree, count) = self.trees.into_iter().rev().max_by_key(|(_, count)| *count)?;
+        let (tree, count) = self
+            .trees
+            .into_iter()
+            .rev()
+            .max_by_key(|(_, count)| *count)?;
         if width < 2 || count < 2 {
             return None;
         }
         Some(MergeSelection {
-            asset: self.asset?, tree, width: width.min(MERGE_DEFAULT_INPUT_COUNT), notes: Vec::new(),
+            asset: self.asset?,
+            tree,
+            width: width.min(MERGE_DEFAULT_INPUT_COUNT),
+            notes: Vec::new(),
         })
     }
 }
 
 impl MergeSelection {
     fn record(&mut self, note: WalletUtxo) {
-        if note.utxo.asset.asset != self.asset || note.tree_id() != self.tree
-            || note.utxo.amount == 0 || note.nullifier_pubkey == spr_interface::ZERO_NULLIFIER_PUBKEY
+        if note.utxo.asset.asset != self.asset
+            || note.tree_id() != self.tree
+            || note.utxo.amount == 0
+            || note.nullifier_pubkey == spr_interface::ZERO_NULLIFIER_PUBKEY
         {
             return;
         }
-        let index = self.notes.partition_point(|held| held.utxo.amount <= note.utxo.amount);
+        let index = self
+            .notes
+            .partition_point(|held| held.utxo.amount <= note.utxo.amount);
         if index < self.width {
             if self.notes.len() == self.width {
                 self.notes.pop();
@@ -178,26 +191,39 @@ impl MergeSelection {
     }
 
     fn finish(self) -> Option<Vec<WalletUtxo>> {
-        select_merge_where(&self.notes, self.asset, self.width, &HashSet::new(), |_| true).ok()
+        select_merge_where(&self.notes, self.asset, self.width, &HashSet::new(), |_| {
+            true
+        })
+        .ok()
     }
 }
 
 impl<'a> MergeTotals<'a> {
     pub(crate) fn new(targets: &'a HashMap<Address, MergeTarget>) -> Self {
-        Self { targets, assets: HashMap::new() }
+        Self {
+            targets,
+            assets: HashMap::new(),
+        }
     }
 
     pub(crate) fn record(&mut self, note: WalletUtxo) {
         if self.targets.contains_key(&note.utxo.asset.asset) {
-            self.assets.entry(note.utxo.asset.asset).or_default().record(&note);
+            self.assets
+                .entry(note.utxo.asset.asset)
+                .or_default()
+                .record(&note);
         }
     }
 
     pub(crate) fn select(self) -> MergeSelections {
         MergeSelections {
-            assets: self.assets.into_iter().filter_map(|(asset, summary)| {
-                Some((asset, summary.select(*self.targets.get(&asset)?)?))
-            }).collect(),
+            assets: self
+                .assets
+                .into_iter()
+                .filter_map(|(asset, summary)| {
+                    Some((asset, summary.select(*self.targets.get(&asset)?)?))
+                })
+                .collect(),
         }
     }
 }
@@ -214,7 +240,10 @@ impl MergeSelections {
     }
 
     pub(crate) fn finish(self) -> HashMap<Address, Vec<WalletUtxo>> {
-        self.assets.into_iter().filter_map(|(asset, selection)| Some((asset, selection.finish()?))).collect()
+        self.assets
+            .into_iter()
+            .filter_map(|(asset, selection)| Some((asset, selection.finish()?)))
+            .collect()
     }
 }
 
@@ -230,8 +259,6 @@ impl<S> ManagedMergeInit<S> {
 
 impl<S: TransactionSource + 'static> ManagedMerge<S> {
     /// Every `interval`, the first at once, merges each wallet above its signed target.
-    ///
-    /// Each ring runs on its own task, a ring still merging sits out the tick.
     pub async fn run(self, interval: Duration) {
         let merge = Arc::new(self);
         let rings = KeyedTasks::new(MAX_CONCURRENT_KEYED_TASKS);
@@ -377,18 +404,24 @@ impl<S: TransactionSource> ManagedMerge<S> {
         };
         // 3. Each candidate is unspent and held by no merge in the store.
         let mints: Vec<Mint> = targets.iter().map(|(mint, _)| *mint).collect();
-        let plans: HashMap<Address, MergeTarget> = targets.iter().map(|(mint, target)| (mint.asset, *target)).collect();
+        let plans: HashMap<Address, MergeTarget> = targets
+            .iter()
+            .map(|(mint, target)| (mint.asset, *target))
+            .collect();
         let mut by_mint = self
             .hub
             .shared()
             .store(ring)
-            .merge_plans(SpendableNotes {
-                ring,
-                owner_key,
-                nullifier_key: &nullifier_key,
-                mints: &mints,
-                held: &pass.held,
-            }, &plans)
+            .merge_plans(
+                SpendableNotes {
+                    ring,
+                    owner_key,
+                    nullifier_key: &nullifier_key,
+                    mints: &mints,
+                    held: &pass.held,
+                },
+                &plans,
+            )
             .await?;
         let mut sent = Vec::new();
         for (mint, _) in targets {
@@ -1259,7 +1292,10 @@ mod selection_tests {
 
     #[test]
     fn singleton_trees_keep_no_candidate_notes() {
-        let target = MergeTarget { note_count: NonZeroU32::new(1).expect("target"), min_average_amount: 0 };
+        let target = MergeTarget {
+            note_count: NonZeroU32::new(1).expect("target"),
+            min_average_amount: 0,
+        };
         let targets = [(Mint::SOL.asset, target)].into();
         let mut totals = MergeTotals::new(&targets);
         for tree in 0..1_000 {
@@ -1282,19 +1318,31 @@ mod selection_tests {
         let plan = selected.finish().remove(&Mint::SOL.asset).expect("plan");
         assert_eq!(plan.len(), MERGE_DEFAULT_INPUT_COUNT);
         assert!(plan.iter().all(|note| note.tree_id() == 700));
-        assert_eq!(plan.iter().map(|note| note.utxo.amount).collect::<Vec<_>>(), (1..=MERGE_DEFAULT_INPUT_COUNT as u64).collect::<Vec<_>>());
+        assert_eq!(
+            plan.iter().map(|note| note.utxo.amount).collect::<Vec<_>>(),
+            (1..=MERGE_DEFAULT_INPUT_COUNT as u64).collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn targets_use_all_amounts_and_counts_before_selection() {
         let notes = vec![note(2, 10), note(1, 10), note(2, 20), note(1, 20)];
-        let unchanged = MergeTarget { note_count: NonZeroU32::new(4).expect("target"), min_average_amount: 0 };
+        let unchanged = MergeTarget {
+            note_count: NonZeroU32::new(4).expect("target"),
+            min_average_amount: 0,
+        };
         assert!(unchanged.plan(&notes).is_none());
-        let average = MergeTarget { min_average_amount: 30, ..unchanged };
+        let average = MergeTarget {
+            min_average_amount: 30,
+            ..unchanged
+        };
         let plan = average.plan(&notes).expect("average target");
         assert_eq!(plan.len(), 2);
         assert!(plan.iter().all(|note| note.tree_id() == 1));
-        let count = MergeTarget { note_count: NonZeroU32::new(3).expect("target"), ..unchanged };
+        let count = MergeTarget {
+            note_count: NonZeroU32::new(3).expect("target"),
+            ..unchanged
+        };
         assert_eq!(count.plan(&notes).expect("count target").len(), 2);
     }
 }

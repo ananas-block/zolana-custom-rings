@@ -33,9 +33,10 @@ use spr_client::{compile_message, sign_transaction, ComputeBudgetConfig};
 use spr_indexer_api::Hash;
 use zolana_ring_client::{
     rpc::{
-        GetPendingListApprovalsRequest, GetPendingListApprovalsResponse, RefuseListApprovalRequest,
+        GetPendingListApprovalsRequest, GetPendingListApprovalsResponse,
         GetRecordUpdateStatusRequest, PendingListApproval, RecordUpdateId, RecordUpdateStatus,
-        SubmitRecordUpdateRequest, SubmitRecordUpdateResponse, PENDING_LIST_APPROVALS_PAGE_LIMIT,
+        RefuseListApprovalRequest, SubmitRecordUpdateRequest, SubmitRecordUpdateResponse,
+        PENDING_LIST_APPROVALS_PAGE_LIMIT,
     },
     StorageTip,
 };
@@ -54,7 +55,8 @@ use crate::{
     },
     storage_chain::StorageChain,
     update_queue::{
-        ApprovalCandidates, ApprovalScope, BatchOutcome, NewBatch, NewUpdate, OpenBatch, PendingApprovalPage, UpdateQueue,
+        ApprovalCandidates, ApprovalScope, BatchOutcome, NewBatch, NewUpdate, OpenBatch,
+        PendingApprovalPage, UpdateQueue,
     },
     upstream::VerifiedOpenings,
 };
@@ -231,7 +233,10 @@ impl RecordWriter {
             update: &update,
             pending: &queue
                 .pending_approvals(ApprovalCandidates {
-                    scope: ApprovalScope { ring, registry: request.registry.0 },
+                    scope: ApprovalScope {
+                        ring,
+                        registry: request.registry.0,
+                    },
                     grants: &grants,
                     slot,
                 })
@@ -272,7 +277,10 @@ impl RecordWriter {
         let mut pending = self
             .queue()
             .pending_approval_page(PendingApprovalPage {
-                scope: ApprovalScope { ring, registry: request.registry.0 },
+                scope: ApprovalScope {
+                    ring,
+                    registry: request.registry.0,
+                },
                 cursor: request.cursor.as_ref().map(|cursor| cursor.0 .0),
                 limit: PENDING_LIST_APPROVALS_PAGE_LIMIT + 1,
             })
@@ -304,7 +312,10 @@ impl RecordWriter {
         signer: Address,
         request: &RefuseListApprovalRequest,
     ) -> Result<RecordUpdateStatus, RingRpcError> {
-        let scope = ApprovalScope { ring: request.ring.0, registry: request.registry.0 };
+        let scope = ApprovalScope {
+            ring: request.ring.0,
+            registry: request.registry.0,
+        };
         self.require_policy_authority(scope.ring, signer).await?;
         let _queueing = self.submits.lock().await;
         if !self
@@ -366,14 +377,14 @@ impl RecordWriter {
         }
         let slot = self.chain.slot().await?;
         queue.expire(registry, slot).await?;
-        // 3. One batch per flush, the next starts from the root the sent batch lands. A refused
-        //    update leaves the queue and the plan reads the heads again.
+        // 2. One batch per flush, a refused update leaves the queue and the plan reads the heads
+        //    again.
         for _ in 0..MAX_BATCH_PLANS {
             let Some(batch) = queue.plan(registry, slot).await? else {
                 return Ok(());
             };
-            // 4. Only the planned updates read their ring's policy, each signer must still hold
-            //    the role it signed as. An unread ring account holds the registry.
+            // 3. Each planned signer still holds the role it signed as, an unread ring account
+            //    holds the registry.
             let policies = self.queued_authorities(batch.iter()).await?;
             let mut refused = false;
             for update in &batch {

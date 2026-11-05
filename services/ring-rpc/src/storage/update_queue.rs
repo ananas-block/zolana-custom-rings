@@ -10,8 +10,8 @@ use zolana_ring_policy::ListSet;
 use crate::{
     landing::Attempt,
     record_update::{
-        authority_batch, ApprovalGrant, AuthorityHead, CheckedUpdate, PendingApproval, QueuedUpdate,
-        RecordUpdateRefusal, UpdateSigner, WalletBatch, MAX_BATCH_ATTEMPTS,
+        authority_batch, ApprovalGrant, AuthorityHead, CheckedUpdate, PendingApproval,
+        QueuedUpdate, RecordUpdateRefusal, UpdateSigner, WalletBatch, MAX_BATCH_ATTEMPTS,
     },
 };
 
@@ -23,7 +23,8 @@ const APPLIED: &str = "applied";
 const REFUSED: &str = "refused";
 const FAILED: &str = "failed";
 const PENDING_APPROVAL_COLUMNS: &str = "id, signer, member, writes, awaited, valid_until_slot";
-const HEAD_COLUMNS: &str = "u.seq, u.id, u.ring, u.registry, u.writes, u.signer, u.role, u.queued_slot, \
+const HEAD_COLUMNS: &str =
+    "u.seq, u.id, u.ring, u.registry, u.writes, u.signer, u.role, u.queued_slot, \
                             u.valid_until_slot";
 /// Keys bound into one delete, under every backend's parameter ceiling.
 const KEYS_PER_DELETE: usize = 256;
@@ -438,7 +439,13 @@ impl<'a> UpdateQueue<'a> {
             "SELECT {PENDING_APPROVAL_COLUMNS} FROM records_updates \
              WHERE ring=$1 AND registry=$2 AND status=$3 AND seq>$4 ORDER BY seq LIMIT $5"
         );
-        let values = vec![ring, registry, PENDING_APPROVAL.into(), after.into(), limit.into()];
+        let values = vec![
+            ring,
+            registry,
+            PENDING_APPROVAL.into(),
+            after.into(),
+            limit.into(),
+        ];
         self.query_all(&sql, values)
             .await?
             .iter()
@@ -474,9 +481,18 @@ impl<'a> UpdateQueue<'a> {
             let sql = "SELECT id, ring, registry FROM records_updates \
                        WHERE registry=$1 AND status=$2 AND joined IS NULL AND valid_until_slot<$3 \
                        ORDER BY valid_until_slot, seq LIMIT $4";
-            let heads = transaction.query_all(statement(&transaction, sql, vec![
-                bytes(registry.as_array()), status.into(), integer(slot)?, count(EXPIRY_HEADS_PER_STATUS)?,
-            ])).await?;
+            let heads = transaction
+                .query_all(statement(
+                    &transaction,
+                    sql,
+                    vec![
+                        bytes(registry.as_array()),
+                        status.into(),
+                        integer(slot)?,
+                        count(EXPIRY_HEADS_PER_STATUS)?,
+                    ],
+                ))
+                .await?;
             for head in heads {
                 let scope = ApprovalScope::from_row(&head)?;
                 let sql = "UPDATE records_updates SET status=$1, reason=$2 \
@@ -640,8 +656,8 @@ impl ApprovalScope {
     }
 }
 
-/// Runs `sql`, which moves updates to applied or refused, and drops their member rows in the same
-/// transaction, so the blocking check reads the live queue alone. Returns the updates it moved.
+/// Drops the member rows of the updates `sql` finishes in its transaction, so the blocking check
+/// reads the live queue alone.
 async fn finish_updates<C: ConnectionTrait>(
     connection: &C,
     sql: &str,
@@ -817,7 +833,10 @@ mod tests {
         }
 
         fn pending(index: u32) -> Self {
-            let mut fixture = Self::new(index, UpdateSigner::Wallet(Address::new_from_array([1; 32])));
+            let mut fixture = Self::new(
+                index,
+                UpdateSigner::Wallet(Address::new_from_array([1; 32])),
+            );
             fixture.update.awaited = Some(AwaitedLists {
                 lists: ListSet::single(ListId::Allow),
                 member: member(0),
@@ -826,18 +845,27 @@ mod tests {
             fixture
         }
 
-        async fn insert(&self, queue: &UpdateQueue<'_>, approves: &[[u8; 32]]) -> Result<(), DbErr> {
-            queue.insert(NewUpdate {
-                request: &self.request,
-                update: &self.update,
-                queued_slot: 0,
-                approves,
-            }).await
+        async fn insert(
+            &self,
+            queue: &UpdateQueue<'_>,
+            approves: &[[u8; 32]],
+        ) -> Result<(), DbErr> {
+            queue
+                .insert(NewUpdate {
+                    request: &self.request,
+                    update: &self.update,
+                    queued_slot: 0,
+                    approves,
+                })
+                .await
         }
     }
 
     async fn insert(queue: &UpdateQueue<'_>, index: u32, signer: UpdateSigner) {
-        UpdateFixture::new(index, signer).insert(queue, &[]).await.expect("insert");
+        UpdateFixture::new(index, signer)
+            .insert(queue, &[])
+            .await
+            .expect("insert");
     }
 
     #[tokio::test]
@@ -846,13 +874,34 @@ mod tests {
         let queue = UpdateQueue::new(store.connection());
         let pending = UpdateFixture::pending(0);
         pending.insert(&queue, &[]).await.expect("pending");
-        let approval = UpdateFixture::new(1, UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])));
-        queue.db.execute(statement(queue.db, "UPDATE records_updates SET registry=$1 WHERE id=$2", vec![
-            bytes(Address::new_from_array([3; 32]).as_array()), bytes(&pending.update.id.0.0),
-        ])).await.expect("change scope");
-        assert!(approval.insert(&queue, &[pending.update.id.0.0]).await.is_err());
-        assert!(!queue.contains(&approval.update.id.0.0).await.expect("lookup"));
-        assert_eq!(queue.status(&pending.update.id.0.0).await.expect("status"), Some(RecordUpdateStatus::PendingListApproval));
+        let approval = UpdateFixture::new(
+            1,
+            UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])),
+        );
+        queue
+            .db
+            .execute(statement(
+                queue.db,
+                "UPDATE records_updates SET registry=$1 WHERE id=$2",
+                vec![
+                    bytes(Address::new_from_array([3; 32]).as_array()),
+                    bytes(&pending.update.id.0 .0),
+                ],
+            ))
+            .await
+            .expect("change scope");
+        assert!(approval
+            .insert(&queue, &[pending.update.id.0 .0])
+            .await
+            .is_err());
+        assert!(!queue
+            .contains(&approval.update.id.0 .0)
+            .await
+            .expect("lookup"));
+        assert_eq!(
+            queue.status(&pending.update.id.0 .0).await.expect("status"),
+            Some(RecordUpdateStatus::PendingListApproval)
+        );
         assert_eq!(member_rows(&queue).await, 1);
     }
 
@@ -862,21 +911,52 @@ mod tests {
         let queue = UpdateQueue::new(store.connection());
         let pending = UpdateFixture::pending(0);
         pending.insert(&queue, &[]).await.expect("pending");
-        let approval = UpdateFixture::new(1, UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])));
-        approval.insert(&queue, &[pending.update.id.0.0]).await.expect("approval");
+        let approval = UpdateFixture::new(
+            1,
+            UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])),
+        );
+        approval
+            .insert(&queue, &[pending.update.id.0 .0])
+            .await
+            .expect("approval");
         let batch = queue.plan(REGISTRY, 0).await.expect("plan").expect("batch");
-        queue.db.execute(statement(queue.db, "UPDATE records_updates SET registry=$1 WHERE id=$2", vec![
-            bytes(Address::new_from_array([3; 32]).as_array()), bytes(&pending.update.id.0.0),
-        ])).await.expect("change scope");
+        queue
+            .db
+            .execute(statement(
+                queue.db,
+                "UPDATE records_updates SET registry=$1 WHERE id=$2",
+                vec![
+                    bytes(Address::new_from_array([3; 32]).as_array()),
+                    bytes(&pending.update.id.0 .0),
+                ],
+            ))
+            .await
+            .expect("change scope");
         assert!(queue.plan(REGISTRY, 0).await.is_err());
-        assert!(queue.record_batch(NewBatch {
-            registry: REGISTRY,
-            attempt: Attempt { signature: Signature::default(), last_valid_block_height: 10 },
-            revision: 0,
-            updates: &batch,
-        }).await.is_err());
-        assert!(queue.open_batch(REGISTRY).await.expect("open batch").is_none());
-        assert_eq!(queue.status(&approval.update.id.0.0).await.expect("status"), Some(RecordUpdateStatus::Queued));
+        assert!(queue
+            .record_batch(NewBatch {
+                registry: REGISTRY,
+                attempt: Attempt {
+                    signature: Signature::default(),
+                    last_valid_block_height: 10
+                },
+                revision: 0,
+                updates: &batch,
+            })
+            .await
+            .is_err());
+        assert!(queue
+            .open_batch(REGISTRY)
+            .await
+            .expect("open batch")
+            .is_none());
+        assert_eq!(
+            queue
+                .status(&approval.update.id.0 .0)
+                .await
+                .expect("status"),
+            Some(RecordUpdateStatus::Queued)
+        );
         assert_eq!(member_rows(&queue).await, 2);
     }
 
@@ -888,34 +968,59 @@ mod tests {
             let mut pending = UpdateFixture::pending(0);
             pending.request.update.valid_until_slot = 10;
             pending.insert(&queue, &[]).await.expect("pending");
-            let approval = UpdateFixture::new(1, UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])));
-            approval.insert(&queue, &[pending.update.id.0.0]).await.expect("approval");
+            let approval = UpdateFixture::new(
+                1,
+                UpdateSigner::PolicyAuthority(Address::new_from_array([2; 32])),
+            );
+            approval
+                .insert(&queue, &[pending.update.id.0 .0])
+                .await
+                .expect("approval");
             let batch = queue.plan(REGISTRY, 0).await.expect("plan").expect("batch");
             if expiry_first {
                 queue.expire(REGISTRY, 11).await.expect("expire");
             }
-            let claimed = queue.record_batch(NewBatch {
-                registry: REGISTRY,
-                attempt: Attempt { signature: Signature::default(), last_valid_block_height: 20 },
-                revision: 0,
-                updates: &batch,
-            }).await;
+            let claimed = queue
+                .record_batch(NewBatch {
+                    registry: REGISTRY,
+                    attempt: Attempt {
+                        signature: Signature::default(),
+                        last_valid_block_height: 20,
+                    },
+                    revision: 0,
+                    updates: &batch,
+                })
+                .await;
             if expiry_first {
                 assert!(claimed.is_err());
-                assert!(queue.open_batch(REGISTRY).await.expect("open batch").is_none());
+                assert!(queue
+                    .open_batch(REGISTRY)
+                    .await
+                    .expect("open batch")
+                    .is_none());
                 assert_eq!(member_rows(&queue).await, 0);
             } else {
                 claimed.expect("claim");
                 queue.expire(REGISTRY, 11).await.expect("expire");
-                let open = queue.open_batch(REGISTRY).await.expect("open batch").expect("claimed batch");
-                queue.settle(open.id, BatchOutcome::Applied).await.expect("settle");
+                let open = queue
+                    .open_batch(REGISTRY)
+                    .await
+                    .expect("open batch")
+                    .expect("claimed batch");
+                queue
+                    .settle(open.id, BatchOutcome::Applied)
+                    .await
+                    .expect("settle");
             }
-            for id in [pending.update.id.0.0, approval.update.id.0.0] {
+            for id in [pending.update.id.0 .0, approval.update.id.0 .0] {
                 let status = queue.status(&id).await.expect("status").expect("row");
                 if expiry_first {
                     assert!(matches!(status, RecordUpdateStatus::Refused { .. }));
                 } else {
-                    assert!(matches!(status, RecordUpdateStatus::Applied { revision: 1, .. }));
+                    assert!(matches!(
+                        status,
+                        RecordUpdateStatus::Applied { revision: 1, .. }
+                    ));
                 }
             }
         }
@@ -948,10 +1053,17 @@ mod tests {
             );
             approval.request.registry = registry.into();
             approval.update.id = RecordUpdateId(Hash(rand::random()));
-            approval.insert(&queue, &[pending.update.id.0.0]).await.expect("approval");
+            approval
+                .insert(&queue, &[pending.update.id.0 .0])
+                .await
+                .expect("approval");
             let batch = queue.plan(registry, 0).await.expect("plan").expect("batch");
             let contender_pid = backend_pid(contender_store.connection()).await;
-            let transaction = winner_store.connection().begin().await.expect("winning transaction");
+            let transaction = winner_store
+                .connection()
+                .begin()
+                .await
+                .expect("winning transaction");
             let winner_pid = backend_pid(&transaction).await;
             match winner {
                 QueueWinner::Claim => {
@@ -979,30 +1091,48 @@ mod tests {
                 let queue = UpdateQueue::new(contender.connection());
                 match winner {
                     QueueWinner::Claim => queue.expire(registry, 11).await,
-                    QueueWinner::Expiry => queue.record_batch(NewBatch {
-                        registry,
-                        attempt: Attempt { signature: Signature::default(), last_valid_block_height: 20 },
-                        revision: 0,
-                        updates: &batch,
-                    }).await,
+                    QueueWinner::Expiry => {
+                        queue
+                            .record_batch(NewBatch {
+                                registry,
+                                attempt: Attempt {
+                                    signature: Signature::default(),
+                                    last_valid_block_height: 20,
+                                },
+                                revision: 0,
+                                updates: &batch,
+                            })
+                            .await
+                    }
                 }
             });
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 loop {
                     let observer = observer_store.connection();
-                    let blocked: bool = observer.query_one(statement(observer,
-                        "SELECT $1 = ANY(pg_blocking_pids($2)) AS blocked",
-                        vec![winner_pid.into(), contender_pid.into()],
-                    )).await.expect("lock wait").expect("lock row").try_get("", "blocked").expect("blocked");
+                    let blocked: bool = observer
+                        .query_one(statement(
+                            observer,
+                            "SELECT $1 = ANY(pg_blocking_pids($2)) AS blocked",
+                            vec![winner_pid.into(), contender_pid.into()],
+                        ))
+                        .await
+                        .expect("lock wait")
+                        .expect("lock row")
+                        .try_get("", "blocked")
+                        .expect("blocked");
                     if blocked {
                         break;
                     }
                     tokio::task::yield_now().await;
                 }
-            }).await.expect("contender must reach the winning row lock");
+            })
+            .await
+            .expect("contender must reach the winning row lock");
             transaction.commit().await.expect("release winner");
             let result = tokio::time::timeout(std::time::Duration::from_secs(10), operation)
-                .await.expect("contender must finish after release").expect("contender task");
+                .await
+                .expect("contender must finish after release")
+                .expect("contender task");
             let open = queue.open_batch(registry).await.expect("open batch");
             let expected_batch = match winner {
                 QueueWinner::Claim => {
@@ -1015,35 +1145,63 @@ mod tests {
                     None
                 }
             };
-            let rows = queue.query_all(
-                "SELECT id,joined,status,batch FROM records_updates WHERE registry=$1",
-                vec![bytes(registry.as_array())],
-            ).await.expect("group rows");
+            let rows = queue
+                .query_all(
+                    "SELECT id,joined,status,batch FROM records_updates WHERE registry=$1",
+                    vec![bytes(registry.as_array())],
+                )
+                .await
+                .expect("group rows");
             assert_eq!(rows.len(), 2);
             for row in rows {
                 let id = column_bytes(&row, "id").expect("update id");
-                let joined = row.try_get::<Option<Vec<u8>>>("", "joined").expect("joined head");
-                if id == pending.update.id.0.0 {
-                    assert_eq!(joined.as_deref(), Some(approval.update.id.0.0.as_slice()));
+                let joined = row
+                    .try_get::<Option<Vec<u8>>>("", "joined")
+                    .expect("joined head");
+                if id == pending.update.id.0 .0 {
+                    assert_eq!(joined.as_deref(), Some(approval.update.id.0 .0.as_slice()));
                 } else {
-                    assert_eq!(id, approval.update.id.0.0);
+                    assert_eq!(id, approval.update.id.0 .0);
                     assert!(joined.is_none());
                 }
-                assert_eq!(row.try_get::<Option<i64>>("", "batch").expect("batch link"), expected_batch);
-                assert_eq!(row.try_get::<String>("", "status").expect("status"),
-                    if expected_batch.is_some() { SUBMITTED } else { REFUSED });
+                assert_eq!(
+                    row.try_get::<Option<i64>>("", "batch").expect("batch link"),
+                    expected_batch
+                );
+                assert_eq!(
+                    row.try_get::<String>("", "status").expect("status"),
+                    if expected_batch.is_some() {
+                        SUBMITTED
+                    } else {
+                        REFUSED
+                    }
+                );
             }
-            let batch_count: i64 = queue.query_one(
-                "SELECT COUNT(*) AS count FROM records_batches WHERE registry=$1",
-                vec![bytes(registry.as_array())],
-            ).await.expect("batches").expect("count row").try_get("", "count").expect("count");
+            let batch_count: i64 = queue
+                .query_one(
+                    "SELECT COUNT(*) AS count FROM records_batches WHERE registry=$1",
+                    vec![bytes(registry.as_array())],
+                )
+                .await
+                .expect("batches")
+                .expect("count row")
+                .try_get("", "count")
+                .expect("count");
             assert_eq!(batch_count, if expected_batch.is_some() { 1 } else { 0 });
-            assert_eq!(registry_member_rows(&queue, registry).await,
-                if expected_batch.is_some() { 2 } else { 0 });
+            assert_eq!(
+                registry_member_rows(&queue, registry).await,
+                if expected_batch.is_some() { 2 } else { 0 }
+            );
             if let Some(batch_id) = expected_batch {
-                queue.settle(batch_id, BatchOutcome::Applied).await.expect("settle winner");
-                for id in [pending.update.id.0.0, approval.update.id.0.0] {
-                    assert!(matches!(queue.status(&id).await.expect("status"), Some(RecordUpdateStatus::Applied { revision: 1, .. })));
+                queue
+                    .settle(batch_id, BatchOutcome::Applied)
+                    .await
+                    .expect("settle winner");
+                for id in [pending.update.id.0 .0, approval.update.id.0 .0] {
+                    assert!(matches!(
+                        queue.status(&id).await.expect("status"),
+                        Some(RecordUpdateStatus::Applied { revision: 1, .. })
+                    ));
                 }
                 assert_eq!(registry_member_rows(&queue, registry).await, 0);
             }
@@ -1052,8 +1210,11 @@ mod tests {
                 "DELETE FROM records_updates WHERE registry=$1",
                 "DELETE FROM records_batches WHERE registry=$1",
             ] {
-                queue.db.execute(statement(queue.db, sql, vec![bytes(registry.as_array())]))
-                    .await.expect("remove fixture rows");
+                queue
+                    .db
+                    .execute(statement(queue.db, sql, vec![bytes(registry.as_array())]))
+                    .await
+                    .expect("remove fixture rows");
             }
         }
     }
@@ -1071,16 +1232,28 @@ mod tests {
         let live = UpdateFixture::pending(backlog as u32);
         live.insert(&queue, &[]).await.expect("live pending");
         queue.expire(REGISTRY, 11).await.expect("bounded expiry");
-        assert_eq!(member_rows(&queue).await, (backlog + 1 - EXPIRY_HEADS_PER_STATUS) as i64);
-        let grants = [ApprovalGrant { member: member(0), lists: ListSet::single(ListId::Allow) }];
+        assert_eq!(
+            member_rows(&queue).await,
+            (backlog + 1 - EXPIRY_HEADS_PER_STATUS) as i64
+        );
+        let grants = [ApprovalGrant {
+            member: member(0),
+            lists: ListSet::single(ListId::Allow),
+        }];
         queue.read.store(0, Ordering::Relaxed);
-        let pending = queue.pending_approvals(ApprovalCandidates {
-            scope: ApprovalScope { ring: RING, registry: REGISTRY },
-            grants: &grants,
-            slot: 11,
-        }).await.expect("eligible pending");
+        let pending = queue
+            .pending_approvals(ApprovalCandidates {
+                scope: ApprovalScope {
+                    ring: RING,
+                    registry: REGISTRY,
+                },
+                grants: &grants,
+                slot: 11,
+            })
+            .await
+            .expect("eligible pending");
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].id, live.update.id.0.0);
+        assert_eq!(pending[0].id, live.update.id.0 .0);
         assert_eq!(queue.read.load(Ordering::Relaxed), 1);
         for _ in 1..3 {
             queue.expire(REGISTRY, 11).await.expect("drain expiry");
@@ -1103,15 +1276,30 @@ mod tests {
     }
 
     async fn backend_pid(connection: &impl ConnectionTrait) -> i32 {
-        connection.query_one(statement(connection, "SELECT pg_backend_pid() AS pid", Vec::new()))
-            .await.expect("backend pid").expect("pid row").try_get("", "pid").expect("pid")
+        connection
+            .query_one(statement(
+                connection,
+                "SELECT pg_backend_pid() AS pid",
+                Vec::new(),
+            ))
+            .await
+            .expect("backend pid")
+            .expect("pid row")
+            .try_get("", "pid")
+            .expect("pid")
     }
 
     async fn registry_member_rows(queue: &UpdateQueue<'_>, registry: Address) -> i64 {
-        queue.query_one(
-            "SELECT COUNT(*) AS count FROM records_update_members WHERE registry=$1",
-            vec![bytes(registry.as_array())],
-        ).await.expect("members").expect("count row").try_get("", "count").expect("count")
+        queue
+            .query_one(
+                "SELECT COUNT(*) AS count FROM records_update_members WHERE registry=$1",
+                vec![bytes(registry.as_array())],
+            )
+            .await
+            .expect("members")
+            .expect("count row")
+            .try_get("", "count")
+            .expect("count")
     }
 
     async fn member_rows(queue: &UpdateQueue<'_>) -> i64 {
