@@ -65,7 +65,7 @@ impl WalletActivity {
             .with_wallet(wallet)
     }
 
-    /// A wallet that owns every real input keeps all outputs, its own payments.
+    /// A wallet that owns a real input and no other party's input keeps all outputs as its own payments.
     pub fn of(
         wallet: Address,
         transaction: DecryptedTransaction,
@@ -86,7 +86,8 @@ impl WalletActivity {
         let spent_own = parties.contains(&InputParty::Own);
         let view = match spent_own || spenders.into_iter().any(names) {
             true => {
-                let sole_owner = !parties.contains(&InputParty::Other);
+                // Dummy inputs prove no ownership, a named spender of no input signed only its own outputs.
+                let sole_owner = spent_own && !parties.contains(&InputParty::Other);
                 WalletView::Sender {
                     inputs: inputs
                         .into_iter()

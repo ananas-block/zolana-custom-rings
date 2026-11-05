@@ -158,7 +158,7 @@ impl RingOrigin {
         audit_frame_of(frame, mode)
     }
 
-    /// The input owners a confidential transfer binds.
+    /// The owner signers a confidential transfer binds, an owner of a data output among them may spend no input.
     pub fn spenders(&self, mode: RingMode) -> Result<Vec<Address>, AuditError> {
         let frame = self
             .transact
