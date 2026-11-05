@@ -319,7 +319,7 @@ struct Envelope {
     units: u32,
     fee_payer: Address,
     signer: Address,
-    /// Ahead of the ring instruction, exactly these.
+    /// Ahead of the ring instruction, in this order, and the relay omits one for a live account.
     setup: Vec<Instruction>,
 }
 
@@ -1275,21 +1275,23 @@ impl Envelope {
                 .copied()
                 .ok_or(MessageMismatch::Undecodable)
         };
-        if setup.len() != self.setup.len() {
-            return Err(MessageMismatch::Instructions);
-        }
-        for (compiled, expected) in setup.iter().zip(&self.setup) {
+        // An omitted create costs the signer nothing, a transfer to a missing account only fails.
+        let mut named = self.setup.iter();
+        for compiled in setup {
+            let program = key(compiled.program_id_index)?;
             let accounts = compiled
                 .accounts
                 .iter()
                 .map(|&index| key(index))
                 .collect::<Result<Vec<_>, _>>()?;
-            let same = key(compiled.program_id_index)? == expected.program_id
-                && compiled.data == expected.data
-                && accounts
-                    .iter()
-                    .eq(expected.accounts.iter().map(|meta| &meta.pubkey));
-            if !same {
+            let found = named.any(|expected| {
+                program == expected.program_id
+                    && compiled.data == expected.data
+                    && accounts
+                        .iter()
+                        .eq(expected.accounts.iter().map(|meta| &meta.pubkey))
+            });
+            if !found {
                 return Err(MessageMismatch::Instructions);
             }
         }
@@ -1347,6 +1349,69 @@ fn requests_write(message: &v1::Message, index: usize) -> bool {
                     .account_keys
                     .len()
                     .saturating_sub(usize::from(header.num_readonly_unsigned_accounts))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use solana_message::Hash as Blockhash;
+    use spr_client::{compile_message, ComputeBudgetConfig};
+
+    use super::*;
+
+    const FEE_PAYER: Address = Address::new_from_array([1; 32]);
+    const SIGNER: Address = Address::new_from_array([2; 32]);
+    const RING: Address = Address::new_from_array([3; 32]);
+    const UNITS: u32 = 100_000;
+
+    fn create(owner: u8) -> Instruction {
+        CreateAssociatedTokenAccount {
+            payer: FEE_PAYER,
+            owner: Address::new_from_array([owner; 32]),
+            mint: Address::new_from_array([4; 32]),
+            token_program: Address::new_from_array([5; 32]),
+        }
+        .instruction()
+    }
+
+    fn opened(setup: Vec<Instruction>) -> Result<Instruction, MessageMismatch> {
+        let ring_instruction = Instruction {
+            program_id: RING,
+            accounts: vec![AccountMeta::new_readonly(SIGNER, true)],
+            data: vec![9],
+        };
+        let instructions: Vec<_> = setup.into_iter().chain([ring_instruction]).collect();
+        let message = compile_message(
+            &FEE_PAYER,
+            &instructions,
+            Blockhash::new_from_array([6; 32]),
+            ComputeBudgetConfig::new(UNITS),
+        )
+        .unwrap();
+        Envelope {
+            ring: CustomRing::new(RING),
+            program: RING,
+            units: UNITS,
+            fee_payer: FEE_PAYER,
+            signer: SIGNER,
+            setup: vec![create(7), create(8)],
+        }
+        .open(&message.serialize())
+    }
+
+    #[test]
+    fn a_message_may_omit_a_named_create_and_nothing_else_changes() {
+        assert!(opened(vec![create(7), create(8)]).is_ok());
+        assert!(opened(vec![create(8)]).is_ok());
+        assert!(opened(Vec::new()).is_ok());
+        for refused in [
+            vec![create(8), create(7)],
+            vec![create(7), create(7)],
+            vec![create(9)],
+            vec![create(7), create(8), create(8)],
+        ] {
+            assert_eq!(opened(refused), Err(MessageMismatch::Instructions));
         }
     }
 }

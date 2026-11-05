@@ -53,9 +53,9 @@ use crate::{
     merge_inputs::{HoldInputs, MergeInputs},
     relay_prover::{DelegateSeal, ProvenRelay, RelayParties, RelayProofRequest, RelayProver},
     relay_reservations::{
-        Admission, Admit, BeginSend, Bind, Claim, ClaimCleanup, Fund, FundOutcome, Lease,
-        PendingSend, RelayBudget, RelayReservations, Reservation, ReservedBuffer, SendEnd,
-        SendKind, SpendCheck,
+        Admission, Admit, AttemptEnd, BeginSend, Bind, Claim, ClaimCleanup, Fund, FundOutcome,
+        Lease, PendingSend, RelayBudget, RelayReservations, Release, Reservation, ReservedBuffer,
+        SendEnd, SendKind, SpendCheck,
     },
     relay_submit::{presigned_transaction, CollectedSignature},
     relays::{PendingCoSign, RelayRecord, RelayState, RelayStore},
@@ -481,9 +481,12 @@ impl Relay {
 
     /// Ok only once the message cannot land and its row is settled or left to the sweep.
     async fn settle_earlier_attempt(&self, held: &Reservation) -> Result<(), RingRpcError> {
-        let _transition = self.transitions.lock().await;
-        let mut record = self.record(&held.relay_id).await?;
-        self.advance(&held.relay_id, &mut record).await?;
+        let record = {
+            let _transition = self.transitions.lock().await;
+            let mut record = self.record(&held.relay_id).await?;
+            self.advance(&held.relay_id, &mut record).await?;
+            record
+        };
         match record.state {
             RelayState::AwaitingSignature | RelayState::Sent { .. } => {
                 Err(RelayError::LiveAttempt.into())
@@ -678,8 +681,10 @@ impl Relay {
         } = proven;
         let mut proven = proven;
         // 1. Every lamport the message and its upload can cost is held before the first send.
-        let setup_rent = self.setup_rent(&setup).await?;
-        let mut instructions: Vec<_> = setup.iter().map(|create| create.instruction()).collect();
+        let MissingSetup {
+            mut instructions,
+            rent: setup_rent,
+        } = self.missing_setup(&setup).await?;
         self.reserve_and_upload(RelaySpend {
             proven: &mut proven,
             lease,
@@ -713,7 +718,7 @@ impl Relay {
             last_valid_block_height,
         };
         self.sign_when_complete(&mut record).await?;
-        let _transition = self.transitions.lock().await;
+        let transition = self.transitions.lock().await;
         // 3. The record and the row's binding commit before any send, the sweep and a retry read the live
         // message from here on.
         let stored = self
@@ -748,6 +753,8 @@ impl Relay {
         }
         // 4. A crash past the commit leaves `Sent` for the tracker, the same signature resends.
         self.first_send(&relay_id, &mut record).await?;
+        drop(transition);
+        self.release_failed(&relay_id, &record.state).await?;
         Ok(step(relay_id, &record))
     }
 
@@ -903,16 +910,19 @@ impl Relay {
         Ok(())
     }
 
-    /// An idempotent create pays only for an account still missing.
-    async fn setup_rent(
+    /// Only a missing account takes a create, and its rent is what the row reserves. A create kept for a
+    /// live account would pay unreserved rent if its owner closed the account before the message landed.
+    async fn missing_setup(
         &self,
         setup: &[CreateAssociatedTokenAccount],
-    ) -> Result<u64, RingRpcError> {
+    ) -> Result<MissingSetup, RingRpcError> {
+        let mut instructions = Vec::new();
         let mut rent = 0u64;
         for create in setup {
             if self.chain.account_data(create.address()).await?.is_some() {
                 continue;
             }
+            instructions.push(create.instruction());
             let data_len = match create.token_program.to_bytes() {
                 SPL_TOKEN_PROGRAM_ID => SPL_TOKEN_ACCOUNT_LEN,
                 _ => token_2022_account_len(
@@ -925,7 +935,7 @@ impl Relay {
             };
             rent = rent.saturating_add(self.chain.rent_exempt_lamports(data_len).await?);
         }
-        Ok(rent)
+        Ok(MissingSetup { instructions, rent })
     }
 
     /// The buffer's rent and a fee for every write, the settlement and the close, modelled at the base fee.
@@ -1076,7 +1086,14 @@ impl Relay {
             }
         }
         // 3. The charge returns, every fee the chain took stays in the total.
-        Ok(self.reservations().release(&lease.key, 0).await?)
+        Ok(self
+            .reservations()
+            .release(Release {
+                key: &lease.key,
+                relay_id: &held.relay_id,
+                end: AttemptEnd::Unlanded,
+            })
+            .await?)
     }
 
     /// The settlement closed the buffer into the writer, only its fee and setup rent stay spent.
@@ -1085,8 +1102,15 @@ impl Relay {
         held: &Reservation,
         message: &VersionedMessage,
     ) -> Result<(), RingRpcError> {
-        let landed = held.landing_rent.saturating_add(message_fee(message));
-        Ok(self.reservations().release(&held.key, landed).await?)
+        let lamports = held.landing_rent.saturating_add(message_fee(message));
+        Ok(self
+            .reservations()
+            .release(Release {
+                key: &held.key,
+                relay_id: &held.relay_id,
+                end: AttemptEnd::Landed { lamports },
+            })
+            .await?)
     }
 
     /// Past the window nothing of a live relay is left, a wallet that never signed let the blockhash lapse.
@@ -1098,34 +1122,40 @@ impl Relay {
             .abandoned(before, slot, SWEEP_PAGE)
             .await?;
         for held in abandoned {
-            let _transition = self.transitions.lock().await;
-            let swept = async {
-                let Some(mut record) = self.relays().get(&held.relay_id).await? else {
-                    return self.release(&held).await;
-                };
-                match record.state {
-                    RelayState::Sent { .. } => Ok(()),
-                    RelayState::Confirmed { .. } => {
-                        self.release_landed(&held, &record.message).await
-                    }
-                    RelayState::Failed { .. } => self.release(&held).await,
-                    RelayState::AwaitingSignature => {
-                        if self.chain.block_height().await? <= record.last_valid_block_height {
-                            return Ok(());
-                        }
-                        record.state = RelayState::Failed {
-                            reason: EXPIRED.to_owned(),
-                        };
-                        self.close(&held.relay_id, &record).await
-                    }
-                }
-            }
-            .await;
-            if let Err(error) = swept {
+            if let Err(error) = self.sweep_row(&held).await {
                 warn!("relay reservation did not sweep {}", redacted(&error));
             }
         }
         Ok(())
+    }
+
+    async fn sweep_row(&self, held: &Reservation) -> Result<(), RingRpcError> {
+        // 1. The relay's state moves under the guard, one relay state at a time.
+        let state = {
+            let _transition = self.transitions.lock().await;
+            match self.relays().get(&held.relay_id).await? {
+                None => None,
+                Some(mut record) => {
+                    if record.state == RelayState::AwaitingSignature
+                        && self.chain.block_height().await? > record.last_valid_block_height
+                    {
+                        record.state = RelayState::Failed {
+                            reason: EXPIRED.to_owned(),
+                        };
+                        self.close(&held.relay_id, &record).await?;
+                    }
+                    if matches!(record.state, RelayState::Confirmed { .. }) {
+                        self.release_landed(held, &record.message).await?;
+                    }
+                    Some(record.state)
+                }
+            }
+        };
+        // 2. Closing a buffer waits on finality, and the cleanup claim already excludes another closer.
+        match state {
+            None | Some(RelayState::Failed { .. }) => self.release(held).await,
+            Some(_) => Ok(()),
+        }
     }
 
     pub(crate) async fn send_merge(&self, merge: HeldMerge) -> Result<RelayId, RingRpcError> {
@@ -1211,7 +1241,7 @@ impl Relay {
 
     /// A signature already collected leaves the relay as it is.
     pub async fn submit(&self, request: &SubmitRelayRequest) -> Result<RelayStatus, RingRpcError> {
-        let _transition = self.transitions.lock().await;
+        let transition = self.transitions.lock().await;
         let mut record = self.record(&request.relay_id).await?;
         let (signer, signature) = (request.signer.0, request.signature.0);
         if record.state == RelayState::AwaitingSignature
@@ -1247,6 +1277,9 @@ impl Relay {
             self.first_send(&request.relay_id, &mut record).await?;
         }
         self.advance(&request.relay_id, &mut record).await?;
+        drop(transition);
+        self.release_failed(&request.relay_id, &record.state)
+            .await?;
         Ok(relay_status(&record.state))
     }
 
@@ -1254,10 +1287,31 @@ impl Relay {
         &self,
         request: &GetRelayStatusRequest,
     ) -> Result<RelayStatus, RingRpcError> {
-        let _transition = self.transitions.lock().await;
-        let mut record = self.record(&request.relay_id).await?;
-        self.advance(&request.relay_id, &mut record).await?;
-        Ok(relay_status(&record.state))
+        let state = {
+            let _transition = self.transitions.lock().await;
+            let mut record = self.record(&request.relay_id).await?;
+            self.advance(&request.relay_id, &mut record).await?;
+            record.state
+        };
+        self.release_failed(&request.relay_id, &state).await?;
+        Ok(relay_status(&state))
+    }
+
+    /// Runs with `transitions` released, closing a buffer waits on finality. A failed close stays for the
+    /// next sweep.
+    async fn release_failed(
+        &self,
+        relay_id: &RelayId,
+        state: &RelayState,
+    ) -> Result<(), RingRpcError> {
+        if matches!(state, RelayState::Failed { .. }) {
+            if let Some(held) = self.reservations().by_relay(relay_id).await? {
+                if let Err(error) = self.release(&held).await {
+                    warn!("relay buffer did not close {}", redacted(&error));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// A restart resumes every relay it left pending.
@@ -1275,11 +1329,15 @@ impl Relay {
 
     pub(crate) async fn track(&self) -> Result<(), RingRpcError> {
         for relay_id in self.relays().pending().await? {
-            let _transition = self.transitions.lock().await;
             let tracked = async {
-                let mut record = self.record(&relay_id).await?;
-                self.advance(&relay_id, &mut record).await?;
-                self.resend(&record).await
+                let state = {
+                    let _transition = self.transitions.lock().await;
+                    let mut record = self.record(&relay_id).await?;
+                    self.advance(&relay_id, &mut record).await?;
+                    self.resend(&record).await?;
+                    record.state
+                };
+                self.release_failed(&relay_id, &state).await
             }
             .await;
             if let Err(error) = tracked {
@@ -1428,7 +1486,8 @@ impl Relay {
             }
             _ => {
                 self.relays().update(relay_id, record).await?;
-                self.end_failed(relay_id, record).await
+                self.settle(record.co_signature, CoSignSettlement::Failed)
+                    .await
             }
         }
     }
@@ -1448,19 +1507,6 @@ impl Relay {
             .charge_landed(relay_id, message_fee(&record.message))
             .await?;
         transaction.commit().await?;
-        self.end_failed(relay_id, record).await
-    }
-
-    async fn end_failed(
-        &self,
-        relay_id: &RelayId,
-        record: &RelayRecord,
-    ) -> Result<(), RingRpcError> {
-        if let Some(held) = self.reservations().by_relay(relay_id).await? {
-            if let Err(error) = self.release(&held).await {
-                warn!("relay buffer did not close {}", redacted(&error));
-            }
-        }
         self.settle(record.co_signature, CoSignSettlement::Failed)
             .await
     }
@@ -1517,6 +1563,11 @@ enum AttemptWrite {
     /// Another record holds the relay id.
     Existing,
     Refused(RingRpcError),
+}
+
+struct MissingSetup {
+    instructions: Vec<Instruction>,
+    rent: u64,
 }
 
 struct TrackedSend {

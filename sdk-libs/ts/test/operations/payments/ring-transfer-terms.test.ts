@@ -495,14 +495,26 @@ describe("relay transfer terms", () => {
     expect(refusal(() => elsewhere.verify(payeeAddress))).toBe("Program");
 
     const setup = { owner: randomAddress(), mint: randomAddress(), tokenProgram: randomAddress() };
-    const absent = await framed([instruction], { ...terms, setup: [setup] });
-    expect(refusal(() => absent.verify(payeeAddress))).toBe("Instructions");
+    const omitted = await framed([instruction], { ...terms, setup: [setup] });
+    expect(omitted.verify(payeeAddress).signer).toBe(payeeAddress);
     const create = await getCreateAssociatedTokenAccountInstructionAsync({
       payer: fixture.authority,
       ...setup,
     });
     const named = await framed([create, instruction], { ...terms, setup: [setup] });
     expect(named.verify(payeeAddress).signer).toBe(payeeAddress);
+    const second = { ...setup, owner: randomAddress() };
+    const createSecond = await getCreateAssociatedTokenAccountInstructionAsync({
+      payer: fixture.authority,
+      ...second,
+    });
+    const both = { ...terms, setup: [setup, second] };
+    const last = await framed([createSecond, instruction], both);
+    expect(last.verify(payeeAddress).signer).toBe(payeeAddress);
+    const reordered = await framed([createSecond, create, instruction], both);
+    expect(refusal(() => reordered.verify(payeeAddress))).toBe("Instructions");
+    const repeated = await framed([create, create, instruction], both);
+    expect(refusal(() => repeated.verify(payeeAddress))).toBe("Instructions");
     const other = await framed([create, instruction], {
       ...terms,
       setup: [{ ...setup, owner: randomAddress() }],

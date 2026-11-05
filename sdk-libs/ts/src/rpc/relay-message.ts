@@ -1216,19 +1216,25 @@ function open(envelope: Envelope, bytes: Uint8Array): RingInstruction {
   if (!withinBudget) throw mismatch("Budget");
   const instruction = message.instructions.at(-1);
   const leading = message.instructions.slice(0, -1);
-  if (instruction === undefined || leading.length !== envelope.setup.length)
-    throw mismatch("Instructions");
-  const sameSetup = leading.every((found, index) => {
-    const named = envelope.setup[index];
+  if (instruction === undefined) throw mismatch("Instructions");
+  // In named order, an omitted create costs the signer nothing, a transfer to a missing account only fails.
+  let next = 0;
+  const sameSetup = leading.every((found) => {
     const accounts = found.accounts ?? [];
-    const namedAccounts = named?.accounts ?? [];
-    return (
-      named !== undefined &&
-      found.programAddress === named.programAddress &&
-      equalBytes(new Uint8Array(found.data ?? []), new Uint8Array(named.data ?? [])) &&
-      accounts.length === namedAccounts.length &&
-      accounts.every((meta, at) => meta.address === namedAccounts[at]?.address)
-    );
+    for (; next < envelope.setup.length; next += 1) {
+      const named = envelope.setup[next]!;
+      const namedAccounts = named.accounts ?? [];
+      if (
+        found.programAddress === named.programAddress &&
+        equalBytes(new Uint8Array(found.data ?? []), new Uint8Array(named.data ?? [])) &&
+        accounts.length === namedAccounts.length &&
+        accounts.every((meta, at) => meta.address === namedAccounts[at]?.address)
+      ) {
+        next += 1;
+        return true;
+      }
+    }
+    return false;
   });
   if (!sameSetup) throw mismatch("Instructions");
   if (instruction.programAddress !== envelope.program) throw mismatch("Program");

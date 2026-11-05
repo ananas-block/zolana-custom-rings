@@ -955,6 +955,11 @@ async fn token_account_setup_reserves_the_rent_of_a_missing_account() {
             .call(GET_RELAY_STATUS, GetRelayStatusRequest { relay_id })
             .await;
         assert_eq!(fixture.outstanding().await, 0);
+        // A live account takes no create, an owner closing it later finds no rent to spend.
+        assert_eq!(
+            fixture.sent()[0].message.instructions().len(),
+            if exists { 1 } else { 2 }
+        );
         let fee = i64::from(fixture.sent()[0].message.header().num_required_signatures) * 5_000;
         let kept = if exists {
             0
