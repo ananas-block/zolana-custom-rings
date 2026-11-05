@@ -65,7 +65,7 @@ export type RingRecoveryStep =
 let pausedAt: (cursor: string, member: Bytes32, state: RecoveryState) => RingRecoveryProgress;
 let resumedState: (progress: RingRecoveryProgress, member: Bytes32) => RecoveryState;
 
-/** Mirrors Rust `RecoveryProgress`, `cursor` prints as Rust `HistoryCursor` and every resume works on a copy. */
+/** Mirrors Rust `RecoveryProgress`, `cursor` prints as Rust `HistoryCursor` and no resume changes its state. */
 export class RingRecoveryProgress {
   /** The source's owner hash, the ring stays bound through `cursor`. */
   readonly member: Bytes32;
@@ -86,7 +86,7 @@ export class RingRecoveryProgress {
     resumedState = (progress, member) => {
       if (!equalBytes(progress.member, member))
         throw new RingError("RING_RECOVERY_PROGRESS_MISMATCH");
-      return progress.#state.clone();
+      return progress.#state;
     };
   }
 }
@@ -100,7 +100,7 @@ export interface RecoveredRingNotes {
   readonly unsupportedDeposits: readonly Bytes32[];
   /** Verified mints missing from the asset registry, their notes stay in `unopened`. */
   readonly unknownMints: readonly Address[];
-  /** Nullifiers of inputs no note matches, a complete anonymous history leaves none. */
+  /** Nullifiers of ring note inputs no note the member opened matches, Rust `unseen_inputs`. */
   readonly unseenInputs: readonly Bytes32[];
 }
 
@@ -113,8 +113,7 @@ export async function recoverRingMemberNotes(
   if (!equalBytes(input.nullifierKey.publicKey(), input.source.nullifierPublicKey))
     throw new RingError("RING_NULLIFIER_KEY_MISMATCH");
   const member = input.source.ownerHash();
-  const state =
-    input.progress === undefined ? new RecoveryState() : resumedState(input.progress, member);
+  let state = input.progress === undefined ? EMPTY_STATE : resumedState(input.progress, member);
   const origin = input.origin ?? new RpcTransactionOrigin(input.client.solanaRpc);
   const rows = new RowOrigins(origin, input.ringProgramId, context);
   // 1. One page at a time, the cursor names the last row read and the next call starts after it.
@@ -129,12 +128,14 @@ export async function recoverRingMemberNotes(
       ...(input.progress === undefined ? {} : { cursor: input.progress.cursor }),
     },
     async (page) => {
+      const read = [...state.openSlot];
       for (const indexed of page) {
         const confirmed = await rows.read(indexed);
-        if (confirmed !== undefined) state.openSlot.push(confirmed);
+        if (confirmed !== undefined) read.push(confirmed);
       }
       refuseSkipped(rows.skipped);
-      applyRows(input, state, closeSlots(state), rows);
+      const { closed, open } = closeSlots(read);
+      state = applyRows(input, state, closed, rows).settle(open);
     },
     context,
   );
@@ -142,38 +143,58 @@ export async function recoverRingMemberNotes(
   if (reach.nextCursor !== undefined) {
     return Object.freeze({ kind: "paused", progress: pausedAt(reach.nextCursor, member, state) });
   }
-  applyRows(input, state, state.openSlot.splice(0), rows);
-  const { found } = state;
+  state = applyRows(input, state, state.openSlot, rows).settle([]);
   return Object.freeze({
     kind: "complete",
     notes: Object.freeze({
-      notes: Object.freeze([...found.candidates]),
-      unopened: Object.freeze(found.unresolved.map(({ commitment }) => commitment)),
+      notes: Object.freeze([...state.candidates]),
+      unopened: Object.freeze(state.unresolved.map(({ commitment }) => commitment)),
       unsupportedDeposits: Object.freeze([...state.unsupportedDeposits]),
-      unknownMints: Object.freeze([...found.unknownMints]),
+      unknownMints: Object.freeze([...state.unknownMints]),
       unseenInputs: Object.freeze([...state.unseenInputs]),
     }),
   });
 }
 
-class RecoveryState {
-  readonly found: Found;
-  readonly unsupportedDeposits: Bytes32[];
-  readonly unseenInputs: Bytes32[];
-  /** The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends. */
-  openSlot: ConfirmedRingTransaction[];
-
-  constructor(source?: RecoveryState) {
-    this.found = source?.found.clone() ?? new Found();
-    this.unsupportedDeposits = [...(source?.unsupportedDeposits ?? [])];
-    this.unseenInputs = [...(source?.unseenInputs ?? [])];
-    this.openSlot = [...(source?.openSlot ?? [])];
-  }
-
-  clone(): RecoveryState {
-    return new RecoveryState(this);
-  }
+/** Sizes a paused recovery holds, kept out of the package index. */
+export function retainedRecovery(progress: RingRecoveryProgress) {
+  const state = resumedState(progress, progress.member);
+  return Object.freeze({
+    notes: state.candidates.length + state.unresolved.length,
+    claimed: state.claimed.size,
+    unseenInputs: state.unseenInputs.length,
+    openSlot: state.openSlot.length,
+  });
 }
+
+interface Unresolved {
+  readonly commitment: Bytes32;
+  readonly nullifier: Bytes32;
+}
+
+/** Mirrors Rust `RecoveryState`, a batch never writes it and no ring opening outlives the batch. */
+interface RecoveryState {
+  readonly candidates: readonly WalletUtxo[];
+  /** Source commitments without a spendable opening, with their nullifiers. */
+  readonly unresolved: readonly Unresolved[];
+  /** Every source commitment claimed, spent ones too, a row served again adds no note. */
+  readonly claimed: ReadonlySet<string>;
+  readonly unknownMints: ReadonlySet<Address>;
+  readonly unsupportedDeposits: readonly Bytes32[];
+  readonly unseenInputs: readonly Bytes32[];
+  /** The indexer orders one slot by signature, a later row of the slot can create the note an earlier row spends. */
+  readonly openSlot: readonly ConfirmedRingTransaction[];
+}
+
+const EMPTY_STATE: RecoveryState = Object.freeze({
+  candidates: Object.freeze([]),
+  unresolved: Object.freeze([]),
+  claimed: new Set<string>(),
+  unknownMints: new Set<Address>(),
+  unsupportedDeposits: Object.freeze([]),
+  unseenInputs: Object.freeze([]),
+  openSlot: Object.freeze([]),
+});
 
 /** A row left unread can hold a source note or its spend, Rust `refuse_skipped`. */
 function refuseSkipped(skipped: readonly SkippedRingTransaction[]): void {
@@ -188,27 +209,31 @@ function refuseSkipped(skipped: readonly SkippedRingTransaction[]): void {
     });
 }
 
-/** Rows of every slot below the last one read. */
-function closeSlots(state: RecoveryState): ConfirmedRingTransaction[] {
-  const last = state.openSlot.reduce<bigint | undefined>(
+/** Holds back the highest slot read, a later page can add rows to it. */
+function closeSlots(rows: readonly ConfirmedRingTransaction[]): Readonly<{
+  closed: ConfirmedRingTransaction[];
+  open: ConfirmedRingTransaction[];
+}> {
+  const last = rows.reduce<bigint | undefined>(
     (max, { transaction }) =>
       max === undefined || transaction.slot > max ? transaction.slot : max,
     undefined,
   );
-  if (last === undefined) return [];
-  const closed = state.openSlot.filter(({ transaction }) => transaction.slot < last);
-  state.openSlot = state.openSlot.filter(({ transaction }) => transaction.slot >= last);
-  return closed;
+  if (last === undefined) return { closed: [], open: [] };
+  return {
+    closed: rows.filter(({ transaction }) => transaction.slot < last),
+    open: rows.filter(({ transaction }) => transaction.slot >= last),
+  };
 }
 
 /** Rows of closed slots, every note one of them spends opens in them or in an earlier batch. */
 function applyRows(
   input: RingRecoveryParams,
-  state: RecoveryState,
+  before: RecoveryState,
   batch: readonly ConfirmedRingTransaction[],
   rows: RowOrigins,
-): void {
-  const { found } = state;
+): BatchNotes {
+  const found = new BatchNotes(before);
   // 1. Deposits are found by ring, never by their recipient view tags.
   const history: ConfirmedRingTransaction[] = [];
   const processed = new Set<string>();
@@ -216,7 +241,7 @@ function applyRows(
     if (confirmed.kind !== "deposit") history.push(confirmed);
     else
       rows.attempt(confirmed.transaction, () =>
-        recoverDeposit(input, { confirmed, found, processed, state }),
+        recoverDeposit(input, { confirmed, found, processed }),
       );
   }
   const audited = auditConfirmedRingHistory({
@@ -224,14 +249,18 @@ function applyRows(
     ringProgramId: input.ringProgramId,
     history,
     rows,
-    known: found.created,
+    known: found.openings,
   });
   refuseSkipped(rows.skipped);
   // 2. Outputs before spends, the batch's merges and inputs need the notes they consume.
-  const unresolvedReal: Bytes32[] = [];
   for (const transaction of audited) {
     for (const { nullifier, opening } of transaction.inputs)
-      if (opening.kind === "unresolvedReal") unresolvedReal.push(nullifier);
+      // Rust `InputOpening::Real`, a batch opening never hides a spend, the result stays the same at any page size.
+      if (
+        opening.kind === "unresolvedReal" ||
+        (opening.kind === "opened" && opening.ring?.kind === "ring")
+      )
+        found.realInputs.push(nullifier);
     // An unopened slot could hide a source UTXO.
     const [unopened] = transaction.payloadErrors;
     if (unopened !== undefined)
@@ -250,71 +279,94 @@ function applyRows(
   // The audit opened every merge from its sealed record, a skipped one refused above.
   for (const confirmed of history) {
     const slot = confirmed.kind === "merge" ? confirmed.transaction.outputSlots[0] : undefined;
-    const opening = slot === undefined ? undefined : found.created.utxo(slot.outputContext.hash);
+    const opening = slot === undefined ? undefined : found.openings.utxo(slot.outputContext.hash);
     if (slot !== undefined && opening !== undefined)
       keepSourceNote(input, found, opening, slot.outputContext);
   }
-  state.unseenInputs.push(
-    ...unresolvedReal.filter(
-      (nullifier) =>
-        !found.candidates.some((candidate) => equalBytes(candidate.nullifier, nullifier)),
-    ),
-  );
   // 3. A later batch never creates a note this one spends, the spent notes leave the state.
-  found.spend(new Set(history.flatMap(({ transaction }) => transaction.nullifiers.map(bytesKey))));
+  found.spend(history.flatMap(({ transaction }) => transaction.nullifiers));
+  return found;
 }
 
-/** Notes found so far, by the commitments already claimed. */
-class Found {
-  candidates: WalletUtxo[] = [];
-  /** Source commitments without a spendable opening, with their nullifiers. */
-  unresolved: {
-    readonly commitment: Bytes32;
-    readonly nullifier: Bytes32;
-  }[] = [];
-  unknownMints = new Set<Address>();
-  /** Every deposit and merge UTXO the auditor opened, a transfer disclosure names them by hash. */
-  created = new KnownUtxoIndex();
-  #seen = new Set<string>();
+/** One batch's finds over the state before it, settled into the next state once the batch closes. */
+class BatchNotes {
+  readonly candidates: WalletUtxo[] = [];
+  readonly unresolved: Unresolved[] = [];
+  readonly unknownMints = new Set<Address>();
+  readonly unsupportedDeposits: Bytes32[] = [];
+  readonly realInputs: Bytes32[] = [];
+  readonly openings = new KnownUtxoIndex();
+  readonly #claimed = new Set<string>();
+  #spent: ReadonlySet<string> = new Set();
 
-  clone(): Found {
-    const copy = new Found();
-    copy.candidates = [...this.candidates];
-    copy.unresolved = [...this.unresolved];
-    copy.unknownMints = new Set(this.unknownMints);
-    copy.created = this.created.clone();
-    copy.#seen = new Set(this.#seen);
-    return copy;
-  }
+  constructor(readonly before: RecoveryState) {}
 
   /** `false` when the commitment was already claimed. */
   claim(commitment: Bytes32): boolean {
-    const key = bytesKey(commitment);
-    if (this.#seen.has(key)) return false;
-    this.#seen.add(key);
+    if (this.seen(commitment)) return false;
+    this.#claimed.add(bytesKey(commitment));
     return true;
   }
 
   seen(commitment: Bytes32): boolean {
-    return this.#seen.has(bytesKey(commitment));
+    const key = bytesKey(commitment);
+    return this.before.claimed.has(key) || this.#claimed.has(key);
   }
 
   unresolve(commitment: Bytes32, nullifier: Bytes32): void {
     this.unresolved.push(Object.freeze({ commitment, nullifier }));
   }
 
-  spend(nullifiers: ReadonlySet<string>): void {
-    this.candidates = this.candidates.filter((note) => !nullifiers.has(bytesKey(note.nullifier)));
-    this.unresolved = this.unresolved.filter(
-      ({ nullifier }) => !nullifiers.has(bytesKey(nullifier)),
-    );
+  spend(nullifiers: readonly Bytes32[]): void {
+    this.#spent = new Set(nullifiers.map(bytesKey));
   }
+
+  /** The next state, sharing each collection of `before` the batch leaves unchanged. */
+  settle(openSlot: readonly ConfirmedRingTransaction[]): RecoveryState {
+    const { before } = this;
+    const live = ({ nullifier }: Readonly<{ nullifier: Bytes32 }>) =>
+      !this.#spent.has(bytesKey(nullifier));
+    // Rust `Found::nullifiers`, a member note answers its input even when the batch spends it.
+    const notes = [
+      ...before.candidates,
+      ...this.candidates,
+      ...before.unresolved,
+      ...this.unresolved,
+    ];
+    const held = new Set(notes.map(({ nullifier }) => bytesKey(nullifier)));
+    return Object.freeze({
+      candidates: carried(before.candidates, this.candidates, live),
+      unresolved: carried(before.unresolved, this.unresolved, live),
+      claimed: united(before.claimed, this.#claimed),
+      unknownMints: united(before.unknownMints, this.unknownMints),
+      unsupportedDeposits: carried(before.unsupportedDeposits, this.unsupportedDeposits),
+      unseenInputs: carried(
+        before.unseenInputs,
+        this.realInputs.filter((nullifier) => !held.has(bytesKey(nullifier))),
+      ),
+      openSlot: Object.freeze([...openSlot]),
+    });
+  }
+}
+
+/** `before` itself while the batch adds nothing and drops nothing. */
+function carried<T>(
+  before: readonly T[],
+  added: readonly T[],
+  live: (item: T) => boolean = () => true,
+): readonly T[] {
+  if (added.length === 0 && before.every(live)) return before;
+  return Object.freeze([...before, ...added].filter(live));
+}
+
+function united<T>(before: ReadonlySet<T>, added: ReadonlySet<T>): ReadonlySet<T> {
+  return added.size === 0 ? before : new Set([...before, ...added]);
 }
 
 /** A ring note the audit opened, kept when the source's signing key owns it under its nullifier key or the zero key. */
 function keepSourceNote(
   input: Pick<RingRecoveryParams, "source" | "nullifierKey" | "assets" | "ringProgramId">,
-  found: Found,
+  found: BatchNotes,
   opening: KnownUtxo,
   outputContext: OutputContext,
 ): void {
@@ -396,13 +448,12 @@ function recoverDeposit(
   input: RingRecoveryParams,
   row: Readonly<{
     confirmed: Extract<ConfirmedRingTransaction, { kind: "deposit" }>;
-    found: Found;
+    found: BatchNotes;
     processed: Set<string>;
-    state: RecoveryState;
   }>,
 ): void {
   const { confirmed, found, processed } = row;
-  const unsupported = row.state.unsupportedDeposits;
+  const unsupported = found.unsupportedDeposits;
   for (const [slotIndex, slot] of confirmed.transaction.outputSlots.entries()) {
     const deposit = ringDepositOutput(slot.payload, input.ringProgramId);
     const commitment = slot.outputContext.hash;
@@ -432,7 +483,7 @@ function recoverDeposit(
         output: deposit,
         opening,
       });
-      found.created.insert(commitment, created.utxo);
+      found.openings.insert(commitment, created.utxo);
       const nullifierPk = sourceNullifierPk(input.source, opening.ownerHash);
       if (nullifierPk === undefined) continue;
       // The deposit proof binds the raw mint, its commitment opens without the registry.

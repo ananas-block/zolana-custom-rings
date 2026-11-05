@@ -54,6 +54,7 @@ import {
 import { RingError } from "../../../src/protocol/error.js";
 import {
   recoverRingMemberNotes,
+  retainedRecovery,
   type RingRecoveryStep,
 } from "../../../src/operations/workflow/recover.js";
 import { ringAuditReader } from "../../helpers/clients.js";
@@ -958,7 +959,7 @@ describe("recoverRingMemberNotes", () => {
     expect(recovered.notes.map((note) => note.outputContext.hash)).toEqual([commitment]);
   });
 
-  it("opens the deposit an anonymous transfer spends and lists an input no note answers", async () => {
+  it("lists each anonymous input no member note answers, another owner's zero-key deposit among them", async () => {
     const auditor = X25519Keypair.generate();
     const blinding = field(`${"00".repeat(31)}0b`);
     const deposit = depositOf(
@@ -989,7 +990,7 @@ describe("recoverRingMemberNotes", () => {
         unopened: [],
         unsupportedDeposits: [],
         unknownMints: [],
-        unseenInputs: [OTHER_NULLIFIER],
+        unseenInputs: [zeroKeyNullifier(deposit.commitment, blinding), OTHER_NULLIFIER],
       });
     } finally {
       deposit.ephemeralSecret.fill(0);
@@ -1418,6 +1419,48 @@ describe("recoverRingMemberNotes", () => {
         expect(
           await pagedRecovery({ ...resume, origin: origin(new Set([spend!.txSignature])) }),
         ).toEqual(full);
+    });
+
+    it("holds the member's notes alone across pages of other members' traffic", async () => {
+      const auditor = X25519Keypair.generate();
+      const owner = ShieldedKeypair.generate();
+      const mine = { ...ownedTransfer(owner, auditor.publicKey()).transaction, slot: 10n };
+      const spent = (await recover({ owner, auditor, transaction: mine })).notes[0]!.nullifier;
+      const transfer = (index: number, nullifier: Bytes32, records?: readonly AuditRecord[]) => ({
+        ...sealedTransfer({
+          auditor: auditor.publicKey(),
+          nullifiers: [nullifier],
+          txSignature: `${"3".repeat(63)}${"ABCDEFGHJKLMN"[index]!}` as Signature,
+          ...(records === undefined ? {} : { records }),
+        }).transaction,
+        slot: 11n + BigInt(index),
+      });
+      const others = Array.from({ length: 12 }, (_, index) =>
+        transfer(index, field(`${"00".repeat(30)}c0${index.toString(16).padStart(2, "0")}`)),
+      );
+      const respend = transfer(12, spent, [ownedRecord(owner), ...otherRecords]);
+      const rows = [mine, ...others.slice(0, 6), respend, ...others.slice(6)];
+      const full = await pagedRecovery({ owner, auditor, rows });
+      const page = { owner, auditor, rows, pageSize: 1, maxPages: 1 };
+      let step = await pagedRecovery(page);
+      let pauses = 0;
+      while (step.kind === "paused") {
+        const held = retainedRecovery(step.progress);
+        expect(held.notes).toBeLessThanOrEqual(1);
+        expect(held.claimed).toBeLessThanOrEqual(2);
+        expect(held.openSlot).toBe(1);
+        pauses += 1;
+        step = await pagedRecovery({ ...page, progress: step.progress });
+      }
+      expect(pauses).toBe(rows.length - 1);
+      expect(step).toEqual(full);
+      expect(step.notes.notes.map((note) => note.outputContext.hash)).toEqual([
+        respend.outputSlots[0]!.outputContext.hash,
+      ]);
+      expect(step.notes.unseenInputs).toEqual([
+        FIRST_NULLIFIER,
+        ...others.map(({ nullifiers }) => nullifiers[0]),
+      ]);
     });
 
     it("refuses a progress another member started", async () => {

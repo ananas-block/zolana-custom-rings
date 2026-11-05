@@ -241,18 +241,6 @@ export class KnownUtxoIndex implements KnownUtxos {
     if (!this.#indexNote({ commitment, utxo })) this.#waiting.set(key, { commitment, utxo });
   }
 
-  /** Later inserts into the copy or the original stay apart. */
-  clone(): KnownUtxoIndex {
-    const copy = new KnownUtxoIndex([], {
-      ...(this.#fallback === undefined ? {} : { fallback: this.#fallback }),
-      ...(this.#secrets === undefined ? {} : { secrets: this.#secrets }),
-    });
-    for (const [key, utxo] of this.#utxos) copy.#utxos.set(key, utxo);
-    for (const [key, note] of this.#notes) copy.#notes.set(key, note);
-    for (const [key, note] of this.#waiting) copy.#waiting.set(key, note);
-    return copy;
-  }
-
   /** A late key recomputes its owner's notes. */
   reindexSecrets(): void {
     for (const [key, note] of this.#waiting) if (this.#indexNote(note)) this.#waiting.delete(key);

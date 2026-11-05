@@ -53,7 +53,6 @@ Breaking
 
 Added
 
-- `KnownUtxoIndex.clone` returns a copy whose later inserts stay apart from the original.
 - `syncRingWallet` raises `RING_HELD_KEY_NOT_IN_HISTORY` before any ring read when the keys hold a viewing key the wallet's `ViewingHistory` has no entry for, so add that key with `withRotatedKey` or `withImportedKey` first.
 - `RingRpcRefusal.budgetUnset` names `-32210`, a Ring RPC whose operator set no relay budget refuses a relayed enrollment and a token account create with it.
 - `RingRpcRefusal.alreadyEnrolled`, `registerKeyProof` and `enrollmentRefused` name `-32213` to `-32215`, a relayed enrollment of an owner already enrolled, one whose RegisterKey proof does not verify, and one the chain refuses in simulation.
@@ -81,3 +80,6 @@ Fixed
 - `LocalRingKeys.destroy` left the list salt key usable, now it wipes that key too and every method needing a secret raises `KEYPAIR_INVALID_SECRET_KEY` afterward.
 - A submission gave up on a proof refused for a tracking root below its floor, now it proves again after `trackingRootBelowFloor` as after a revoked root.
 - A salted transfer with an in-proof owner, eleven co-owners, eight outputs and thirty two withdrawals had no key, now `transferPoolCapacity` sizes `custom-ring-transfer-wide-8-in24-w32-s24` for one row outside the owner run → deploy this release's ring program, prover and keys together.
+- `recoverRingMemberNotes` let a paused `RingRecoveryProgress` grow with every output the auditor opened and copied it on each resume, now it grows only with the member's own notes.
+- `RecoveredRingNotes.unseenInputs` depended on the page size, now it lists every ring note input no member note answers, another owner's zero-key spend among them.
+- `resolveRingRecipient` refused an address issued before its owner rotated the viewing key, now it returns the tracking row's current `viewingPublicKey` and `revision`.

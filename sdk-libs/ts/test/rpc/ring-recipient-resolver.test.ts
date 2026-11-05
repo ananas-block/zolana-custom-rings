@@ -110,18 +110,18 @@ describe("resolveRingRecipient", () => {
     ).rejects.toMatchObject({ code: "RING_RECIPIENT_NOT_ENROLLED" });
   });
 
-  it("refuses an address whose viewing key differs from the row, naming the row's revision", async () => {
+  it("resolves an address from before a rotation to the row's current viewing key", async () => {
     const { to, row } = await addressed();
-    await expect(
-      resolveRingRecipient({
-        client: chain({ ...row, viewingU: new Uint8Array(32).fill(9) as Bytes32 }, "present"),
-        trackingRegistry: REGISTRY,
-        to,
-      }),
-    ).rejects.toMatchObject({
-      code: "RING_RECIPIENT_VIEWING_KEY_STALE",
-      details: { rowRevision: "3" },
+    const rotated = ShieldedKeypair.generate().viewingPublicKey();
+    const resolved = await resolveRingRecipient({
+      client: chain({ ...row, viewingU: rotated.u(), revision: 4n }, "present"),
+      trackingRegistry: REGISTRY,
+      to,
     });
+    if (resolved.kind !== "enrolled") throw new Error("enrolled");
+    expect(resolved.viewingPublicKey.u()).toEqual(rotated.u());
+    expect(resolved.viewingPublicKey.u()).not.toEqual(to.recipient.viewingPublicKey.u());
+    expect(resolved.revision).toBe(4n);
   });
 
   describe("under the zero key", () => {
