@@ -19,10 +19,13 @@
 // 4. State inclusion binds the selected tree id and deterministic enrollment blinding.
 // 5. Address gaps use strict canonical field ordering and authenticate their low leaf.
 // 6. Inactive paths and payloads are zero, while an absent pool entry keeps its member.
+// 7. A pool opening folds one 40 level path. Present stops at the state root at level 32, absent reaches the address root.
 
 package registry
 
 import (
+	"slices"
+
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/std/selector"
 	"github.com/reilabs/gnark-lean-extractor/v3/abstractor"
@@ -54,6 +57,13 @@ type CredentialLeaf struct {
 type AddressLeaf struct {
 	Next, Index frontend.Variable
 	Path        [spp.NullifierTreeHeight]frontend.Variable
+}
+
+// CredentialOpening reads one pool member, present under a state root or absent under the address root.
+type CredentialOpening struct {
+	Present frontend.Variable
+	Leaf    CredentialLeaf
+	Gap     AddressGap
 }
 
 type AddressGap struct {
@@ -88,9 +98,54 @@ func CredentialAddress(api frontend.API, credentialOwner, ringID, member fronten
 }
 
 func (c CredentialLeaf) AssertInclusion(api frontend.API, active frontend.Variable, roots CredentialRoots) frontend.Variable {
+	address, leaf, root := c.bind(api, active, roots)
+	assertCredentialPath(api, active, leaf, root, c.StateIndex, c.StatePath[:])
+	return address
+}
+
+// Open authenticates a present credential at state height or an absent address at address height through one fold.
+func (o CredentialOpening) Open(api frontend.API, active frontend.Variable, roots CredentialRoots, addressRoot frontend.Variable) {
+	// 1. A live slot is present or absent, and padding selects neither branch.
+	api.AssertIsBoolean(active)
+	api.AssertIsBoolean(o.Present)
+	api.AssertIsEqual(api.Mul(api.Sub(1, active), o.Present), 0)
+	absent := api.Sub(active, o.Present)
+	// 2. Each branch proves its own leaf and zeroes its own path when unselected.
+	address, stateLeaf, stateRoot := o.Leaf.bind(api, o.Present, roots)
+	gapLeaf := o.Gap.orderedLeaf(api, absent, address)
+	assertPathZeroWhen(api, api.Sub(1, o.Present), o.Leaf.StateIndex, o.Leaf.StatePath[:])
+	assertPathZeroWhen(api, api.Sub(1, absent), o.Gap.Index, o.Gap.Path[:])
+	// 3. Step 2 zeroes the unselected path, so a linear sum gives the selected index and siblings at no constraint cost.
+	index := api.Add(o.Leaf.StateIndex, o.Gap.Index)
+	path := slices.Clone(o.Gap.Path[:])
+	for level, sibling := range o.Leaf.StatePath {
+		path[level] = api.Add(path[level], sibling)
+	}
+	// 4. One decomposition bounds an absent index by the address tree and a present index by the state tree.
+	bits := api.ToBinary(index, spp.NullifierTreeHeight)
+	for _, bit := range bits[spp.StateTreeHeight:] {
+		assertCredentialEqualWhen(api, o.Present, bit, 0)
+	}
+	// 5. The state root sits at state height on the fold and the address root at its top.
+	// Present selects leaf, height and root together, so a state leaf never meets the address root
+	// and a gap leaf never meets a state root.
+	leaf := api.Select(o.Present, stateLeaf, gapLeaf)
+	stateNode := abstractor.Call(api, gadget.MerkleRootGadget{
+		Hash: leaf, Index: bits[:spp.StateTreeHeight], Path: path[:spp.StateTreeHeight], Height: spp.StateTreeHeight,
+	})
+	addressNode := abstractor.Call(api, gadget.MerkleRootGadget{
+		Hash: stateNode, Index: bits[spp.StateTreeHeight:], Path: path[spp.StateTreeHeight:],
+		Height: spp.NullifierTreeHeight - spp.StateTreeHeight,
+	})
+	computed := api.Select(o.Present, stateNode, addressNode)
+	assertCredentialEqualWhen(api, active, computed, api.Select(o.Present, stateRoot, addressRoot))
+}
+
+// bind proves the credential columns and returns its address, SPP leaf and selected state root.
+func (c CredentialLeaf) bind(api frontend.API, active frontend.Variable, roots CredentialRoots) (address, leaf, root frontend.Variable) {
 	// 1. The statement ring and owner derive the same address as the sole Enroll output.
 	api.AssertIsBoolean(active)
-	address := CredentialAddress(api, roots.Owner, roots.RingID, c.Member)
+	address = CredentialAddress(api, roots.Owner, roots.RingID, c.Member)
 	// 2. Enroll writes one credential with the address as first nullifier and the SPP account seed.
 	seed := spp.DeriveOutputBlindingSeed(api, address, 1)
 	blinding := spp.DeriveOutputBlinding(api, address, seed, 0)
@@ -106,23 +161,20 @@ func (c CredentialLeaf) AssertInclusion(api frontend.API, active frontend.Variab
 	}
 	// 4. The selected root authenticates the same tree id that enters the SPP leaf hash.
 	treeID, root := roots.selectState(api, c.TreeSlot)
-	leaf := c.utxoHash(api, roots.Owner, treeID, c.Blinding, address)
-	assertCredentialPath(api, active, leaf, root, c.StateIndex, c.StatePath[:])
-	return address
+	return address, c.utxoHash(api, roots.Owner, treeID, c.Blinding, address), root
 }
 
-func (g AddressGap) AssertAbsent(api frontend.API, active, address, root frontend.Variable) {
-	// 1. The bound address root authenticates the low leaf and its successor.
+// orderedLeaf zeroes an inactive gap and orders an active one, the caller authenticates the returned leaf.
+func (g AddressGap) orderedLeaf(api frontend.API, active, address frontend.Variable) frontend.Variable {
 	api.AssertIsBoolean(active)
 	inactive := api.Sub(1, active)
 	assertCredentialEqualWhen(api, inactive, g.Low, 0)
 	assertCredentialEqualWhen(api, inactive, g.Next, 0)
-	leaf := gadget.IndexedLeafHash(api, g.Low, g.Next)
-	assertCredentialPath(api, active, leaf, root, g.Index, g.Path[:])
-	// 2. Strict canonical ordering excludes every address already present at that checkpoint.
+	// Strict canonical ordering excludes every address already present at the checkpoint.
 	abstractor.CallVoid(api, spp.AssertStrictlyOrdered{
 		Lo: api.Mul(active, g.Low), Mid: api.Select(active, address, 1), Hi: api.Select(active, g.Next, 2),
 	})
+	return gadget.IndexedLeafHash(api, g.Low, g.Next)
 }
 
 // Private writes use address inclusion before the program raises the absence floor.
@@ -151,16 +203,19 @@ func (r CredentialRoots) selectState(api frontend.API, index frontend.Variable) 
 }
 
 func assertCredentialPath(api frontend.API, active, leaf, root, index frontend.Variable, path []frontend.Variable) {
-	inactive := api.Sub(1, active)
-	assertCredentialEqualWhen(api, inactive, index, 0)
-	for _, sibling := range path {
-		assertCredentialEqualWhen(api, inactive, sibling, 0)
-	}
+	assertPathZeroWhen(api, api.Sub(1, active), index, path)
 	// Index decomposition covers the whole path and rejects an alias outside the tree capacity.
 	computed := abstractor.Call(api, gadget.MerkleRootGadget{
 		Hash: leaf, Index: api.ToBinary(index, len(path)), Path: path, Height: len(path),
 	})
 	assertCredentialEqualWhen(api, active, computed, root)
+}
+
+func assertPathZeroWhen(api frontend.API, inactive, index frontend.Variable, path []frontend.Variable) {
+	assertCredentialEqualWhen(api, inactive, index, 0)
+	for _, sibling := range path {
+		assertCredentialEqualWhen(api, inactive, sibling, 0)
+	}
 }
 
 func assertCredentialEqualWhen(api frontend.API, active, value, expected frontend.Variable) {

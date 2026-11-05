@@ -29,11 +29,7 @@ import (
 	"github.com/helius-labs/zolana/prover/server/circuits/crypto/lookup"
 )
 
-type CredentialOpening struct {
-	Present frontend.Variable
-	Leaf    registry.CredentialLeaf
-	Gap     registry.AddressGap
-}
+type CredentialOpening = registry.CredentialOpening
 
 type Credentials struct {
 	CredentialOwner frontend.Variable
@@ -92,12 +88,9 @@ func (c *Credentials) OpenCredentials(api frontend.API, ringID frontend.Variable
 	pool := CredentialPool{subjects: subjectPool{pooledTable{active: 1, table: lookup.New(api, 3)}}}
 	for i, opening := range c.Openings {
 		// 2. A live opening selects exactly one authenticated branch, while padding selects neither.
-		api.AssertIsBoolean(opening.Present)
 		member := opening.Leaf.Member
 		active := ringgadget.IsNonZero(api, member)
-		api.AssertIsEqual(api.Mul(api.Sub(1, active), opening.Present), 0)
-		address := opening.Leaf.AssertInclusion(api, opening.Present, roots)
-		opening.Gap.AssertAbsent(api, api.Sub(active, opening.Present), address, c.AddressRoot)
+		opening.Open(api, active, roots, c.AddressRoot)
 		// 3. One member has one answer throughout the proof, even before its address batch applies.
 		for _, earlier := range c.Openings[:i] {
 			api.AssertIsEqual(api.Mul(active, IsSame(api, member, earlier.Leaf.Member)), 0)

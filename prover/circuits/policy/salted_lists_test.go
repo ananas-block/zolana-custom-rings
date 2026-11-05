@@ -167,7 +167,7 @@ func TestPresentRowCannotSkipTheSaltedRead(t *testing.T) {
 		b := listed(t)
 		index := ringtest.AsBigInt(b.Circuit.OwnerEntries[0].Credential).Int64()
 		b.Circuit.Openings[index].Leaf.Member = big.NewInt(0x7712)
-		ringtest.RequireRefused(t, solveSalted(b), "registry.CredentialLeaf.AssertInclusion")
+		ringtest.RequireRefused(t, solveSalted(b), "registry.CredentialLeaf.bind")
 	})
 	t.Run("another owner's salted subject fails the key", func(t *testing.T) {
 		b := listed(t)

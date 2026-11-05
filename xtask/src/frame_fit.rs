@@ -158,6 +158,8 @@ struct Load {
     outsider_payer: bool,
     /// Own and curator roots precede the credential tree accounts.
     policy_roots: bool,
+    /// The ring names a curator, its registry joins the policy roots.
+    curator: bool,
     co_signer: bool,
     legs: Legs,
     priority_fee: bool,
@@ -179,6 +181,7 @@ const MIN: Load = Load {
     name: "min",
     outsider_payer: false,
     policy_roots: false,
+    curator: true,
     co_signer: false,
     legs: Legs::None,
     priority_fee: false,
@@ -414,7 +417,7 @@ impl Transfer {
             true => RootRead::Policy,
             false => RootRead::None,
         };
-        let config = ring_config();
+        let config = ring_config(load.curator);
         let anonymous_frame = rail.anonymous_frame();
 
         let proof = CustomRingProof {
@@ -613,6 +616,7 @@ impl Transfer {
             (false, FrameRail::Signer | FrameRail::SignerEntry | FrameRail::PublicOwners) => {
                 indexed(0xc0, 0)
             }
+            (false, FrameRail::InProof) if self.owners > 0 => indexed(0xc0, 0),
             (false, FrameRail::Delegate | FrameRail::AnonymousDelegate) => DELEGATE,
             _ => PAYER,
         };
@@ -790,11 +794,13 @@ impl Transfer {
     }
 }
 
-fn ring_config() -> Box<RingPolicy> {
+fn ring_config(curator: bool) -> Box<RingPolicy> {
     let mut config: Box<RingPolicy> = bytemuck::zeroed_box();
     config.auditor_pubkey[0] = 4;
     config.records = OWN;
-    config.sources[0].registry = CURATOR;
+    if curator {
+        config.sources[0].registry = CURATOR;
+    }
     config
 }
 
@@ -895,7 +901,7 @@ fn merge_fit(width: usize, authority: MergeRingAuthority) -> Result<Fit> {
         MergeRingAuthority::OwnerSigned => Vec::new(),
     };
     let mut metas = RingPrefix {
-        config: &ring_config(),
+        config: &ring_config(true),
         read: RootRead::merge(),
         credential_accounts: &credential_accounts,
         co_signer: false,
@@ -968,7 +974,7 @@ fn deposit_fit(width: usize, full: bool) -> Result<Fit> {
     };
     let credential_accounts = CredentialPlacement::Shared.accounts(&prefix.credential_read);
     let mut metas = RingPrefix {
-        config: &ring_config(),
+        config: &ring_config(true),
         read,
         credential_accounts: &credential_accounts,
         co_signer: full,
@@ -1440,6 +1446,45 @@ mod tests {
         .measure()
         .unwrap();
         assert!(matches!(unkeyed, TransferFit::Unkeyed));
+    }
+
+    /// Eleven co-owners sign the run and the in-proof owner signs inside SPP's proof, eight outputs and
+    /// thirty two withdrawals to distinct destinations, under an own salted list with no curator.
+    #[test]
+    fn the_widest_in_proof_spend_settles_buffered_at_the_address_ceiling() {
+        use super::*;
+
+        let transfer = Transfer {
+            frame: FrameRail::InProof,
+            shape: Shape::new(12, 8),
+            load: Load {
+                name: "salted own",
+                policy_roots: true,
+                curator: false,
+                legs: Legs::Sol,
+                ..MIN
+            },
+            owners: 11,
+            legs: MAX_INTERFACE_TRANSFERS,
+        };
+        let TransferFit::Measured(measured) = transfer.measure().unwrap() else {
+            panic!("the spend has no catalog key");
+        };
+        assert!(matches!(measured.credentials, CredentialFit::Supported));
+        assert!(matches!(measured.outcome(), Outcome::Buffered));
+        assert_eq!(measured.buffered.addresses, usize::from(MAX_ADDRESSES));
+        assert_eq!(measured.buffered.signatures, 11);
+        println!(
+            "inline {} B {} accounts, buffered {} B {} accounts {} signatures, frame {} B, SPP CPI {} B, writes {:?}",
+            measured.fit.bytes,
+            measured.fit.addresses,
+            measured.buffered.bytes,
+            measured.buffered.addresses,
+            measured.buffered.signatures,
+            measured.frame_len,
+            measured.spp_cpi_len,
+            measured.writes,
+        );
     }
 
     #[test]

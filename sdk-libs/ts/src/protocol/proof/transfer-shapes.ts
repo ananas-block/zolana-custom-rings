@@ -184,8 +184,9 @@ const SPP_ADDRESSES = 4;
 const RING_ADDRESSES = 6;
 /** Rust `MAX_TRANSACTION_ADDRESSES`, the v1 ceiling. */
 export const MAX_TRANSACTION_ADDRESSES = 64;
-/** Go `ownerAddresses`. */
-const OWNER_ADDRESSES = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - RING_ADDRESSES;
+/** Rust `RING_ADDRESSES`, the catalog reserves no credential tree account. */
+const CATALOG_RING_ADDRESSES = 5;
+const ROW_ADDRESSES = MAX_TRANSACTION_ADDRESSES - SPP_ADDRESSES - CATALOG_RING_ADDRESSES;
 
 /** What takes a v1 transaction's addresses beside its owner signers, Rust `TransferAddresses`. */
 export interface TransferAddresses {
@@ -229,10 +230,39 @@ function shapeHolds(entry: TransferShape, spend: TransferSpend): boolean {
   );
 }
 
-/** Go `publicOwners`. */
+/** Rust `RowAuthorization`. */
+interface RowAuthorization {
+  /** Rows outside the owner run, each takes its nullifier PDA alone. */
+  readonly unsignedRows: number;
+  /** Every withdrawal names one destination. */
+  readonly hiddenExit: boolean;
+  readonly enters: boolean;
+}
+
+const ROW_AUTHORIZATIONS: readonly RowAuthorization[] = Object.freeze([
+  { unsignedRows: 0, hiddenExit: false, enters: true },
+  { unsignedRows: 1, hiddenExit: false, enters: false },
+  { unsignedRows: 1, hiddenExit: true, enters: true },
+]);
+
+/** Rust `TransferAddresses::owner_rows` with no co-signer and shared credential trees. */
+function ownerRows(authorization: RowAuthorization, nInputs: number, legs: number): number {
+  return Math.max(0, ROW_ADDRESSES - nInputs - legs) + authorization.unsignedRows;
+}
+
+/** Rust `TransferShape::public_owners`, each row spends one note. */
 function publicOwners(circuit: TransferKeyCircuit): number {
-  const fit = Math.floor((OWNER_ADDRESSES - circuit.withdrawals) / 2);
-  return Math.min(circuit.owners, fit) + circuit.withdrawals;
+  let most = 0;
+  for (const authorization of ROW_AUTHORIZATIONS) {
+    if (circuit.entry && !authorization.enters) continue;
+    for (let legs = 0; legs <= circuit.withdrawals; legs += 1) {
+      let rows = circuit.owners;
+      while (rows > 0 && rows > ownerRows(authorization, rows, legs)) rows -= 1;
+      const legOwners = authorization.hiddenExit ? Math.min(legs, 1) : legs;
+      most = Math.max(most, rows + legOwners);
+    }
+  }
+  return most;
 }
 
 /** Withdrawal owners a wide key opens a credential for, Go `credentialWithdrawals`. */

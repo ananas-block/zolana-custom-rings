@@ -77,3 +77,4 @@ Fixed
 - `LocalRingKeys.destroy` left the list salt key usable, now it wipes that key too and every method needing a secret raises `KEYPAIR_INVALID_SECRET_KEY` afterward.
 - A restarted wallet could read its upload buffer as abandoned while a write or close it had sent could still land, now `closeAbandonedFrameBuffers` waits until each such write and close resolves.
 - A submission gave up on a proof refused for an address root below a salted source's floor, now it proves again after `absenceRootBelowFloor` as after a revoked root.
+- A salted transfer with an in-proof owner, eleven co-owners, eight outputs and thirty two withdrawals had no key, now `transferPoolCapacity` sizes `custom-ring-transfer-wide-8-in24-w32-s24` for one row outside the owner run → deploy this release's ring program, prover and keys together.
