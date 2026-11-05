@@ -492,7 +492,7 @@ fn the_entry_key_takes_an_owner_run() {
 fn an_owner_run_past_the_key_slots_is_refused() {
     let fixture = Fixture::new();
     let mut ring = Ring::new(Setup::AuditOnly);
-    let data = fixture.transfer(RingRail::Confidential, 1, 16, false);
+    let data = fixture.transfer(RingRail::Confidential, 1, 8, false);
     let owners: Vec<Keypair> = (0..6).map(|_| Keypair::new()).collect();
     let run: Vec<AccountMeta> = owners
         .iter()
