@@ -6,6 +6,7 @@ publish = false
 
 [features]
 proofs = ["spr-client/proofs"]
+solana-rpc = ["spr-client/solana-rpc"]
 
 [dependencies]
 async-trait = { workspace = true }

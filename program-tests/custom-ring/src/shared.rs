@@ -30,7 +30,7 @@ use spr_client::{
     compile_message,
     prover::{indexed::ProofDataSource, SERVER_ADDRESS},
     sign_transaction, AsyncProverClient, ClientError, ComputeBudgetConfig, IndexerRequirement,
-    ProverClient, ProverLaunch, Rpc, SolanaRpc, ZolanaIndexer,
+    ProverClient, ProverLaunch, Rpc, SolanaRpc, SprIndexer,
 };
 use spr_interface::{
     pda,
@@ -127,7 +127,7 @@ impl TestEnv {
             &self.payer.pubkey(),
             &self.standard_accounts.tree_vault,
             params,
-            default_tree_fees(params.input_queue_zkp_batch_size).expect("default tree fees"),
+            default_tree_fees(),
         )?;
         let syncs = smart_account::execute_sync_each(
             &self.standard_accounts.tree_settings,
@@ -166,7 +166,7 @@ impl TestEnv {
     pub fn client_with(&self, prover: impl Fn() -> AsyncProverClient) -> Zolana {
         ZolanaServices {
             rpc: SolanaRpc::new(self.rpc_url.clone()),
-            indexer: ZolanaIndexer::new(self.indexer_url.clone()),
+            indexer: SprIndexer::new(self.indexer_url.clone()),
             prover: prover(),
             ring_prover: prover(),
         }
@@ -608,7 +608,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
     let rpc_url = localnet_rpc_url();
     let indexer_url = localnet_indexer_url();
     let mut rpc = SolanaRpc::new(rpc_url.clone());
-    let indexer = ZolanaIndexer::new(indexer_url.clone());
+    let indexer = SprIndexer::new(indexer_url.clone());
 
     let authority = ProtocolSigners::new();
     let forester_authority = Keypair::new();
@@ -677,8 +677,7 @@ pub fn setup_with_extra_rings(extra_ring_programs: &[Address]) -> Result<TestEnv
         &payer.pubkey(),
         &accounts.tree_vault,
         nullifier_tree_params(),
-        default_tree_fees(nullifier_tree_params().input_queue_zkp_batch_size)
-            .expect("default tree fees"),
+        default_tree_fees(),
     )?;
     let create_tree_syncs = smart_account::execute_sync_each(
         &accounts.tree_settings,

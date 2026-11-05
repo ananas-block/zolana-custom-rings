@@ -73,6 +73,7 @@ fn merge_accounts_put_the_payer_and_the_ring_config_where_the_ring_reads_them() 
         output_tree: TREE,
         ring_program_id: RING,
         payer: PAYER,
+        owner: None,
         data: MergeTransactIxData {
             expiry_unix_ts: 0,
             proof: MergeProof {

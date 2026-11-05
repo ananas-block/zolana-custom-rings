@@ -22,7 +22,7 @@ use spr_interface::{
     pda, BPF_LOADER_UPGRADEABLE_ID,
 };
 use spr_keypair::X25519Keypair;
-use spr_program::instruction::MergeRingV2;
+use spr_program::instruction::MergeRing;
 use wincode::{config::DefaultConfig, SchemaRead};
 use zolana_ring_client::ReaderKey;
 use zolana_ring_policy::{
@@ -521,7 +521,7 @@ fn a_keyed_merge_names_its_tracking_registry_ahead_of_spp() {
         nullifier_tree_root_index: 0,
         cache_slot: None,
     };
-    let spp = MergeRingV2 {
+    let spp = MergeRing {
         input_tree,
         output_tree,
         ring_program_id: program(),
@@ -586,7 +586,7 @@ fn a_zero_key_merge_puts_its_signing_owner_on_spp_and_reads_the_authority_back()
             cache_slot: None,
         },
     };
-    let spp = MergeRingV2 {
+    let spp = MergeRing {
         input_tree,
         output_tree,
         ring_program_id: program(),

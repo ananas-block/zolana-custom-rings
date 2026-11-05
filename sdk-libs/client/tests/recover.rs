@@ -15,8 +15,7 @@ use spr_client::{
     GetShieldedTransactionsByTagsResponse, HistoryFilters, IndexerRpcConfig, PaginationToken,
 };
 use spr_event::{
-    encode_merge_output_data, merge_output::MERGE_OUTPUT_CIPHERTEXT_LEN, MergeCiphertextBinding,
-    MergeOutputDataRef,
+    encode_merge_output_data, merge_output::MERGE_OUTPUT_CIPHERTEXT_LEN, MergeOutputDataRef,
 };
 use spr_hasher::primitives::right_align;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
@@ -286,7 +285,6 @@ impl Fixture {
                     salt: &prepared.output_ciphertext_salt,
                     ciphertext: &prepared.output_ciphertext,
                     prefix: &[prepared.output_utxo.ring_data_hash.unwrap_or_default()],
-                    binding: MergeCiphertextBinding::Unverified,
                 }),
             }],
             messages: Vec::new(),
@@ -383,7 +381,6 @@ impl Fixture {
                     salt: &[3; 16],
                     ciphertext: &[[0xff; 32], [0; 32], [0; 32]],
                     prefix: &[ring_data_hash],
-                    binding: MergeCiphertextBinding::Unverified,
                 }),
             }],
             messages: Vec::new(),

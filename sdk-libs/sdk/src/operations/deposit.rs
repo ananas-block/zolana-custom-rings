@@ -33,6 +33,7 @@ use zolana_ring_keys::RingAddress;
 use zolana_ring_policy::Member;
 
 use crate::client::{RingClient, RingIndexerBackend};
+use crate::SignatureHistory;
 use crate::{
     co_signer::CoSignerChoice,
     pipeline::{
@@ -183,7 +184,7 @@ impl<'a> RingDeposit<'a> {
         self.batch().prepare_relay(rpc, quote).await
     }
 
-    pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
     ) -> Result<RingDepositReceipt, RingError> {
@@ -191,7 +192,7 @@ impl<'a> RingDeposit<'a> {
     }
 
     /// Sponsors transaction fees while the deposit source still authorizes its funds.
-    pub async fn send_with_fee_payer<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send_with_fee_payer<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
         fee_payer: &(dyn Signer + Sync),
@@ -251,7 +252,7 @@ impl<'a> RingDepositBatch<'a> {
         .expecting(ExpectedMessage::Sealed(terms)))
     }
 
-    pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
     ) -> Result<RingDepositBatchReceipt, RingError> {
@@ -259,7 +260,7 @@ impl<'a> RingDepositBatch<'a> {
     }
 
     /// Sponsors transaction fees while the deposit source still authorizes its funds.
-    pub async fn send_with_fee_payer<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send_with_fee_payer<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
         fee_payer: &(dyn Signer + Sync),

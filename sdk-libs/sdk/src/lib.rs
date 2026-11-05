@@ -40,6 +40,8 @@ mod relay_message;
 mod request;
 #[path = "operations/utxo_selection.rs"]
 mod select;
+#[path = "rpc/signature_history.rs"]
+mod signature_history;
 #[path = "operations/storage.rs"]
 mod storage;
 #[path = "operations/submission.rs"]
@@ -116,6 +118,7 @@ pub use crate::{
         RelayFunderTerms, RelayTransferTerms, SlotOpening, TokenAccountCreate, VerifiedMessage,
     },
     select::{select_merge_where, select_spend_where},
+    signature_history::SignatureHistory,
     storage::{
         tracking_apply_inputs, ApplyEnrollments, EnrollPending, InitializeStorage,
         PrivateStorageWrite, ProvenPrivateWrite, SaltedOwnerWrite, StorageApplyProof,

@@ -11,9 +11,7 @@ use solana_address::Address;
 use solana_instruction::Instruction;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
-use spr_client::{
-    AsyncProverClient, AsyncRpc, AsyncSolanaRpc, AsyncZolanaClient, AsyncZolanaIndexer,
-};
+use spr_client::{AsyncProverClient, AsyncRpc, AsyncSolanaRpc, AsyncSprClient, AsyncSprIndexer};
 use zolana_ring_client::AsyncRingIndexer;
 use zolana_ring_indexer::rpc::{
     GetStorageApplyProofInputsRequest, GetStorageApplyProofInputsResponse,
@@ -83,7 +81,7 @@ impl OpeningFetch for dyn StorageChain {
 
 pub struct LiveStorageChain {
     source: ChainSource,
-    client: RingClient<AsyncSolanaRpc, AsyncZolanaIndexer>,
+    client: RingClient<AsyncSolanaRpc, AsyncSprIndexer>,
     submit: SolanaChain,
 }
 
@@ -101,10 +99,10 @@ impl LiveStorageChain {
 pub fn live_ring_client(
     upstreams: Upstreams<'_>,
     prover_url: &str,
-) -> RingClient<AsyncSolanaRpc, AsyncZolanaIndexer> {
-    let zolana = AsyncZolanaClient::new(
+) -> RingClient<AsyncSolanaRpc, AsyncSprIndexer> {
+    let zolana = AsyncSprClient::new(
         AsyncSolanaRpc::new(upstreams.rpc_url),
-        AsyncZolanaIndexer::new(upstreams.indexer_url),
+        AsyncSprIndexer::new(upstreams.indexer_url),
         AsyncProverClient::new(prover_url.to_owned()),
     );
     RingClient::new(zolana, AsyncProverClient::new(prover_url.to_owned()))

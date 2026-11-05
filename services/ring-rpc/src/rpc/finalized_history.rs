@@ -24,7 +24,7 @@ use solana_rpc_client_api::{
 };
 use solana_signature::Signature;
 use spr_client::{
-    AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
+    AsyncRpc, AsyncSolanaRpc, AsyncSprIndexer, ClientError,
     GetShieldedTransactionsBySignatureResponse, GetShieldedTransactionsByTagsResponse,
     IndexedShieldedTransaction,
 };
@@ -69,7 +69,7 @@ pub(crate) struct FinalizedPage {
 
 pub(crate) struct FinalizedUpstreams<'a> {
     pub rpc: &'a AsyncSolanaRpc,
-    pub indexer: &'a AsyncZolanaIndexer,
+    pub indexer: &'a AsyncSprIndexer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1437,7 +1437,7 @@ mod tests {
         let handle = server.start(module);
         let url = format!("http://{address}");
         let rpc = AsyncSolanaRpc::new(&url);
-        let indexer = AsyncZolanaIndexer::new(&url);
+        let indexer = AsyncSprIndexer::new(&url);
         let page = FinalizedHistory::default()
             .page(
                 request(HistoryPosition::default()),

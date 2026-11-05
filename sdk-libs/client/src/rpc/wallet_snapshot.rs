@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 use solana_address::Address;
 use solana_signer::Signer;
-use spr_api::{ApiError, ZolanaApi};
+use spr_api::{ApiError, SprApi};
 use spr_indexer_api::{Base64String, RpcMethod};
 use thiserror::Error;
 
@@ -96,7 +96,7 @@ impl<'a> WalletSnapshot<'a> {
 
     pub async fn next_page(
         &mut self,
-        api: &ZolanaApi,
+        api: &SprApi,
     ) -> Result<Option<WalletSnapshotPage>, WalletSnapshotError> {
         if self.state.finished {
             self.close(api).await?;
@@ -115,7 +115,7 @@ impl<'a> WalletSnapshot<'a> {
         }
     }
 
-    pub async fn close(&mut self, api: &ZolanaApi) -> Result<(), WalletSnapshotError> {
+    pub async fn close(&mut self, api: &SprApi) -> Result<(), WalletSnapshotError> {
         self.state.finished = true;
         let Some(cursor) = self.state.release_cursor.clone() else {
             return Ok(());
@@ -152,7 +152,7 @@ impl<'a> WalletSnapshot<'a> {
 
     pub async fn visit(
         &mut self,
-        api: &ZolanaApi,
+        api: &SprApi,
         mut visitor: impl FnMut(WalletSnapshotPage) -> Result<ControlFlow<()>, WalletSnapshotError>,
     ) -> Result<(), WalletSnapshotError> {
         while let Some(page) = self.next_page(api).await? {
@@ -165,7 +165,7 @@ impl<'a> WalletSnapshot<'a> {
         Ok(())
     }
 
-    async fn read_page(&self, api: &ZolanaApi) -> Result<WalletSnapshotPage, WalletSnapshotError> {
+    async fn read_page(&self, api: &SprApi) -> Result<WalletSnapshotPage, WalletSnapshotError> {
         Ok(match &self.reader {
             SnapshotReader::Wallet(scope) => {
                 let mut request = WalletStatusRequest::new(scope.target, scope.wallet);
@@ -191,7 +191,7 @@ impl<'a> WalletSnapshot<'a> {
 
     async fn close_after_error(
         &mut self,
-        api: &ZolanaApi,
+        api: &SprApi,
         error: WalletSnapshotError,
     ) -> WalletSnapshotError {
         match self.close(api).await {
@@ -423,7 +423,7 @@ mod tests {
             json!(page(None)),
             json!(true),
         ]);
-        let api = ZolanaApi::with_client("http://ring", http.clone());
+        let api = SprApi::with_client("http://ring", http.clone());
         let signer = Keypair::new();
         let mut snapshot = WalletSnapshot::new_wallet(WalletSnapshotScope {
             target: target(),
@@ -447,7 +447,7 @@ mod tests {
     #[tokio::test]
     async fn visitor_stop_releases_without_reading_another_page() {
         let http = Canned::new(vec![json!(page(Some(cursor(1)))), json!(true)]);
-        let api = ZolanaApi::with_client("http://ring", http.clone());
+        let api = SprApi::with_client("http://ring", http.clone());
         let signer = Keypair::new();
         let mut snapshot = WalletSnapshot::new_delegate(DelegateSnapshotScope {
             target: target(),
@@ -477,7 +477,7 @@ mod tests {
             json!(changed),
             json!(true),
         ]);
-        let api = ZolanaApi::with_client("http://ring", http.clone());
+        let api = SprApi::with_client("http://ring", http.clone());
         let signer = Keypair::new();
         let mut snapshot = WalletSnapshot::new_wallet(WalletSnapshotScope {
             target: target(),
@@ -502,7 +502,7 @@ mod tests {
             ..page(None)
         };
         let http = Canned::new(vec![json!(single)]);
-        let api = ZolanaApi::with_client("http://ring", http.clone());
+        let api = SprApi::with_client("http://ring", http.clone());
         let signer = Keypair::new();
         let mut snapshot = WalletSnapshot::new_wallet(WalletSnapshotScope {
             target: target(),

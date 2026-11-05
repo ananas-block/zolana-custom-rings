@@ -13,9 +13,9 @@ use solana_commitment_config::CommitmentConfig;
 use solana_loader_v3_interface::get_program_data_address;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient as NonblockingRpcClient;
 use solana_signature::Signature;
-use spr_api::ZolanaApi;
+use spr_api::SprApi;
 use spr_client::{
-    rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncZolanaIndexer, ClientError,
+    rpc::ProgramAccountsFilter, AsyncRpc, AsyncSolanaRpc, AsyncSprIndexer, ClientError,
     GetShieldedTransactionsByTagsResponse, IndexerRpcConfig, RingHistoryOptions,
 };
 use spr_interface::{
@@ -304,7 +304,7 @@ pub struct Upstreams<'a> {
 
 pub struct ChainSource {
     history: FinalizedHistory,
-    indexer: AsyncZolanaIndexer,
+    indexer: AsyncSprIndexer,
     rpc: AsyncSolanaRpc,
 }
 
@@ -385,10 +385,7 @@ impl ChainSource {
             .map_err(|error| ClientError::Rpc(format!("http client: {error}")))?;
         Ok(Self {
             history: FinalizedHistory::default(),
-            indexer: AsyncZolanaIndexer::with_api(ZolanaApi::with_client(
-                upstreams.indexer_url,
-                http,
-            )),
+            indexer: AsyncSprIndexer::with_api(SprApi::with_client(upstreams.indexer_url, http)),
             rpc: AsyncSolanaRpc::with_client(
                 NonblockingRpcClient::new_with_timeout_and_commitment(
                     upstreams.rpc_url.to_owned(),

@@ -2142,7 +2142,6 @@ fn publish_merge(
                 salt: &salt,
                 ciphertext: &ciphertext,
                 prefix: &[[0; 32]],
-                binding: spr_event::MergeCiphertextBinding::Unverified,
             }),
         }],
         messages: Vec::new(),
@@ -2195,7 +2194,6 @@ fn publish_owner_merge(
                 salt: &salt,
                 ciphertext: &ciphertext,
                 prefix: &[[0; 32]],
-                binding: spr_event::MergeCiphertextBinding::Proven,
             }),
         }],
         messages: Vec::new(),
@@ -2660,7 +2658,6 @@ async fn keyed_unknown_mint_merge_promotes_without_history_replay() {
             salt: &salt,
             ciphertext: &ciphertext,
             prefix: &[[0; 32]],
-            binding: spr_event::MergeCiphertextBinding::Unverified,
         });
     }
     let mut wallet = AnonymousWallet::new(fresh(&bob));

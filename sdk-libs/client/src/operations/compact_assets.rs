@@ -65,8 +65,7 @@ impl<'a, R: AsyncRpc + ?Sized> CompactAssetRead<'a, R> {
         {
             return Err(CompactAssetError::InvalidCounter);
         }
-        let counter = SplAssetCounter::from_account_bytes(&account.data)
-            .map_err(|_| CompactAssetError::InvalidCounter)?;
+        let counter = asset_counter(&account.data).ok_or(CompactAssetError::InvalidCounter)?;
         Ok(CompactAssetResolver {
             client: self.client,
             target_slot: self.target_slot,
@@ -137,6 +136,13 @@ impl<R: AsyncRpc + ?Sized> CompactAssetResolver<'_, R> {
     pub fn remaining_lookups(&self) -> usize {
         self.remaining
     }
+}
+
+/// The exact counter layout under its discriminator, a `next_id` below the first SPL id is corrupt.
+fn asset_counter(data: &[u8]) -> Option<SplAssetCounter> {
+    let counter: SplAssetCounter = bytemuck::try_pod_read_unaligned(data).ok()?;
+    counter.check_discriminator().ok()?;
+    (counter.next_id >= SplAssetCounter::FIRST_ASSET_ID).then_some(counter)
 }
 
 #[cfg(test)]

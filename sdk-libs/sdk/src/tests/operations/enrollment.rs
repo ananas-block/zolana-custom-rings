@@ -8,7 +8,7 @@ use custom_ring_interface::{
 use solana_account::Account;
 use solana_message::Hash;
 use solana_transaction_status_client_types::{TransactionConfirmationStatus, TransactionStatus};
-use spr_client::{AsyncProverClient, AsyncZolanaClient, ClientError};
+use spr_client::{AsyncProverClient, AsyncSprClient, ClientError};
 use spr_keypair::ShieldedKeypair;
 
 use super::*;
@@ -132,7 +132,7 @@ impl Ledger {
     fn client(&self) -> RingClient<Ledger, Chain> {
         let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
         RingClient::new(
-            AsyncZolanaClient::new(self.clone(), chain, AsyncProverClient::local()),
+            AsyncSprClient::new(self.clone(), chain, AsyncProverClient::local()),
             AsyncProverClient::local(),
         )
     }
@@ -188,13 +188,6 @@ impl AsyncRpc for Ledger {
             .collect())
     }
 
-    async fn get_signature_statuses_with_history(
-        &self,
-        signatures: Vec<Signature>,
-    ) -> Result<Vec<Option<TransactionStatus>>, ClientError> {
-        self.get_signature_statuses(signatures).await
-    }
-
     async fn send_transaction_with_config(
         &self,
         transaction: &VersionedTransaction,
@@ -206,6 +199,16 @@ impl AsyncRpc for Ledger {
             true => Err(ClientError::UnsupportedRpcMethod("transport")),
             false => Ok(transaction.signatures[0]),
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl SignatureHistory for Ledger {
+    async fn signature_statuses_with_history(
+        &self,
+        signatures: Vec<Signature>,
+    ) -> Result<Vec<Option<TransactionStatus>>, ClientError> {
+        self.get_signature_statuses(signatures).await
     }
 }
 

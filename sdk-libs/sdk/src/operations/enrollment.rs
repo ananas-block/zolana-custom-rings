@@ -45,6 +45,7 @@ use zolana_ring_client::{
 };
 
 use crate::client::{RingClient, RingIndexerBackend};
+use crate::SignatureHistory;
 use crate::{
     prover::{to_instruction_proof, RingRequest},
     relay_message::{ExpectedEnroll, ExpectedMessage},
@@ -366,7 +367,7 @@ impl EnrollmentAttempt {
     }
 
     /// An RPC failure is an error, never an expiry.
-    pub async fn reconcile<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn reconcile<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &self,
         client: &RingClient<R, I>,
     ) -> Result<EnrollmentOutcome, RingError> {
@@ -401,7 +402,7 @@ impl EnrollmentAttempt {
         })
     }
 
-    pub async fn resubmit<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn resubmit<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         self,
         client: &RingClient<R, I>,
         signers: &[&(dyn Signer + Sync)],

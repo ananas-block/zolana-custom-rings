@@ -16,7 +16,6 @@ solana-rpc = [
 ]
 rpc = [
     "dep:base64",
-    "dep:bytemuck",
     "dep:rand",
     "dep:solana-signer",
     "dep:spr-instruction",
@@ -28,7 +27,7 @@ rpc = [
 [dependencies]
 async-trait = { workspace = true }
 base64 = { workspace = true, optional = true }
-bytemuck = { workspace = true, optional = true }
+bytemuck = { workspace = true }
 p256 = { workspace = true }
 hex = { workspace = true }
 custom-ring-interface = { workspace = true }

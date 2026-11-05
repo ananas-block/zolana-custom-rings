@@ -13,10 +13,10 @@ use serde::Deserialize;
 use solana_bn254::compression::prelude::alt_bn128_g2_compress_be;
 use spr_interface::instruction::{
     instruction_data::{
-        merge_ring::{MergeRingAuthority, MergeRingV2IxData, MergeRingV2IxDataRef},
+        merge_ring::{MergeRingAuthority, MergeRingIxData, MergeRingIxDataRef},
         merge_transact::{MergeOutputEncryption, MergeProof, MergeTransactIxData},
     },
-    tag::RING_MERGE_V2,
+    tag::RING_MERGE_TRANSACT,
 };
 
 const FRAME_VECTOR: &str = concat!(
@@ -108,24 +108,24 @@ fn the_view_rebuilds_the_exact_spp_body_from_the_compressed_point() {
     }
 }
 
-/// The forwarded bytes are SPP's own `merge_ring_v2` data, a wrong authority tag would move every later field.
+/// The forwarded bytes are SPP's own `merge_ring` data, a wrong authority tag would move every later field.
 #[test]
-fn the_forward_parses_as_merge_ring_v2() {
+fn the_forward_parses_as_merge_ring() {
     for authority in [MergeRingAuthority::Ring, MergeRingAuthority::OwnerSigned] {
         let request = request(authority);
         let bytes = request.serialize().unwrap();
         let view = CustomRingMergeIxDataRef::from_bytes(&bytes).unwrap();
         let forwarded = view.forwarded(&view.spp_merge_body().unwrap());
-        assert_eq!(forwarded[0], RING_MERGE_V2);
+        assert_eq!(forwarded[0], RING_MERGE_TRANSACT);
         assert_eq!(
-            MergeRingV2IxData::deserialize(&forwarded[1..]).unwrap(),
-            MergeRingV2IxData {
+            MergeRingIxData::deserialize(&forwarded[1..]).unwrap(),
+            MergeRingIxData {
                 output_ring_data_hash: request.output_ring_data_hash,
                 authority,
                 merge: request.merge.clone(),
             }
         );
-        MergeRingV2IxDataRef::from_bytes(&forwarded[1..]).unwrap();
+        MergeRingIxDataRef::from_bytes(&forwarded[1..]).unwrap();
     }
 }
 

@@ -15,9 +15,7 @@ use spr_client::{
     GetShieldedTransactionsByTagsResponse, HistoryFilters, OutputContext, OutputSlot,
     PaginationToken, RingHistoryOptions, ShieldedTransaction, TransactionOutputs, WitnessReader,
 };
-use spr_event::{
-    encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef, MessageData,
-};
+use spr_event::{encode_merge_output_data, MergeOutputDataRef, MessageData};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{viewing_key::ViewTag, ShieldedAddress, ShieldedKeypair};
 use spr_transaction::{
@@ -511,7 +509,6 @@ fn publish_owner_merge(ledger: &mut Ledger, owner: &ShieldedKeypair, first: [u8;
                 salt: &salt,
                 ciphertext: &ciphertext,
                 prefix: &[[0; 32]],
-                binding: MergeCiphertextBinding::Proven,
             }),
         }],
         messages: Vec::new(),

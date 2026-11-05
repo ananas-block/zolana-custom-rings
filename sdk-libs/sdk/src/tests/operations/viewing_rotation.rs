@@ -8,7 +8,7 @@ use custom_ring_interface::{
 use solana_account::Account;
 use solana_message::Hash;
 use solana_transaction::versioned::VersionedTransaction;
-use spr_client::{AsyncProverClient, AsyncZolanaClient, ClientError};
+use spr_client::{AsyncProverClient, AsyncSprClient, ClientError};
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, ViewingKey};
 use zolana_ring_client::ViewingRotation;
@@ -93,7 +93,7 @@ async fn a_rotated_key_resolves_for_a_sender_and_a_repeat_sends_nothing() {
         sent: Arc::clone(&sent),
     };
     let client = RingClient::new(
-        AsyncZolanaClient::new(ledger, chain, AsyncProverClient::local()),
+        AsyncSprClient::new(ledger, chain, AsyncProverClient::local()),
         AsyncProverClient::local(),
     );
     let start = ViewingRotation {

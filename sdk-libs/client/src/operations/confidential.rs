@@ -494,7 +494,7 @@ mod tests {
         ClientError, GetShieldedTransactionsByTagsResponse, OutputContext, OutputSlot,
         PaginationToken, RingHistoryOptions, TransactionEvents,
     };
-    use spr_event::{encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef};
+    use spr_event::{encode_merge_output_data, MergeOutputDataRef};
     use spr_interface::ZERO_NULLIFIER_PUBKEY;
     use spr_keypair::{
         viewing_key::ViewTag, KeypairError, NullifierKey, ShieldedKeypair, SigningKey, ViewingKey,
@@ -785,7 +785,6 @@ mod tests {
             salt: &salt,
             ciphertext: &ciphertext,
             prefix: &[published],
-            binding: MergeCiphertextBinding::Proven,
         })
     }
 
@@ -796,7 +795,7 @@ mod tests {
     }
 
     impl ProvenMerge {
-        /// The row of `merge_ring_v2` under `owner`'s nonzero key and the utxo hash it commits.
+        /// The row of `merge_ring` under `owner`'s nonzero key and the utxo hash it commits.
         fn row(self, owner: &ShieldedKeypair, first: [u8; 32]) -> ([u8; 32], ShieldedTransaction) {
             self.row_under(owner, first, Mint::SOL)
         }
@@ -1167,7 +1166,7 @@ mod tests {
         assert!(matches!(refused, Err(AnonymousError::HeldKeyNotInHistory)));
     }
 
-    /// `merge_ring_v2` under a nonzero key, the proven encoding and its first nullifier tag.
+    /// `merge_ring` under a nonzero key, the proven encoding and its first nullifier tag.
     #[test]
     fn a_proven_ring_merge_opens_under_the_nullifier_secret() {
         let (hash, opened) = ProvenMerge {

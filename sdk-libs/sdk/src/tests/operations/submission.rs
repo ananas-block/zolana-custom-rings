@@ -4,7 +4,7 @@ use custom_ring_interface::{tag, RingMode};
 use solana_account::Account;
 use solana_instruction::AccountMeta;
 use solana_message::Hash;
-use spr_client::{AsyncProverClient, AsyncZolanaClient};
+use spr_client::{AsyncProverClient, AsyncSprClient};
 use spr_keypair::ShieldedKeypair;
 
 use super::*;
@@ -65,6 +65,18 @@ impl AsyncRpc for StatusRefused {
     }
 }
 
+#[async_trait::async_trait]
+impl SignatureHistory for StatusRefused {
+    async fn signature_statuses_with_history(
+        &self,
+        _: Vec<Signature>,
+    ) -> Result<Vec<Option<TransactionStatus>>, spr_client::ClientError> {
+        Err(spr_client::ClientError::UnsupportedRpcMethod(
+            "get_signature_statuses_with_history",
+        ))
+    }
+}
+
 #[tokio::test]
 async fn a_refused_status_lookup_keeps_polling_until_the_blockhash_expires() {
     let rpc = StatusRefused { block_height: 10 };
@@ -93,8 +105,11 @@ impl AsyncRpc for LandedPastTheCache {
     ) -> Result<Vec<Option<TransactionStatus>>, spr_client::ClientError> {
         Ok(vec![None; signatures.len()])
     }
+}
 
-    async fn get_signature_statuses_with_history(
+#[async_trait::async_trait]
+impl SignatureHistory for LandedPastTheCache {
+    async fn signature_statuses_with_history(
         &self,
         signatures: Vec<Signature>,
     ) -> Result<Vec<Option<TransactionStatus>>, spr_client::ClientError> {
@@ -217,13 +232,6 @@ impl AsyncRpc for Cluster {
         Ok(VALID_UNTIL + u64::from(state.expired))
     }
 
-    async fn get_signature_statuses_with_history(
-        &self,
-        signatures: Vec<Signature>,
-    ) -> Result<Vec<Option<TransactionStatus>>, ClientError> {
-        self.get_signature_statuses(signatures).await
-    }
-
     async fn get_signature_statuses(
         &self,
         signatures: Vec<Signature>,
@@ -268,10 +276,20 @@ impl AsyncRpc for Cluster {
     }
 }
 
+#[async_trait::async_trait]
+impl SignatureHistory for Cluster {
+    async fn signature_statuses_with_history(
+        &self,
+        signatures: Vec<Signature>,
+    ) -> Result<Vec<Option<TransactionStatus>>, ClientError> {
+        self.get_signature_statuses(signatures).await
+    }
+}
+
 fn client(cluster: &Cluster) -> RingClient<Cluster, Chain> {
     let chain = Chain::ring(RingSettings::new(RingMode::Confidential));
     RingClient::new(
-        AsyncZolanaClient::new(cluster.clone(), chain, AsyncProverClient::local()),
+        AsyncSprClient::new(cluster.clone(), chain, AsyncProverClient::local()),
         AsyncProverClient::local(),
     )
 }

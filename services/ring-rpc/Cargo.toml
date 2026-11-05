@@ -18,7 +18,7 @@ path = "src/main.rs"
 aes-gcm = { workspace = true }
 async-trait = { workspace = true }
 custom-ring-interface = { workspace = true }
-custom-ring-sdk = { workspace = true }
+custom-ring-sdk = { workspace = true, features = ["solana-rpc"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 hex = { workspace = true }

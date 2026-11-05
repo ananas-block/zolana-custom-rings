@@ -232,9 +232,7 @@ pub fn ring_event_origin_in(
         .iter()
         .any(|instruction| core::ptr::eq(*instruction, source));
     let kind = match source.data[0] {
-        tag::MERGE_TRANSACT | tag::RING_MERGE_TRANSACT | tag::RING_MERGE_V2 => {
-            ConfirmedEventKind::Merge
-        }
+        tag::MERGE_TRANSACT | tag::RING_MERGE_TRANSACT => ConfirmedEventKind::Merge,
         _ => ConfirmedEventKind::Transfer,
     };
     let event = reconstruct_general_event(source, &emitted.data)
@@ -347,7 +345,7 @@ fn confirmed_merge_disclosure(
         return None;
     }
     let (&caller_tag, request) = caller.data.split_first()?;
-    if (*source.data.first()?, caller_tag) != (tag::RING_MERGE_V2, ring_tag::MERGE) {
+    if (*source.data.first()?, caller_tag) != (tag::RING_MERGE_TRANSACT, ring_tag::MERGE) {
         return None;
     }
     let request = CustomRingMergeIxDataRef::from_bytes(request).ok()?;
@@ -424,7 +422,6 @@ fn trusted_event_sources(
                                 | tag::RING_AUTHORITY_TRANSACT
                                 | tag::MERGE_TRANSACT
                                 | tag::RING_MERGE_TRANSACT
-                                | tag::RING_MERGE_V2
                         )
                     }))
                 .then_some((parent, instruction))

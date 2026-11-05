@@ -14,7 +14,7 @@ use spr_hasher::{
 };
 use spr_interface::instruction::{
     instruction_data::{merge_ring::MergeRingAuthority, merge_transact::MergeTransactIxData},
-    tag::RING_MERGE_V2,
+    tag::RING_MERGE_TRANSACT,
 };
 use wincode::{SchemaRead, SchemaWrite};
 
@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub const MERGE_PUBLIC_INPUT_ELEMENTS: usize = 12;
-/// The owner's slot in an SPP `merge_ring_v2` account list under `OwnerSigned`, past `ring_config`, payer and the two programs.
+/// The owner's slot in an SPP `merge_ring` account list under `OwnerSigned`, past `ring_config`, payer and the two programs.
 pub const RING_MERGE_OWNER_INDEX: usize = 6;
 /// `expiry_unix_ts u64 || proof.a` open the SPP merge body ahead of `proof.b`.
 const MERGE_B_OFFSET: usize = core::mem::size_of::<u64>() + 32;
@@ -113,10 +113,10 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
         self.body.decompressed()
     }
 
-    /// `merge_ring_v2` data over `spp_body`.
+    /// `merge_ring` data over `spp_body`.
     pub fn forwarded(&self, spp_body: &[u8]) -> Vec<u8> {
         [
-            &[RING_MERGE_V2][..],
+            &[RING_MERGE_TRANSACT][..],
             self.output_ring_data_hash,
             &[authority_byte(self.authority)],
             spp_body,
@@ -125,7 +125,7 @@ impl<'a> CustomRingMergeIxDataRef<'a> {
     }
 }
 
-/// The wincode tag SPP's `MergeRingV2IxData` reads.
+/// The wincode tag SPP's `MergeRingIxData` reads.
 const fn authority_byte(authority: MergeRingAuthority) -> u8 {
     match authority {
         MergeRingAuthority::Ring => 0,

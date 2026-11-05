@@ -7258,7 +7258,7 @@ dependencies = [
 
 [[package]]
 name = "spr-account-checks"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "solana-account-view 2.0.0",
  "solana-address 2.6.1",
@@ -7268,7 +7268,7 @@ dependencies = [
 
 [[package]]
 name = "spr-api"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "http",
  "reqwest",
@@ -7282,7 +7282,7 @@ dependencies = [
 
 [[package]]
 name = "spr-client"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -7334,7 +7334,7 @@ dependencies = [
 
 [[package]]
 name = "spr-event"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "wincode",
@@ -7342,7 +7342,7 @@ dependencies = [
 
 [[package]]
 name = "spr-event-parser"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "solana-pubkey 4.2.1",
@@ -7352,7 +7352,7 @@ dependencies = [
 
 [[package]]
 name = "spr-hasher"
-version = "0.1.1"
+version = "0.8.0"
 dependencies = [
  "ark-bn254 0.6.0",
  "ark-ff 0.6.0",
@@ -7366,7 +7366,7 @@ dependencies = [
 
 [[package]]
 name = "spr-indexer-api"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -7378,7 +7378,7 @@ dependencies = [
 
 [[package]]
 name = "spr-instruction"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "pinocchio 0.11.2",
  "solana-address 2.6.1",
@@ -7392,7 +7392,7 @@ dependencies = [
 
 [[package]]
 name = "spr-interface"
-version = "0.1.1"
+version = "0.8.0"
 dependencies = [
  "arrayvec",
  "borsh",
@@ -7410,7 +7410,7 @@ dependencies = [
 
 [[package]]
 name = "spr-keypair"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "aes",
  "bs58",
@@ -7434,7 +7434,7 @@ dependencies = [
 
 [[package]]
 name = "spr-merkle-tree"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "num-bigint 0.4.8",
  "num-traits",
@@ -7444,7 +7444,7 @@ dependencies = [
 
 [[package]]
 name = "spr-program"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "solana-address 2.6.1",
  "spr-hasher",
@@ -7456,7 +7456,7 @@ dependencies = [
 
 [[package]]
 name = "spr-program-test"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "litesvm",
@@ -7490,7 +7490,7 @@ dependencies = [
 
 [[package]]
 name = "spr-protocol-instructions"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "solana-address 2.6.1",
  "solana-instruction",
@@ -7501,7 +7501,7 @@ dependencies = [
 
 [[package]]
 name = "spr-prover-tee"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "aes-gcm",
  "ciborium",
@@ -7536,7 +7536,7 @@ dependencies = [
 
 [[package]]
 name = "spr-smart-account-client"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "solana-instruction",
@@ -7586,7 +7586,7 @@ dependencies = [
 
 [[package]]
 name = "spr-transaction"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "num-bigint 0.4.8",
@@ -7605,7 +7605,7 @@ dependencies = [
 
 [[package]]
 name = "spr-tree"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "bytemuck",
@@ -7619,7 +7619,7 @@ dependencies = [
 
 [[package]]
 name = "spr-user-registry-interface"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "borsh",
  "solana-instruction",
@@ -7628,8 +7628,9 @@ dependencies = [
 
 [[package]]
 name = "spr-zk-dsl"
-version = "0.1.0"
-source = "git+https://github.com/helius-labs/zk-tools?rev=a4ebd1699ffa04545e3739f16a51e764992d07d6#a4ebd1699ffa04545e3739f16a51e764992d07d6"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c2b7827bc52b59c75dffdbe689b67821dac31817128017858d9e3f816167599"
 dependencies = [
  "getrandom 0.2.17",
  "solana-address 2.6.1",

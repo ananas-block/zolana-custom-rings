@@ -1,4 +1,4 @@
-//! Verifies a ring merge and forwards it to SPP's `merge_ring_v2`.
+//! Verifies a ring merge and forwards it to SPP's `merge_ring`.
 //!
 //! SPP's proof ties every input to one owner, asset and sum, and SPP publishes no auditor message for a
 //! merge. The auditor reads the record from the confirmed ring instruction, and the ring statement alone binds those bytes.

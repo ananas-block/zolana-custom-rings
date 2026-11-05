@@ -28,7 +28,7 @@ use crate::{
     address_ceiling::{FitSigners, TransactionFit},
     heap::boxed,
     AnonymousTransfer, CustomRing, CustomRingTransfer, DelegateTransfer, PreparedRingDeposit,
-    PublicOwnerTransfer, RingError, RingMergeOperation,
+    PublicOwnerTransfer, RingError, RingMergeOperation, SignatureHistory,
 };
 
 #[cfg(test)]
@@ -371,7 +371,7 @@ impl<'a> RingSubmission<'a> {
     }
 
     /// Inputs stay reserved while the sent signature is unresolved.
-    pub async fn send<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &mut self,
         client: &RingClient<R, I>,
         payer: &(dyn Signer + Sync),
@@ -458,7 +458,7 @@ impl<'a> RingSubmission<'a> {
         }
     }
 
-    pub async fn send_until_settled<R: AsyncRpc, I: RingIndexerBackend>(
+    pub async fn send_until_settled<R: AsyncRpc + SignatureHistory, I: RingIndexerBackend>(
         &mut self,
         client: &RingClient<R, I>,
         payer: &(dyn Signer + Sync),
@@ -679,7 +679,7 @@ impl RingOperation<'_> {
 
 /// Past expiry only the ledger's absent answer releases the attempt and a failed lookup surfaces.
 pub(crate) async fn outcome(
-    client: &(impl AsyncRpc + ?Sized),
+    client: &(impl AsyncRpc + SignatureHistory + ?Sized),
     signature: Signature,
     last_valid_block_height: u64,
 ) -> Result<Outcome, RingError> {
@@ -692,7 +692,7 @@ pub(crate) async fn outcome(
     // A signature that landed between the lookups or left the status cache reads absent above. A
     // release on that answer rebuilds the operation and debits a deposit's funder a second time.
     let statuses = client
-        .get_signature_statuses_with_history(vec![signature])
+        .signature_statuses_with_history(vec![signature])
         .await?;
     Ok(decode_status(statuses).unwrap_or(Outcome::Failed(TransactionError::BlockhashNotFound)))
 }

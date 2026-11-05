@@ -229,6 +229,10 @@ pub enum RingError {
     MergeTooWide { width: usize },
     #[error("a zero-key merge names its owner as a shielded address under the zero key")]
     MergeOwnerKey,
+    #[error("the pinned SPP client builds no zero-key ring merge witness")]
+    ZeroKeyMergeUnavailable,
+    #[error("the pinned SPP client proves no delegate exit until the exit keys are pinned")]
+    ExitProofUnavailable,
     #[error("a deposit to an anonymous ring pays a ring address")]
     AnonymousDepositUntagged,
     #[error("the ring is not anonymous, its owners sign in public")]

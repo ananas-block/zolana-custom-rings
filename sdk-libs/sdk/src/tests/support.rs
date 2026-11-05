@@ -17,7 +17,7 @@ use custom_ring_interface::{
 use solana_account::Account;
 use solana_address::Address;
 use spr_client::{
-    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncWitnessReader, AsyncZolanaClient,
+    rpc::STATE_TREE_HEIGHT, AsyncProverClient, AsyncRpc, AsyncSprClient, AsyncWitnessReader,
     ClientError, Context, GetMerkleProofsResponse, IndexerRpcConfig, InputWitnesses, MerkleContext,
     MerkleProof, ProofDataSource,
 };
@@ -204,7 +204,7 @@ fn tree_account(tree: PoolTree) -> Account {
         tree.address.to_bytes(),
         tree.id,
         params,
-        default_tree_fees(params.input_queue_zkp_batch_size).unwrap(),
+        default_tree_fees(),
     )
     .unwrap();
     Account {
@@ -442,10 +442,7 @@ impl Chain {
 
     fn client_on(self, source: ProofDataSource) -> RingClient<Chain, Chain> {
         let prover = || AsyncProverClient::local().with_proof_data_source(source);
-        RingClient::new(
-            AsyncZolanaClient::new(self.clone(), self, prover()),
-            prover(),
-        )
+        RingClient::new(AsyncSprClient::new(self.clone(), self, prover()), prover())
     }
 }
 

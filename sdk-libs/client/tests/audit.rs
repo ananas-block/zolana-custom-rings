@@ -23,9 +23,7 @@ use spr_client::{
     AsyncRpc, Context, GetShieldedTransactionsByTagsResponse, HistoryFilters, IndexerRpcConfig,
     PaginationToken, ShieldedTransaction,
 };
-use spr_event::{
-    encode_merge_output_data, MergeCiphertextBinding, MergeOutputDataRef, MessageData,
-};
+use spr_event::{encode_merge_output_data, MergeOutputDataRef, MessageData};
 use spr_hasher::primitives::hash_bytes;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{ViewingKey, X25519Keypair, X25519Pubkey};
@@ -553,7 +551,6 @@ fn merged(transfer: &Transfer, spend: &Spend) -> Confirmed {
         salt: &[0x4d; 16],
         ciphertext: &[field(0x73); 3],
         prefix: &[[0; 32]],
-        binding: MergeCiphertextBinding::Proven,
     });
     let transaction = created_transaction(transfer, hash, payload, vec![first_nullifier]);
     Confirmed {

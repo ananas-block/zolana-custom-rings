@@ -986,7 +986,7 @@ fn check_event_wire_fixture(name: &str, group: InstructionGroup, mut indexed: Sh
 fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
     use spr_event::{encode_event_instruction, EventKind, InputTreeSequence, MergeEvent};
     use spr_interface::instruction::instruction_data::{
-        merge_ring::MergeRingIxData,
+        merge_ring::{MergeRingAuthority, MergeRingIxData},
         merge_transact::{MergeOutputEncryption, MergeProof, MergeTransactIxData},
     };
     let (mut group, mut indexed) = confirmed_transfer_fixture();
@@ -1000,10 +1000,10 @@ fn confirmed_merge_fixture() -> (InstructionGroup, ShieldedTransaction) {
             salt: &[7; 16],
             ciphertext: &[[0; 32]; 3],
             prefix: &[[13; 32]],
-            binding: spr_event::MergeCiphertextBinding::Unverified,
         });
     let data = MergeRingIxData {
         output_ring_data_hash: [13; 32],
+        authority: MergeRingAuthority::Ring,
         merge: MergeTransactIxData {
             expiry_unix_ts: u64::MAX,
             proof: MergeProof::zeroed(),
@@ -1046,45 +1046,32 @@ fn merge_proof() -> custom_ring_interface::CustomRingProof {
     }
 }
 
-fn v2_merge_group() -> (
+fn record_merge_group() -> (
     InstructionGroup,
     custom_ring_interface::CustomRingMergeIxData,
 ) {
     use custom_ring_interface::{CustomRingMergeIxData, SealedMergeRecord};
-    use spr_interface::instruction::instruction_data::merge_ring::{
-        MergeRingAuthority, MergeRingIxData, MergeRingV2IxData,
-    };
+    use spr_interface::instruction::instruction_data::merge_ring::MergeRingIxData;
     let (mut group, _) = confirmed_merge_fixture();
     let spp = MergeRingIxData::deserialize(&group.inner[0].data[1..]).unwrap();
     let request = CustomRingMergeIxData {
         tracking_revision: Default::default(),
         output_ring_data_hash: spp.output_ring_data_hash,
-        authority: MergeRingAuthority::Ring,
+        authority: spp.authority,
         sealed: SealedMergeRecord {
             proof: merge_proof(),
             eph_pk: [4; 33],
             ciphertext: [5; custom_ring_interface::OPENING_RECORD_LEN],
         },
-        merge: spp.merge.clone(),
+        merge: spp.merge,
     };
-    group.inner[0].data = [
-        vec![tag::RING_MERGE_V2],
-        MergeRingV2IxData {
-            output_ring_data_hash: spp.output_ring_data_hash,
-            authority: MergeRingAuthority::Ring,
-            merge: spp.merge,
-        }
-        .serialize()
-        .unwrap(),
-    ]
-    .concat();
     group.outer.data = [vec![ring_tag::MERGE], request.serialize().unwrap()].concat();
     (group, request)
 }
 
 #[test]
 fn a_record_merge_binds_the_record_its_ring_forwarded() {
-    let (mut group, request) = v2_merge_group();
+    let (mut group, request) = record_merge_group();
     let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
     assert_eq!(origin.event.kind(), ConfirmedEventKind::Merge);
     assert_eq!(
@@ -1103,11 +1090,11 @@ fn a_record_merge_binds_the_record_its_ring_forwarded() {
 
 #[test]
 fn a_ring_tag_equal_to_spp_merge_names_no_record_and_no_source() {
-    let (mut group, _) = v2_merge_group();
-    group.outer.data[0] = tag::RING_MERGE_V2;
+    let (mut group, _) = record_merge_group();
+    group.outer.data[0] = tag::RING_MERGE_TRANSACT;
     let origin = ring_event_origin_in(std::slice::from_ref(&group), 0, RING).unwrap();
     assert_eq!(origin.merge_disclosure, None);
-    let (mut group, _) = v2_merge_group();
+    let (mut group, _) = record_merge_group();
     group.inner[0].program_id = RING;
     assert!(matches!(
         ring_event_origin_in(std::slice::from_ref(&group), 0, RING),

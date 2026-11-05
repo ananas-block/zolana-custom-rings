@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use custom_ring_interface::{domain, tracking::TrackingAuthorization};
 use solana_address::Address;
 use solana_signer::Signer;
-use spr_api::ZolanaApi;
+use spr_api::SprApi;
 use spr_client::{AsyncRpc, ClientError};
 use spr_indexer_api::Hash;
 use spr_interface::ZERO_NULLIFIER_PUBKEY;
@@ -554,7 +554,7 @@ impl UpdateDraft {
 }
 
 #[async_trait]
-impl RecordUpdateService for ZolanaApi {
+impl RecordUpdateService for SprApi {
     async fn submit_record_update(
         &self,
         request: SubmitRecordUpdateRequest,
