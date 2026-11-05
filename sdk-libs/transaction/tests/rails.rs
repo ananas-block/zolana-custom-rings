@@ -12,7 +12,7 @@ use spr_interface::{instruction::instruction_data::transact::OwnerTag, ZERO_NULL
 use spr_keypair::{ShieldedAddress, ShieldedKeypair, SigningKey, ViewingKey, X25519Pubkey};
 use spr_transaction::{
     instructions::transact::{ConfidentialTransaction, Shape, SppProofInputs, SppProofOutputUtxo},
-    Data, Mint, Utxo, WalletUtxo,
+    Data, Mint, TransactionError, Utxo, WalletUtxo,
 };
 use zolana_ring_transaction::{
     open_recipient_body, open_reply, open_sender_bundle, random_tag_preimage, seal_recipient_body,
@@ -700,6 +700,24 @@ fn the_bundle_carries_one_cell_per_change_output_of_any_asset() {
         .collect();
     amounts.sort_unstable();
     assert_eq!(amounts, [3, 3, 4]);
+}
+
+#[test]
+fn change_outputs_past_the_output_count_are_refused_before_any_proof() {
+    let sender = keypair(1);
+    let (mut tx, tx_key) = ring_spend(&sender, vec![input(&sender, USDC, 10, 1)], false);
+    for _ in 0..2 {
+        tx.transfer_with_ring(&address(&sender), USDC, 3, Some(RING))
+            .unwrap();
+    }
+    let rail = anonymous(tx_key, AnonymousPlan::new());
+    let mut tx = tx
+        .with_blinding_seed(rail.blinding_seed().unwrap())
+        .unwrap();
+    assert!(matches!(
+        tx.pad_utxos(Shape::IN1_OUT2, &address(&sender)).err(),
+        Some(TransactionError::TooManyOutputsForShape { got: 3, max: 2 })
+    ));
 }
 
 /// A recipient at the sender's address under another nullifier key is a payment, not change.
