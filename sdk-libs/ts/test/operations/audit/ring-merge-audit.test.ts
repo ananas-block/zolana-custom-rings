@@ -203,12 +203,12 @@ describe("the tag 57 reader", () => {
   const hex = (value: string): Uint8Array => hexToBytes(value.replace(/^0x/u, ""));
   const vectorAuditor = (): X25519Keypair =>
     X25519Keypair.fromBytes(hex(mergeVector.auditor_sk) as Bytes32);
-  const v4Ring = encodeBase58(new Uint8Array(32).fill(0x90));
+  const vectorRing = encodeBase58(new Uint8Array(32).fill(0x90));
   const TREE = 9;
   const REAL = memberOf(0x77);
   type Case = (typeof mergeVector.cases)[number];
 
-  /** The vector's record over `v4Ring`, position 2 real and every other past the first padding. */
+  /** The vector's record over `vectorRing`, position 2 real and every other past the first padding. */
   function row(entry: Case, overrides: Readonly<{ hash?: Bytes32; sealed?: SealedRecord }> = {}) {
     const { request } = entry;
     const seed = hex(request.seed) as Bytes32;
@@ -229,14 +229,14 @@ describe("the tag 57 reader", () => {
           ringDataHash,
           treeId: TREE,
         },
-        ringIdField(v4Ring),
+        ringIdField(vectorRing),
       );
     const transaction: IndexedShieldedTransaction = {
       slot: 7n,
       txSignature: SIGNATURE,
       eventIndex: 0,
       proofless: false,
-      ringProgramId: v4Ring,
+      ringProgramId: vectorRing,
       nullifiers: [
         firstNullifier,
         seededMergeDummyNullifier(seed, firstNullifier, 1),
@@ -426,7 +426,7 @@ describe("the tag 57 reader", () => {
     const { client } = scanClient({ transactions: [[good.transaction, bad.transaction]] });
     const page = await auditRingMerges({
       client,
-      ringProgramId: v4Ring,
+      ringProgramId: vectorRing,
       auditor: vectorAuditor(),
       origin: {
         confirmedTransaction: async (transaction) =>
@@ -444,7 +444,7 @@ describe("the tag 57 reader", () => {
     const { client: other } = scanClient({ transactions: [[good.transaction]] });
     const foreign = await auditRingMerges({
       client: other,
-      ringProgramId: v4Ring,
+      ringProgramId: vectorRing,
       auditor: X25519Keypair.generate(),
       origin: { confirmedTransaction: async () => good },
     });
@@ -458,7 +458,7 @@ describe("the tag 57 reader", () => {
     await expect(
       auditRingMerges({
         client,
-        ringProgramId: v4Ring,
+        ringProgramId: vectorRing,
         auditor: vectorAuditor(),
         origin: { confirmedTransaction: async () => good },
       }),

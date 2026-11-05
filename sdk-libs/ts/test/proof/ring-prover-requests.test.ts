@@ -776,7 +776,7 @@ describe("ring prover requests of the rails", () => {
       }),
     );
     const unknown = { ...base };
-    Reflect.set(unknown, "kind", "transferV2");
+    Reflect.set(unknown, "kind", "other");
     const loose = { ...base };
     Reflect.set(loose, "outputs", { length: base.outputs.length });
     for (const malformed of [unknown, loose]) {
