@@ -108,9 +108,7 @@ impl<'a> WalletSnapshot<'a> {
                 if let Err(error) = self.state.accept(page.status()) {
                     return Err(self.close_after_error(api, error).await);
                 }
-                if self.state.finished {
-                    self.close(api).await?;
-                }
+                // The terminal page reaches the caller first, its release runs and fails at the next call.
                 Ok(Some(page))
             }
             Err(error) => Err(self.close_after_error(api, error).await),
