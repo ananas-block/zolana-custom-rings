@@ -463,9 +463,8 @@ fn confirmed_deposits(
     else {
         return Ok(Vec::new());
     };
-    if caller.data.first() != Some(&ring_tag::DEPOSIT)
-        || caller.data.get(DepositPrefix::SIZE..) != Some(source.data.as_slice())
-    {
+    let mut spp_data = caller.data.as_slice();
+    if DepositPrefix::parse(&mut spp_data).is_err() || spp_data != source.data.as_slice() {
         return Ok(Vec::new());
     }
     let deposit = RingDepositIxData::deserialize(&source.data[1..])
@@ -572,7 +571,7 @@ fn ring_withdrawals_of(
             &instruction.accounts,
         )
         .ok_or(AuditError::SettlementAccounts)?;
-        for transfer in data.interface_transfers {
+        for &transfer in &data.interface_transfers {
             let (group, rest) = settlement.split_at(transfer.settlement_account_count());
             settlement = rest;
             let (authority, withdrawal) = match transfer {

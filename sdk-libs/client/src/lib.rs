@@ -45,8 +45,6 @@ mod reader;
 pub mod records;
 #[path = "operations/recover.rs"]
 mod recover;
-#[path = "operations/resolver.rs"]
-pub mod resolver;
 #[cfg(feature = "rpc")]
 #[path = "rpc/mod.rs"]
 pub mod rpc;
@@ -87,8 +85,9 @@ pub use crate::{
         DepositOwners,
     },
     credential::{
-        AbsentCredential, AddressRoot, CredentialError, CredentialLookup, CredentialResolver,
-        PresentCredential, RecipientKeyResolver, RecipientKeys, StateRoot, UnknownCredential,
+        AbsentCredential, AddressRoot, CredentialError, CredentialLookup, CredentialOpening,
+        CredentialReads, CredentialResolver, CredentialSnapshot, PresentCredential,
+        RecipientKeyResolver, RecipientKeys, StateRoot, TreeRoot, UnknownCredential,
     },
     decrypt::{FramedRow, TransactionAudit},
     deposit::{ring_deposits_in, RingDeposit},
@@ -118,7 +117,6 @@ pub use crate::{
         RecordPoolRead, StorageTip,
     },
     recover::{MemberRecovery, RecoveredNotes, RingRecovery, SourceMember},
-    resolver::{RecipientResolver, ResolveError, ResolvedRecipient},
     scan::{AuditedPage, RingScan, RingScanPage, ScanPage, SkippedRow},
     types::{
         AuditedDefaultInput, AuditedInput, AuditedOutput, AuditedTransaction, AuditedUtxo,
