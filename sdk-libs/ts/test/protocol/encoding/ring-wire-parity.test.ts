@@ -24,6 +24,7 @@ import {
 import {
   TRANSFER_SHAPES,
   fittedSpend,
+  railDisclosureFormat,
   ringTransferCircuit,
 } from "../../../src/protocol/proof/transfer-shapes.js";
 import {
@@ -226,6 +227,7 @@ describe("ring_keyed_shapes.json", () => {
         ) &&
         ringTransferCircuit(
           fittedSpend({
+            format: railDisclosureFormat(rail, shape),
             rail,
             inputs: shape.inputs,
             outputs: shape.outputs,

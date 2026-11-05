@@ -1230,15 +1230,7 @@ pub fn entry_shape_keyed(shape: Shape) -> bool {
 fn keyed(rail: RingRail, shape: Shape, spends_default_ring: bool) -> bool {
     rail.supports(shape)
         && transfer_key(TransferSpend {
-            format: if rail == RingRail::Confidential
-                && !spends_default_ring
-                && shape.n_inputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_INPUTS
-                && shape.n_outputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS
-            {
-                DisclosureFormat::SingleAssetPayout
-            } else {
-                DisclosureFormat::Standard
-            },
+            format: rail.disclosure_format(shape),
             rail,
             inputs: shape.n_inputs(),
             outputs: shape.n_outputs(),

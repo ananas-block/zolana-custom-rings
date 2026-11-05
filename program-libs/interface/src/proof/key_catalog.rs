@@ -6,7 +6,10 @@
 //! Read after `program-libs/interface/src/codec/stream.rs`. Read before `program-libs/interface/src/proof/verification.rs`,
 //! `programs/custom-ring/src/instructions/verification/verifier.rs`.
 
-use spr_interface::{shape::MAX_TRANSACTION_ADDRESSES, N_PUBLIC_SLOTS};
+use spr_interface::{
+    shape::{Shape, MAX_TRANSACTION_ADDRESSES},
+    N_PUBLIC_SLOTS,
+};
 
 use crate::{
     audit_stream::AuditKey, member_registry::APPLY_BATCH, transact::RingRail, DisclosureFormat,
@@ -145,6 +148,21 @@ const PAYOUT_SHAPE: TransferShape = TransferShape {
     tracking: 17,
     records: 35,
 };
+
+impl RingRail {
+    /// A default-ring spend at the payout widths has no key in either format.
+    #[must_use]
+    pub const fn disclosure_format(self, shape: Shape) -> DisclosureFormat {
+        if matches!(self, Self::Confidential)
+            && shape.n_inputs() == PAYOUT_SHAPE.inputs as usize
+            && shape.n_outputs() == PAYOUT_SHAPE.outputs as usize
+        {
+            DisclosureFormat::SingleAssetPayout
+        } else {
+            DisclosureFormat::Standard
+        }
+    }
+}
 
 pub const TRANSFER_SHAPES: [TransferShape; 10] = [
     NARROW_SHAPES[0],
@@ -795,6 +813,26 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn a_default_ring_spend_at_the_payout_widths_has_no_key() {
+        for format in [
+            DisclosureFormat::Standard,
+            DisclosureFormat::SingleAssetPayout,
+        ] {
+            for wide in [false, true] {
+                let key = FrameKey {
+                    format,
+                    rail: RingRail::Confidential,
+                    inputs: SINGLE_ASSET_PAYOUT_INPUTS,
+                    outputs: SINGLE_ASSET_PAYOUT_OUTPUTS,
+                    spends_default_ring: true,
+                    wide,
+                };
+                assert_eq!(key.shape(), None, "{key:?}");
+            }
+        }
     }
 
     #[test]

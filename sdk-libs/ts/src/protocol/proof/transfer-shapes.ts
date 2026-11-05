@@ -81,6 +81,18 @@ const PAYOUT_SHAPE: TransferShape = Object.freeze({
   records: 35,
 });
 
+/** Rust `RingRail::disclosure_format`. */
+export function railDisclosureFormat(
+  rail: RingRail,
+  shape: Readonly<{ inputs: number; outputs: number }>,
+): DisclosureFormat {
+  return rail === "confidential" &&
+    shape.inputs === PAYOUT_SHAPE.inputs &&
+    shape.outputs === PAYOUT_SHAPE.outputs
+    ? DisclosureFormat.SingleAssetPayout
+    : DisclosureFormat.Standard;
+}
+
 export const TRANSFER_SHAPES: readonly TransferShape[] = Object.freeze([
   ...NARROW_SHAPES,
   ...WIDE_SHAPES,

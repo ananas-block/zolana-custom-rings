@@ -195,18 +195,12 @@ impl Owner<'_> {
         }
         .delivery()?;
         let first_nullifier = *transaction.first_nullifier();
-        let format = if shape.n_inputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_INPUTS
-            && shape.n_outputs() == custom_ring_interface::SINGLE_ASSET_PAYOUT_OUTPUTS
-        {
-            if self.in_proof_owner.is_some() {
-                return Err(RingError::ShapeUnkeyed {
-                    rail: RingRail::Confidential,
-                });
-            }
-            DisclosureFormat::SingleAssetPayout
-        } else {
-            DisclosureFormat::Standard
-        };
+        let format = RingRail::Confidential.disclosure_format(shape);
+        if format == DisclosureFormat::SingleAssetPayout && self.in_proof_owner.is_some() {
+            return Err(RingError::ShapeUnkeyed {
+                rail: RingRail::Confidential,
+            });
+        }
         let rail = RingOutputRail::new(transaction_key(self.sender, first_nullifier)?, delivery)
             .with_format(format);
         let transaction = pad_under_rail(transaction, &rail, shape, &sender)?;
