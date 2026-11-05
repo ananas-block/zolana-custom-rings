@@ -382,6 +382,8 @@ export type {
   RingMergeTransactionParams,
 } from "../operations/payments/merge.js";
 export type { RingMergeClient } from "../rpc/ports.js";
+export { RingBufferLedger } from "../operations/workflow/buffer-ledger.js";
+export type { RingBufferTransaction } from "../operations/workflow/buffer-ledger.js";
 export {
   RingTransactionSubmission,
   closeAbandonedFrameBuffers,

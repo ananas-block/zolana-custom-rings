@@ -39,6 +39,7 @@ Breaking
 - `syncRingWallet` takes a `RingWallet` holding the wallet beside its notes of unregistered mints, and `openRingNotes` returns those notes in `pendingOpenings` in place of a `pending` count → wrap each wallet with `RingWallet.create(wallet)`, store it with `RingWallet.toJson()` and read waiting notes through `RingWallet.pendingOpenings()`.
 - `MergeLedger`, its `ConfirmedMerge`, `MergeInput`, `KnownMergeInput`, `MergeTransition` and `AuditedMergeOutput` types, `recoverMergeOpening`, `MergeAuditorOpening`, `KnownUtxos.merged` and the `merged` kind of `InputOpening` are gone, a ring merge record opens its output in full → read a merge output from `KnownUtxoIndex.utxo` by its commitment.
 - `openAuditorRegions`, the `EscrowedKeys` type and the error code `RING_ANONYMOUS_RECIPIENT_CURVE` are gone, `openAuditorRegions` opened an unsalted schedule no transfer stream uses → open an auditor stream with `openRingDisclosure` and drop handling of that code.
+- `RingTransactionSubmission.sendPersisted`, `reconcileRingSubmissions` and `closeAbandonedFrameBuffers` take a `RingBufferLedger` as `buffers`, holding each buffer write and close until its signature resolves → load one with `RingBufferLedger.load(store)` from its own store beside the wallet store and pass it to all three.
 
 Added
 
@@ -56,3 +57,5 @@ Fixed
 - A hand-built `RuleTable` skipped the checks `decodeRuleTable` runs, now policy writes, `policyTableProofInputs` and its hash rerun `buildRuleTable` and refuse such a table with `RING_RULE_TABLE_INVALID`.
 - `buildRingMergeTransaction` and `PreparedRingDeposit.prepare` on an anonymous ring refused a PDA owner before any proof, now both build for one, and a zero-key merge names the PDA as the signer its program signs through CPI.
 - `LocalRingKeys.destroy` left the list salt key usable, now it wipes that key too and every method needing a secret raises `KEYPAIR_INVALID_SECRET_KEY` afterward.
+- A restarted wallet could read its upload buffer as abandoned while a write or close it had sent could still land, now `closeAbandonedFrameBuffers` waits until each such write and close resolves.
+- A submission gave up on a proof refused for a tracking root below its floor, now it proves again after `trackingRootBelowFloor` as after a revoked root.
