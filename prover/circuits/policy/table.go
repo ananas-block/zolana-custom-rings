@@ -102,11 +102,6 @@ type ruleFields struct {
 // ruleParts mirrors Row in program-libs/policy/src/rule_table/mod.rs, read from the low byte of the big-endian field.
 var ruleParts = [...]struct{ shift, width uint }{{0, 8}, {8, 8}, {16, 8}, {24, 8}, {32, 64}, {96, 8}}
 
-// decode binds the table to policy_hash, the program validated it at write time (EncodedRuleTable::validate).
-func (t Table) decode(api frontend.API, rc frontend.Rangechecker, policyHash frontend.Variable) tableView {
-	return t.decodeWhen(api, rc, 1, policyHash)
-}
-
 // decodeWhen binds the table to policy_hash while screened, an unscreened table binds nothing the rules read.
 func (t Table) decodeWhen(api frontend.API, rc frontend.Rangechecker, screened, policyHash frontend.Variable) tableView {
 	// The rules read the table the program hashed at its last policy write.

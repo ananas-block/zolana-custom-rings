@@ -177,9 +177,9 @@ func (c *TransferCircuit) Define(api frontend.API) error {
 	// 2. The output slots open and the sealed key derives each published blinding. Every later section reads these wires, so what it proves is about the notes step 7 ties to SPP.
 	w := audit.AuditWires{FirstNullifier: c.FirstNullifier, RingProgramID: c.RingProgramID, TxViewingSk: c.TxViewingSk, AuditorPk: c.AuditorPk, Salt: c.Salt, Layout: c.Layout}
 	stream := c.Shape.Stream()
-	layout := stream.DecodeLayout(api, c.Layout)
+	hasData := stream.DecodeLayout(api, c.Layout)
 	envelope := w.OpenEnvelope(api, rc)
-	opened := audit.OpenSlots(api, rc, w, envelope, stream, layout, c.Outputs, c.OutputCount)
+	opened := audit.OpenSlots(api, rc, w, envelope, hasData, c.Outputs, c.OutputCount)
 	// 3. The inputs open with dummies last, a live input belongs to the bound ring or on an entry key to the default ring.
 	section := OpenInputs(api, c.Inputs, c.InputCount)
 	section.AssertRingNotes(api, c.RingProgramID, c.Shape.Entry)

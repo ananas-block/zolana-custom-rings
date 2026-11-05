@@ -20,8 +20,6 @@ import (
 
 // Ring domains, distinct ASCII tags mirrored by program-libs/interface/src/proof/domain.rs and sdk-libs/ts/src/crypto/derivation/ring-domain.ts.
 const (
-	// AuditStatementDomain = "CRAU"
-	AuditStatementDomain = 0x43524155
 	// BlindingSeedDomain = "CRBS"
 	BlindingSeedDomain = 0x43524253
 	// PolicyTableDomain = "CRTB"

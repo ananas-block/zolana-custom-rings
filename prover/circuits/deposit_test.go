@@ -44,14 +44,13 @@ func solveDeposit(c *circuits.DepositCircuit) error {
 	return test.IsSolved(shape, c, ecc.BN254.ScalarField())
 }
 
-func TestDepositSolvesEachCountAndMode(t *testing.T) {
+func TestDepositSolvesEachCount(t *testing.T) {
 	for _, spec := range []ringdeposit.Spec{
 		{Count: 1},
 		{Count: 2},
 		{Count: circuits.MaxDeposits},
-		{Count: 2, Mode: ringdeposit.ModeAnonymous},
 		{Count: 2, ZeroKeys: []int{0, 1}},
-		{Count: 3, Mode: ringdeposit.ModeAnonymous, ZeroKeys: []int{1}},
+		{Count: 3, ZeroKeys: []int{1}},
 	} {
 		if err := solveDeposit(spec.Build(t).Circuit); err != nil {
 			t.Fatalf("%+v: %v", spec, err)
@@ -72,13 +71,13 @@ func TestDepositSlotRefusals(t *testing.T) {
 		{"a padding slot with an amount", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
 			d.Circuit.Amounts[circuits.MaxDeposits-1] = 1
 		}, []string{"gadget.AssertZeroWhen", depositDefine}},
-		{"an anonymous owner hash of another key", ringdeposit.Spec{Count: 2, Mode: ringdeposit.ModeAnonymous}, func(d *ringdeposit.Deposit) {
+		{"an owner hash of another key on the first slot", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
 			d.Circuit.OwnerKeys[0][1] = 0
 		}, []string{"gadget.AssertEqualWhen", recordEncode}},
-		{"a confidential owner hash of another key", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
+		{"an owner hash of another key on the last slot", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
 			d.Circuit.OwnerKeys[1][1] = 0
 		}, []string{"gadget.AssertEqualWhen", recordEncode}},
-		{"owner key bytes outside 0..255 with the same owner identity", ringdeposit.Spec{Count: 2, Mode: ringdeposit.ModeAnonymous}, func(d *ringdeposit.Deposit) {
+		{"owner key bytes outside 0..255 with the same owner identity", ringdeposit.Spec{Count: 2}, func(d *ringdeposit.Deposit) {
 			// Moving 256 between adjacent bytes keeps the identity, the cipher's byte table refuses the encoding.
 			key := &d.Circuit.OwnerKeys[0]
 			key[3], key[4] = key[3].(int)-1, key[4].(int)+256
@@ -224,7 +223,7 @@ func TestDepositStatementBindsEveryElement(t *testing.T) {
 func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
 	for _, capacity := range circuits.DepositCapacities {
 		for _, count := range []int{1, capacity} {
-			d := ringdeposit.Build(t, count, ringdeposit.ModeConfidential).Narrow(t, capacity)
+			d := ringdeposit.Build(t, count).Narrow(t, capacity)
 			elements := d.Elements(t)
 			if len(elements) != depositElements {
 				t.Fatalf("capacity %d count %d holds %d elements", capacity, count, len(elements))
@@ -236,7 +235,7 @@ func TestDepositZeroTailStaysInjectiveAtTheOneLength(t *testing.T) {
 			requireStatementRefused(t, d)
 		}
 	}
-	chain := ringdeposit.Build(t, 1, ringdeposit.ModeConfidential).Elements(t)
+	chain := ringdeposit.Build(t, 1).Elements(t)
 	reference := spptest.MustHashChain4(t, chain)
 	for _, dropped := range []int{1, 2} {
 		if spptest.MustHashChain4(t, chain[:len(chain)-dropped]).Cmp(reference) != 0 {
@@ -317,7 +316,7 @@ func TestDepositVectorPinsHostAndCircuit(t *testing.T) {
 		spec ringdeposit.Spec
 	}{
 		{"confidential", ringdeposit.Spec{Count: 2}},
-		{"anonymous_mixed_keys", ringdeposit.Spec{Count: 3, Mode: ringdeposit.ModeAnonymous, ZeroKeys: []int{1}}},
+		{"anonymous_mixed_keys", ringdeposit.Spec{Count: 3, ZeroKeys: []int{1}}},
 		{"screened_curator", ringdeposit.Spec{Count: 1, Policy: ringdeposit.CuratorAllowlisted(ringdeposit.MintA)}},
 	} {
 		d := tc.spec.Build(t)
@@ -497,19 +496,17 @@ func depositCircuit(t *testing.T, capacity int) *circuits.DepositCircuit {
 func TestDepositCapacitiesPreserveStatementsAndBoundCounts(t *testing.T) {
 	for _, capacity := range circuits.DepositCapacities {
 		for _, count := range []int{1, capacity} {
-			for _, mode := range []ringdeposit.RingMode{ringdeposit.ModeConfidential, ringdeposit.ModeAnonymous} {
-				small := ringdeposit.Build(t, count, mode).Narrow(t, capacity)
-				full := ringdeposit.Build(t, count, mode)
-				if ringtest.AsBigInt(small.Circuit.PublicInputHash).Cmp(ringtest.AsBigInt(full.Circuit.PublicInputHash)) != 0 {
-					t.Fatal("capacity changed deposit statement")
-				}
-				if err := solveDeposit(small.Circuit); err != nil {
-					t.Fatalf("capacity %d count %d: %v", capacity, count, err)
-				}
+			small := ringdeposit.Build(t, count).Narrow(t, capacity)
+			full := ringdeposit.Build(t, count)
+			if ringtest.AsBigInt(small.Circuit.PublicInputHash).Cmp(ringtest.AsBigInt(full.Circuit.PublicInputHash)) != 0 {
+				t.Fatal("capacity changed deposit statement")
+			}
+			if err := solveDeposit(small.Circuit); err != nil {
+				t.Fatalf("capacity %d count %d: %v", capacity, count, err)
 			}
 		}
 		for _, count := range []int{0, capacity + 1} {
-			bad := ringdeposit.Build(t, 1, ringdeposit.ModeConfidential).Narrow(t, capacity)
+			bad := ringdeposit.Build(t, 1).Narrow(t, capacity)
 			bad.Circuit.Count = count
 			if solveDeposit(bad.Circuit) == nil {
 				t.Fatalf("capacity %d accepted count %d", capacity, count)

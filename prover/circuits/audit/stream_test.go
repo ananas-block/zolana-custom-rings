@@ -154,15 +154,10 @@ func TestDataTails(t *testing.T) {
 			c.Refuse(t, s.Circuit(t))
 		})
 	}
-	t.Run("a dataless key refuses data", func(t *testing.T) {
-		s := ringaudit.NewSection(t, plainShape)
-		s.Outputs[0].Utxo.DataHash = big.NewInt(5)
-		compileSection(t, plainShape).Refuse(t, s.Circuit(t))
-	})
 	t.Run("a clear has_data keeps tails off the frame", func(t *testing.T) {
 		s := ringaudit.NewSection(t, dataShape)
 		if outputs := s.StatementOutputs(t, s.Stream(t)); outputs[0].Tail != nil {
-			t.Fatal("a dataless frame transmits a tail")
+			t.Fatal("a frame with has_data clear transmits a tail")
 		}
 	})
 }
@@ -175,7 +170,6 @@ func TestLayoutIsTheKeys(t *testing.T) {
 		circuit.Layout = layout
 		compileSection(t, shape).Refuse(t, circuit)
 	}
-	t.Run("has_data on a dataless key", func(t *testing.T) { refuse(t, plainShape, audit.LayoutHasData) })
 	t.Run("entry on a key with no entry capacity", func(t *testing.T) { refuse(t, plainShape, audit.LayoutEntry) })
 	t.Run("no entry on an entry key", func(t *testing.T) { refuse(t, entryShape, 0) })
 	t.Run("a bit past the flags", func(t *testing.T) { refuse(t, plainShape, 1<<2) })

@@ -44,8 +44,8 @@ func NewSectionCircuit(shape audit.StreamShape) *SectionCircuit {
 func (c *SectionCircuit) Define(api frontend.API) error {
 	rc := rangecheck.New(api)
 	envelope := c.OpenEnvelope(api, rc)
-	layout := c.Shape.DecodeLayout(api, c.Layout)
-	opened := audit.OpenSlots(api, rc, c.AuditWires, envelope, c.Shape, layout, c.Outputs, c.OutputCount)
+	hasData := c.Shape.DecodeLayout(api, c.Layout)
+	opened := audit.OpenSlots(api, rc, c.AuditWires, envelope, hasData, c.Outputs, c.OutputCount)
 	count := ringgadget.SelectCount(api, c.InputCount, 1, len(c.Inputs))
 	slots := make([]shared.Output, len(c.Inputs))
 	for i, input := range c.Inputs {
@@ -53,7 +53,7 @@ func (c *SectionCircuit) Define(api frontend.API) error {
 		abstractor.CallVoid(api, gadget.AssertZeroWhen{Cond: api.Sub(1, count.Active[i]), V: slots[i].Utxo})
 	}
 	stream := c.SealStream(api, rc, envelope, c.Shape, opened, audit.SpentInputs{Slots: slots, Count: count, Entries: c.Entries})
-	statement := append(envelope.Head(c.AuditWires, stream, shared.AuditStatementDomain),
+	statement := append(envelope.Head(c.AuditWires, stream, shared.TransferStatementDomain),
 		stream.NoSpend, c.OutputCount, opened.OutputChain, stream.RecordChain, stream.TailChain, c.InputCount)
 	api.AssertIsEqual(c.PublicInputHash, gadget.HashChain4(api, statement))
 	return nil
@@ -144,9 +144,7 @@ func (a Audit) Plaintexts(t testing.TB) Plaintexts {
 	p := Plaintexts{Envelope: envelope, Records: make([][]byte, len(a.Outputs))}
 	for i, output := range a.Outputs {
 		p.Records[i] = output.Record(t)
-		if a.Shape.Data {
-			p.Tails = append(p.Tails, output.Tail(t))
-		}
+		p.Tails = append(p.Tails, output.Tail(t))
 	}
 	return p
 }
@@ -197,7 +195,7 @@ func (a Audit) StatementOf(t testing.TB, stream Stream, claim Claim) []*big.Int 
 	outputs := a.StatementOutputs(t, stream)
 	head := a.Keys.AuditHead(t, a.FirstNullifier, a.RingProgramID, a.Salt, stream.Envelope(claim.InputCount))
 	head.Layout = a.Layout()
-	return append(head.ElementsUnder(t, shared.AuditStatementDomain), big.NewInt(ringtest.Bit(claim.NoSpend)), big.NewInt(int64(claim.OutputCount)),
+	return append(head.ElementsUnder(t, shared.TransferStatementDomain), big.NewInt(ringtest.Bit(claim.NoSpend)), big.NewInt(int64(claim.OutputCount)),
 		OutputChain(t, outputs), RecordChain(t, outputs), TailChain(t, outputs), big.NewInt(int64(claim.InputCount)))
 }
 

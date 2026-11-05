@@ -78,7 +78,6 @@ type AuditWires struct {
 }
 
 type Envelope struct {
-	txViewingSk [32]frontend.Variable
 	// txPk is pack_be(0x04 ‖ tx_u).
 	txPk       [2]frontend.Variable
 	salt       frontend.Variable
@@ -95,10 +94,9 @@ func (w AuditWires) OpenEnvelope(api frontend.API, rc frontend.Rangechecker) Env
 	packedTxViewingSk := [2]frontend.Variable(shared.PackBounded(api, w.TxViewingSk[:]))
 	// 4. outputSeed is SPP's TXOS(n0, BlindingSeed) at the ring's seed, its inputs are the sealed key and two values the frame publishes.
 	return Envelope{
-		txViewingSk: w.TxViewingSk,
-		txPk:        [2]frontend.Variable(txPk),
-		salt:        salt,
-		outputSeed:  transaction.DeriveOutputBlindingSeed(api, w.FirstNullifier, shared.BlindingSeed(api, packedTxViewingSk, salt)),
+		txPk:       [2]frontend.Variable(txPk),
+		salt:       salt,
+		outputSeed: transaction.DeriveOutputBlindingSeed(api, w.FirstNullifier, shared.BlindingSeed(api, packedTxViewingSk, salt)),
 	}
 }
 
@@ -118,9 +116,7 @@ func AssertClamped(api frontend.API, secret [32]frontend.Variable) {
 // Opened holds every output slot once, every section reads these wires.
 type Opened struct {
 	Slots []shared.Output
-	// OutputCount is the published m.
-	OutputCount frontend.Variable
-	Count       ringgadget.Count
+	Count ringgadget.Count
 	// OutputChain covers every published slot hash, a dummy's included, zero past m as SPP's padded chain reads.
 	OutputChain frontend.Variable
 	hasData     frontend.Variable
@@ -129,10 +125,10 @@ type Opened struct {
 }
 
 // OpenSlots holds each output wire to the hash SPP publishes, so a later section reads the note that settles.
-func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, shape StreamShape, layout Layout, outputs []OutputWires, outputCount frontend.Variable) Opened {
+func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envelope, hasData frontend.Variable, outputs []OutputWires, outputCount frontend.Variable) Opened {
 	// 1. m selects the published slots, a key's capacity may exceed it and a slot past it publishes nothing.
 	count := ringgadget.SelectCount(api, outputCount, 1, len(outputs))
-	opened := Opened{Slots: make([]shared.Output, len(outputs)), OutputCount: outputCount, Count: count, hasData: layout.HasData, records: make([][]frontend.Variable, len(outputs))}
+	opened := Opened{Slots: make([]shared.Output, len(outputs)), Count: count, hasData: hasData, records: make([][]frontend.Variable, len(outputs))}
 	hashes := make([]frontend.Variable, len(outputs))
 	for i, output := range outputs {
 		slot := output.Output.Open(api)
@@ -142,12 +138,10 @@ func OpenSlots(api frontend.API, rc frontend.Rangechecker, w AuditWires, e Envel
 		// 3. The auditor rebuilds every commitment from the sealed key's blinding, another value leaves the slot unopened.
 		w.AssertBlinding(api, e, slot, active, i)
 		// 4. A clear has_data transmits no tail, a nonzero data hash would leave the commitment unrebuilt.
-		assertNoData(api, layout.HasData, slot)
+		assertNoData(api, hasData, slot)
 		// 5. The plaintext reads the opened wires, SealStream seals them with no second opening to disagree.
 		opened.records[i] = output.record(api, rc, slot)
-		if shape.Data {
-			opened.tails = append(opened.tails, dataTail(api, rc, slot))
-		}
+		opened.tails = append(opened.tails, dataTail(api, rc, slot))
 		opened.Slots[i], hashes[i] = slot, api.Mul(active, slot.Hash)
 	}
 	// 6. The program rebuilds the chain from the hashes it forwards to SPP, one opening off them fails the statement.
@@ -161,15 +155,12 @@ func (w AuditWires) AssertBlinding(api frontend.API, e Envelope, slot shared.Out
 }
 
 type Stream struct {
-	ranges StreamRanges
 	sealed shared.Sealed
 	digest frontend.Variable
 	// RecordChain hashes every published record's ciphertext, zero past m.
 	RecordChain frontend.Variable
 	// TailChain hashes every published tail's ciphertext, zero while has_data is clear.
 	TailChain frontend.Variable
-	// RealInputs is the sealed R, the count of spent notes.
-	RealInputs frontend.Variable
 	// NoSpend is set at a zero R, the program then demands no owner signer.
 	NoSpend frontend.Variable
 }
@@ -196,12 +187,10 @@ func (w AuditWires) SealStream(api frontend.API, rc frontend.Rangechecker, e Env
 	// The program hashes those bytes in one form per region, the envelope's length moves with n and each
 	// record and tail has one length.
 	return Stream{
-		ranges:      ranges,
 		sealed:      sealed,
 		digest:      countedDigest(api, sealed.Ciphertext, EnvelopeKeyLen+len(evidence.head), ranges.entryLen(), spent.Count),
 		RecordChain: gadget.HashChain4(api, SlotRegions{Start: ranges.RecordOffset(0), Stride: RecordStride, Length: RecordLen}.Hashes(api, sealed.Ciphertext, opened.Count.Active)),
 		TailChain:   tailChain(api, sealed.Ciphertext, ranges, opened),
-		RealInputs:  evidence.realInputs,
 		NoSpend:     api.IsZero(evidence.realInputs),
 	}
 }
@@ -222,9 +211,6 @@ func (r SlotRegions) Hashes(api frontend.API, ciphertext, active []frontend.Vari
 }
 
 func tailChain(api frontend.API, ciphertext []frontend.Variable, ranges StreamRanges, opened Opened) frontend.Variable {
-	if !ranges.Data {
-		return 0
-	}
 	// A clear has_data transmits no tail, the program binds zero.
 	return api.Mul(opened.hasData, gadget.HashChain4(api, SlotRegions{Start: ranges.TailOffset(0), Stride: TailLen, Length: TailLen}.Hashes(api, ciphertext, opened.Count.Active)))
 }

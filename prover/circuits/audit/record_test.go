@@ -12,7 +12,7 @@ import (
 
 var (
 	plainShape = audit.StreamShape{InputClass: 2, Outputs: 4}
-	dataShape  = audit.StreamShape{InputClass: 2, Outputs: 2, Data: true}
+	dataShape  = audit.StreamShape{InputClass: 2, Outputs: 2}
 	entryShape = audit.StreamShape{InputClass: 2, Outputs: 2, Entry: true}
 )
 
