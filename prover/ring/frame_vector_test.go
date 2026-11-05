@@ -90,7 +90,10 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 	if m < 1 || m > 16 {
 		t.Fatalf("output count %d", m)
 	}
-	c.take(frameProofLen + 8)
+	c.take(frameProofLen)
+	// Mirrors CredentialRead::read.
+	c.take(2)
+	c.take(2 * int(c.take(1)[0]))
 	if flags&ownRoot != 0 {
 		c.take(8)
 	}
@@ -174,7 +177,7 @@ func walkTransferFrame(t *testing.T, line []byte, rail frameRail) {
 
 // walkExtensions mirrors FrameExtensions::read.
 func walkExtensions(c *frameCursor) {
-	const dataHash, ringDataHash, messages, cache = 1, 2, 4, 8
+	const dataHash, ringDataHash, messages, cache, approvalTotals, signerDataCounts = 1, 2, 4, 8, 16, 32
 	flags := c.take(1)[0]
 	if flags&dataHash != 0 {
 		c.take(32)
@@ -190,6 +193,12 @@ func walkExtensions(c *frameCursor) {
 	}
 	if flags&cache != 0 {
 		c.take(8 + 2*frameCacheWrites)
+	}
+	if flags&approvalTotals != 0 {
+		c.take(32)
+	}
+	if flags&signerDataCounts != 0 {
+		c.take(8)
 	}
 }
 

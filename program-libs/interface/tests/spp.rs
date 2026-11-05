@@ -273,3 +273,31 @@ fn a_gross_past_u64_survives_a_net_within_it() {
         Err(PublicSlotError::ZeroNet { .. })
     ));
 }
+
+#[test]
+fn the_widest_accepted_legs_fold_a_gross_past_u64_to_a_net_within_it() {
+    let mut legs = [sol(u64::MAX, true); spr_interface::MAX_INTERFACE_TRANSFERS];
+    for [withdrawal, _] in legs.as_chunks_mut::<2>().0 {
+        *withdrawal = sol(u64::MAX, false);
+    }
+    legs[legs.len() - 1] = sol(u64::MAX - 1, true);
+    let slots = fold(legs).unwrap();
+    assert_eq!(slots.amounts(), [-1, 0, 0]);
+    let withdrawals = (spr_interface::MAX_INTERFACE_TRANSFERS / 2) as u128;
+    assert_eq!(slots.gross()[0], withdrawals * u128::from(u64::MAX));
+    assert_eq!(
+        slots.classes(),
+        CoSignScope::DEPOSITS | CoSignScope::WITHDRAWALS
+    );
+}
+
+#[test]
+fn an_intermediate_net_past_u64_is_refused_whatever_the_final_net() {
+    // SPP's `assign_public_amounts_and_assets` refuses the same running net.
+    assert!(matches!(
+        fold([sol(u64::MAX, true), sol(1, true), sol(2, false)]),
+        Err(PublicSlotError::AmountOverflow { .. })
+    ));
+    let reordered = fold([sol(u64::MAX, true), sol(2, false), sol(1, true)]).unwrap();
+    assert_eq!(reordered.amounts()[0], i128::from(u64::MAX) - 1);
+}

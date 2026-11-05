@@ -19,7 +19,7 @@ use crate::{
     credential_read::CredentialRoots,
     deposit_audit::{MAX_RING_DEPOSIT_AUDIT_SLOTS, RING_DEPOSIT_AUDIT_CIPHERTEXT_LEN},
     key_catalog::RingCircuit,
-    TAGGED_X25519_KEY_LEN,
+    CustomRingError, TAGGED_X25519_KEY_LEN,
 };
 
 pub struct DepositContext<'a> {
@@ -116,28 +116,30 @@ impl DepositSubjects {
 const DEPOSIT_FIXED_ELEMENTS: usize = 4 + MAX_RING_DEPOSIT_AUDIT_SLOTS * 4 + 7;
 
 impl DepositPublicInput<'_> {
-    pub fn hash(&self) -> Result<[u8; 32], HasherError> {
-        create_hash_chain_4_from_slice(&self.elements()?)
+    pub fn hash(&self) -> Result<[u8; 32], CustomRingError> {
+        Ok(create_hash_chain_4_from_slice(&self.elements()?)?)
     }
 
     pub fn element_count(&self) -> usize {
         DEPOSIT_FIXED_ELEMENTS + self.credentials.elements().count()
     }
 
-    pub fn elements(&self) -> Result<Vec<[u8; 32]>, HasherError> {
+    pub fn elements(&self) -> Result<Vec<[u8; 32]>, CustomRingError> {
         // 1. The selected root table fixes K, published deposits fit that key and have one ciphertext and asset each.
         let count = self.owner_utxo_hashes.len();
         let capacity =
             u8::try_from(self.credentials.capacity()).map_err(|_| HasherError::InvalidNumFields)?;
+        if count > usize::from(capacity) {
+            return Err(CustomRingError::TooManyDepositsForKey);
+        }
         if !(1..=MAX_RING_DEPOSIT_AUDIT_SLOTS).contains(&count)
-            || count > usize::from(capacity)
             || (RingCircuit::Deposit { capacity })
                 .credential_capacity()
                 .is_none()
             || self.ciphertexts.len() != count
             || self.assets.len() != count
         {
-            return Err(HasherError::InvalidNumFields);
+            return Err(HasherError::InvalidNumFields.into());
         }
         // 2. CRDP binds the exact SPP bytes and the authenticated ring before the deposit count.
         let mut chain = Vec::with_capacity(self.element_count());

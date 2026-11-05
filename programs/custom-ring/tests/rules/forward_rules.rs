@@ -61,9 +61,15 @@ pub fn deposit_instruction(
     registry: Option<u64>,
     deposit: &RingDepositIxData,
 ) -> Instruction {
+    // The deposit statement needs K at least the deposit count, the keyed capacities are powers of two.
+    let key_capacity = deposit
+        .deposits
+        .len()
+        .clamp(1, MAX_RING_DEPOSIT_AUDIT_SLOTS)
+        .next_power_of_two();
     let prefix = DepositPrefix {
         tag: tag::DEPOSIT,
-        key_capacity: 1,
+        key_capacity: u8::try_from(key_capacity).unwrap(),
         proof: Zeroable::zeroed(),
         credential_read: custom_ring_interface::CredentialRead::new(0, &[0]).unwrap(),
         own_revision: registry.unwrap_or_default().into(),
@@ -127,6 +133,8 @@ fn an_audited_deposit_without_a_bound_root_reaches_its_proof() {
 }
 
 const DEPOSIT_SPP: usize = 3;
+/// `DepositPrefix::key_capacity` follows the tag.
+const KEY_CAPACITY_BYTE: usize = 1;
 
 #[test]
 fn an_audited_deposit_forwards_deposit_data_its_capsules_open() {
@@ -191,6 +199,19 @@ fn every_deposit_capsule_opens_under_one_key_at_its_own_index() {
         );
     }
     reaches_verification(send(vec![deposit_entry(0, &key), deposit_entry(1, &key)]));
+}
+
+#[test]
+fn a_deposit_key_below_its_deposit_count_is_refused() {
+    let mut ring = Ring::new(Setup::AuditOnly);
+    let key = auditor_pubkey();
+    let pair = deposit_of(vec![deposit_entry(0, &key), deposit_entry(1, &key)]);
+    let mut narrow = deposit_instruction(&ring, None, &pair);
+    narrow.data[KEY_CAPACITY_BYTE] = 1;
+    refused(
+        ring.send(narrow, &[]),
+        CustomRingError::TooManyDepositsForKey,
+    );
 }
 
 #[test]

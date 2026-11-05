@@ -20,6 +20,7 @@ use spr_interface::{
     shape::SPP_SUPPORTED_SHAPES,
     MAX_INTERFACE_TRANSFERS, SHIELDED_POOL_PROGRAM_ID,
 };
+use wincode::{containers, len::FixIntLen, Serialize};
 
 use crate::common::{
     credential_accounts, delegate_ring, off_curve_g2, on_curve_g2, policy_pda,
@@ -1133,11 +1134,52 @@ fn an_approval_co_signed_by_its_own_owner_is_refused() {
     reaches_verification(co_signed(&mut ring, &co_signer));
 }
 
+/// A leg the encoder accepts, its amount unique in the frame.
+const PLACEHOLDER_LEG: InterfaceTransfer = InterfaceTransfer::SolWithdrawal {
+    amount: 0x5a5a_5a5a_5a5a_5a5a,
+};
+
+fn leg_list(legs: &[InterfaceTransfer]) -> Vec<u8> {
+    <containers::Vec<InterfaceTransfer, FixIntLen<u8>> as Serialize>::serialize(&legs.to_vec())
+        .unwrap()
+}
+
+/// `data` encoded, then its legs replaced on the wire by `legs` the encoder refuses.
+fn with_raw_legs(data: &RingTransactData<'_>, legs: &[InterfaceTransfer]) -> Vec<u8> {
+    let frame = data.encode().unwrap();
+    let encoded = leg_list(&data.interface_transfers);
+    let mut found = frame
+        .windows(encoded.len())
+        .enumerate()
+        .filter_map(|(at, window)| (window == encoded).then_some(at));
+    let at = found.next().expect("the legs in the frame");
+    assert!(found.next().is_none());
+    [&frame[..at], &leg_list(legs), &frame[at + encoded.len()..]].concat()
+}
+
 /// A confidential transfer from the payer settling `transfers`, `funder` at each funder slot.
 fn settle(ring: &mut Ring, transfers: Vec<InterfaceTransfer>, funder: &AccountMeta) -> Sent {
+    settle_frame(ring, &transfers, funder, |data| data.encode().unwrap())
+}
+
+/// As `settle`, the frame built past the encoder, the program alone judges `transfers`.
+fn settle_raw(ring: &mut Ring, transfers: &[InterfaceTransfer], funder: &AccountMeta) -> Sent {
+    settle_frame(ring, transfers, funder, |data| {
+        let mut data = data.clone();
+        data.interface_transfers = vec![PLACEHOLDER_LEG];
+        with_raw_legs(&data, transfers)
+    })
+}
+
+fn settle_frame(
+    ring: &mut Ring,
+    transfers: &[InterfaceTransfer],
+    funder: &AccountMeta,
+    frame: impl FnOnce(&RingTransactData<'_>) -> Vec<u8>,
+) -> Sent {
     let fixture = Fixture::new();
     let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
-    fixture.settle_legs(&mut data, transfers);
+    fixture.settle_legs(&mut data, transfers.to_vec());
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(ring));
     for transfer in &data.interface_transfers {
         let mut group: Vec<AccountMeta> = (0..transfer.settlement_account_count())
@@ -1148,32 +1190,28 @@ fn settle(ring: &mut Ring, transfers: Vec<InterfaceTransfer>, funder: &AccountMe
         }
         spp.extend(group);
     }
-    send(
-        ring,
-        tag::TRANSFER,
-        Vec::new(),
-        data.encode().unwrap(),
-        spp,
-        &[],
-    )
+    send(ring, tag::TRANSFER, Vec::new(), frame(&data), spp, &[])
 }
 
 #[test]
 fn public_legs_are_refused_with_the_rings_own_errors() {
     let mut ring = Ring::new(Setup::AuditOnly);
     let payer = AccountMeta::new(ring.payer.pubkey(), true);
+    // `validate_under` refuses a zero leg in the encoder and again in the program's frame parse.
+    let zero = [InterfaceTransfer::SolWithdrawal { amount: 0 }];
+    let fixture = Fixture::new();
+    let mut data = fixture.transfer(RingRail::Confidential, 2, 2, false);
+    fixture.settle_legs(&mut data, zero.to_vec());
+    assert_eq!(data.encode(), Err(CustomRingError::InvalidInstructionData));
     refused(
-        settle(
-            &mut ring,
-            vec![InterfaceTransfer::SolWithdrawal { amount: 0 }],
-            &payer,
-        ),
-        CustomRingError::ZeroPublicLegAmount,
+        settle_raw(&mut ring, &zero, &payer),
+        CustomRingError::InvalidInstructionData,
     );
+    // The raw path parses a valid list, the refusal above is the zero leg's.
     refused(
-        settle(
+        settle_raw(
             &mut ring,
-            vec![
+            &[
                 InterfaceTransfer::SolDeposit { amount: 5 },
                 InterfaceTransfer::SolWithdrawal { amount: 5 },
             ],
@@ -1239,24 +1277,24 @@ fn public_legs_fit_the_account_list_and_the_leg_cap() {
         ),
         CustomRingError::InvalidSettlementAccounts,
     );
-    let legs = MAX_INTERFACE_TRANSFERS + 1;
-    fixture.settle_legs(
-        &mut data,
-        vec![InterfaceTransfer::SolWithdrawal { amount: 1 }; legs],
-    );
+    // `validate_under` refuses a list past the cap in the encoder and again in the program's frame parse.
+    let legs = vec![InterfaceTransfer::SolWithdrawal { amount: 1 }; MAX_INTERFACE_TRANSFERS + 1];
+    fixture.settle_legs(&mut data, legs.clone());
+    assert_eq!(data.encode(), Err(CustomRingError::InvalidInstructionData));
+    fixture.settle_legs(&mut data, vec![PLACEHOLDER_LEG]);
     let mut spp = spp_list(&ring.payer.pubkey(), &data, &payer_owner(&ring));
     let settlement = AccountMeta::new(Address::new_unique(), false);
-    spp.extend(std::iter::repeat_n(settlement, 2 * legs));
+    spp.extend(std::iter::repeat_n(settlement, 2 * legs.len()));
     refused(
         send(
             &mut ring,
             tag::TRANSFER,
             Vec::new(),
-            data.encode().unwrap(),
+            with_raw_legs(&data, &legs),
             spp,
             &[],
         ),
-        CustomRingError::TooManyPublicLegs,
+        CustomRingError::InvalidInstructionData,
     );
 }
 
@@ -1449,7 +1487,7 @@ fn a_delegate_reads_no_policy_root_and_requires_credential_roots() {
     let stale_bytes = stale.encode().unwrap();
     refused(
         delegate_move(&mut ring, &delegate, &stale, stale_bytes),
-        CustomRingError::InvalidCredentialRoots,
+        CustomRingError::RootNotServed,
     );
     let mut with_own = bytes;
     with_own[transact_flag::BYTE] |= transact_flag::OWN_ROOT;

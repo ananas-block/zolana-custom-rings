@@ -101,5 +101,6 @@
   "InvalidCredentialRead": 8532,
   "InvalidCredentialRoots": 8533,
   "InvalidEnrollmentAccounts": 8530,
-  "SaltedSourceOtherRing": 8536
+  "SaltedSourceOtherRing": 8536,
+  "TooManyDepositsForKey": 8537
 }

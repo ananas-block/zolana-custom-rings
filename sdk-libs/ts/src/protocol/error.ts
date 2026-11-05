@@ -310,6 +310,7 @@ export const RingProgramError = Object.freeze({
   invalidCredentialRoots: 8533,
   invalidEnrollmentAccounts: 8530,
   saltedSourceOtherRing: 8536,
+  tooManyDepositsForKey: 8537,
 } as const);
 
 export type RingProgramErrorName = keyof typeof RingProgramError;

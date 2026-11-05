@@ -106,8 +106,7 @@ impl DepositVerification<'_> {
             credentials: self.credentials,
             registry: self.registry,
         }
-        .hash()
-        .map_err(CustomRingError::from)?;
+        .hash()?;
         // 3. The auditor can recover the opening of each deposited owner commitment.
         RingProof {
             proof: &self.audited.proof,
