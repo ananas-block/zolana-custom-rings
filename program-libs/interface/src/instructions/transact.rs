@@ -328,7 +328,7 @@ pub struct FrameExtensions<'a> {
     pub signer_data_counts: Option<SignerDataCounts>,
 }
 
-/// The owner SPP's anonymous rail verifies and hides, the delivered audit publishes it.
+/// The owner SPP's anonymous rail verifies and hides, the transfer statement publishes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InProofOwner<'a> {
     pub owner: &'a [u8; 32],
