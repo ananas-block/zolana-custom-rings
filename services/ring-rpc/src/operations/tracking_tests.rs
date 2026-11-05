@@ -11,8 +11,8 @@ use crate::{
     hub::Clock,
     projection_lease::LeaseClaim,
     projection_reads::EnrollmentKey,
-    spent_index::{NoteSeal, ProjectionWriter},
-    utxos::Backing,
+    spent_index::{HistoryScope, LoadSpends, NoteSeal, ProjectionWriter},
+    utxos::{Backing, MAX_CACHED_ENTRIES},
 };
 
 const RING: Address = Address::new_from_array([8; 32]);
@@ -24,7 +24,11 @@ struct Served {
 }
 
 impl TrackingSource for Served {
-    async fn root(&self, _ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+    async fn root(
+        &self,
+        _ring: Address,
+        _finality: Finality,
+    ) -> Result<Option<TrackingRoot>, ClientError> {
         Ok(self.ledger.root())
     }
 
@@ -148,23 +152,22 @@ async fn a_row_sealed_to_another_auditor_is_refused() {
     assert_eq!(cursor, TrackingCursor::default());
 }
 
-#[tokio::test]
-async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evicted_row() {
-    const NOW: u64 = 1_000;
-    let auditor = X25519Keypair::new();
-    let seal = || NoteSeal::derive(&auditor, RING).expect("seal");
-    let database = Store::open("sqlite::memory:", 1).await.expect("store");
-    let store = AuditStore::new(Backing::Database {
+/// A bounded mirror over `database`, as a ring served with a store holds one.
+fn cached_store(database: &Store, auditor: &X25519Keypair, capacity: usize) -> AuditStore {
+    AuditStore::new(Backing::Database {
         store: database.clone(),
         ring: RING,
-        seal: Box::new(seal()),
-        capacity: 2,
-    });
-    let writer_seal = seal();
-    let writer = ProjectionWriter {
+        seal: Box::new(NoteSeal::derive(auditor, RING).expect("seal")),
+        capacity,
+    })
+}
+
+async fn writer<'a>(database: &'a Store, seal: &'a NoteSeal) -> ProjectionWriter<'a> {
+    const NOW: u64 = 1_000;
+    ProjectionWriter {
         db: database.connection(),
         ring: RING,
-        seal: &writer_seal,
+        seal,
         lease: LeaseClaim {
             db: database.connection(),
             ring: RING,
@@ -176,7 +179,16 @@ async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evict
         .expect("claim")
         .expect("held"),
         clock: Clock::Fixed(NOW),
-    };
+    }
+}
+
+#[tokio::test]
+async fn a_bounded_enrollment_cache_holds_its_bound_and_storage_answers_an_evicted_row() {
+    let auditor = X25519Keypair::new();
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let store = cached_store(&database, &auditor, 2);
+    let writer_seal = NoteSeal::derive(&auditor, RING).expect("seal");
+    let writer = writer(&database, &writer_seal).await;
     let rows: Vec<HeldEnrollment> = (1..=5)
         .map(|seed| {
             HeldEnrollment::unsealed(
@@ -308,4 +320,105 @@ async fn cached_scan_rows_are_persisted_before_the_durable_cursor() {
     );
     writer.commit_page(&delta).await.expect("commit derivation");
     assert!(writer.pending_owners().await.expect("completed").is_empty());
+}
+
+/// Confirmed reads the fork while it lives, finalized reads the canonical chain.
+struct Forked {
+    fork: Mutex<Option<TrackingLedger>>,
+    canonical: TrackingLedger,
+}
+
+impl Forked {
+    fn ledger(&self, root: &[u8; 32]) -> TrackingLedger {
+        let fork = self.fork.lock().expect("fork").clone();
+        fork.filter(|fork| fork.root().is_some_and(|held| held.root == *root))
+            .unwrap_or_else(|| self.canonical.clone())
+    }
+}
+
+impl TrackingSource for Forked {
+    async fn root(
+        &self,
+        _ring: Address,
+        finality: Finality,
+    ) -> Result<Option<TrackingRoot>, ClientError> {
+        let fork = self.fork.lock().expect("fork").clone();
+        Ok(match (finality, fork) {
+            (Finality::Confirmed, Some(fork)) => fork.root(),
+            (Finality::Confirmed, None) | (Finality::Finalized, _) => self.canonical.root(),
+        })
+    }
+
+    async fn records(
+        &self,
+        request: GetTrackingRecordsRequest,
+    ) -> Result<GetTrackingRecordsResponse, RingIndexerError> {
+        Ok(self.ledger(&request.expected_root.0).page(&request))
+    }
+}
+
+/// The audit's fork, A at leaf 1 on a fork and B at leaf 1 on the canonical chain.
+#[tokio::test]
+async fn a_forked_enrollment_never_enters_the_store_and_the_canonical_one_survives_a_restart() {
+    let auditor = X25519Keypair::new();
+    let enroll = |ledger: &TrackingLedger, seed: u8| {
+        ledger.enroll(Enrollment {
+            owner: owner(seed),
+            key: &NullifierKey::from_secret([seed; 31]),
+            list_salt: list_salt(seed),
+            auditor: &auditor.pubkey(),
+        })
+    };
+    let fork = TrackingLedger::default();
+    let forked = enroll(&fork, 1);
+    let source = Forked {
+        fork: Mutex::new(Some(fork)),
+        canonical: TrackingLedger::default(),
+    };
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = NoteSeal::derive(&auditor, RING).expect("seal");
+    let writer = writer(&database, &seal).await;
+    let scan = |store| TrackingScan {
+        ring: RING,
+        auditor: &auditor,
+        source: &source,
+        store,
+        durable: Some(&writer),
+    };
+
+    // 1. A confirmed only on the fork, the pass reads the finalized root and holds nothing.
+    let store = cached_store(&database, &auditor, MAX_CACHED_ENTRIES);
+    let mut cursor = TrackingCursor::default();
+    scan(&store).run(&mut cursor).await.expect("fork pass");
+    assert_eq!(enrollment(&store, &forked.member).await, None);
+    assert_eq!(cursor, TrackingCursor::default());
+
+    // 2. The fork drops, B finalizes at the same leaf and the next pass holds it.
+    *source.fork.lock().expect("fork") = None;
+    let canonical = enroll(&source.canonical, 2);
+    scan(&store).run(&mut cursor).await.expect("canonical pass");
+    assert_eq!(cursor.next_leaf(), 2);
+
+    // 3. A restart reads the committed cursor and resolves B from storage, A never was stored.
+    let restarted = cached_store(&database, &auditor, MAX_CACHED_ENTRIES);
+    let mut cursor = LoadSpends {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        scope: HistoryScope::Cold,
+    }
+    .load()
+    .await
+    .expect("load")
+    .tracking_cursor;
+    let end = scan(&restarted)
+        .run(&mut cursor)
+        .await
+        .expect("restarted pass");
+    assert_eq!(end, ScanEnd::Complete);
+    assert_eq!(
+        enrollment(&restarted, &canonical.member).await,
+        Some(canonical)
+    );
+    assert_eq!(enrollment(&restarted, &forked.member).await, None);
 }

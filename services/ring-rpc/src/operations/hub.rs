@@ -50,7 +50,7 @@ use crate::{
     replay::{LocalNonces, ReplayGuard},
     spent_index::NoteSeal,
     storage_chain::StorageChain,
-    upstream::{DepositHistory, DepositPage, TransactionSource},
+    upstream::{DepositHistory, DepositPage, Finality, TransactionSource},
     utxos::{AuditStore, Backing, MAX_CACHED_ENTRIES, UTXO_BACKFILL_INTERVAL},
 };
 
@@ -290,7 +290,7 @@ impl<S: TransactionSource + 'static> ServedRings for HubRings<S> {
     async fn tracking_registry(&self, ring: Address) -> Result<Address, RingRpcError> {
         self.0
             .source
-            .tracking_root(ring)
+            .tracking_root(ring, Finality::Confirmed)
             .await?
             .map(|root| root.registry)
             .ok_or_else(|| RelayError::RingNotServed.into())

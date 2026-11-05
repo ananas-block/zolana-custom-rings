@@ -149,10 +149,12 @@ pub trait TransactionSource: Send + Sync {
         async { Ok(None) }
     }
 
-    /// The newest root of the ring's pinned tracking registry, `None` reads no owner's secret.
+    /// The newest root of the ring's pinned tracking registry at `finality`, `None` reads no
+    /// owner's secret.
     fn tracking_root(
         &self,
         _ring: Address,
+        _finality: Finality,
     ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send {
         async { Ok(None) }
     }
@@ -224,6 +226,17 @@ impl<S: OpeningFetch + ?Sized> VerifiedOpenings for S {
         tip.verify_openings(&response, members)
             .map_err(|_| RingRpcError::InvalidIndexerResponse)
     }
+}
+
+/// The commitment a tracking read takes.
+///
+/// A confirmed root can leave the chain with its fork, so only a finalized root feeds the stored
+/// projection. The program serves a retired root for its whole grace, far past the finalization
+/// lag, so the indexer still proves the leaves under a finalized root at its confirmed tip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Finality {
+    Confirmed,
+    Finalized,
 }
 
 /// The newest root of a pinned tracking registry and the leaf count under it.
@@ -438,6 +451,23 @@ impl ChainSource {
 
     fn history(&self) -> HistorySource<'_> {
         HistorySource { source: self }
+    }
+
+    async fn account_at(
+        &self,
+        address: Address,
+        finality: Finality,
+    ) -> Result<Option<Account>, ClientError> {
+        let commitment = match finality {
+            Finality::Confirmed => CommitmentConfig::confirmed(),
+            Finality::Finalized => CommitmentConfig::finalized(),
+        };
+        self.rpc
+            .client()
+            .get_account_with_commitment(&address, commitment)
+            .await
+            .map(|response| response.value)
+            .map_err(|error| ClientError::Rpc(format!("get_account {address}: {error}")))
     }
 
     /// A foreign owner means the account does not exist for its program, not
@@ -676,10 +706,18 @@ impl TransactionSource for ChainSource {
         Ok(record.map(|record| record.scope))
     }
 
-    /// A v1 message carries every key, a loaded address list is refused.
-    async fn tracking_root(&self, ring: Address) -> Result<Option<TrackingRoot>, ClientError> {
+    /// The pin and the registry it names are read at one finality.
+    async fn tracking_root(
+        &self,
+        ring: Address,
+        finality: Finality,
+    ) -> Result<Option<TrackingRoot>, ClientError> {
         let (address, bump) = Address::find_program_address(&[RingPolicy::SEED], &ring);
-        let Some(account) = self.owned_account(address, ring).await? else {
+        let Some(account) = self
+            .account_at(address, finality)
+            .await?
+            .filter(|account| account.owner == ring)
+        else {
             return Ok(None);
         };
         let tracking = CanonicalAccount {
@@ -692,8 +730,7 @@ impl TransactionSource for ChainSource {
         .tracking;
         // The pin names the registry, an account it does not decode to serves no root.
         Ok(self
-            .rpc
-            .get_account(tracking)
+            .account_at(tracking, finality)
             .await?
             .and_then(|account| TrackingRegistry::decode(&account.owner, &account.data))
             .map(|registry| {
@@ -719,7 +756,7 @@ impl TransactionSource for ChainSource {
         ring: Address,
         owner: Address,
     ) -> Result<WalletEnrollment, ClientError> {
-        let Some(root) = self.tracking_root(ring).await? else {
+        let Some(root) = self.tracking_root(ring, Finality::Confirmed).await? else {
             return Ok(WalletEnrollment::NotEnrolled);
         };
         let (address, _) = TrackingAuthorization::find_address(&root.registry, &owner);
@@ -740,7 +777,7 @@ impl TransactionSource for ChainSource {
         owner: Address,
         reader: ReaderKeyBytes,
     ) -> Result<bool, ClientError> {
-        let Some(root) = self.tracking_root(ring).await? else {
+        let Some(root) = self.tracking_root(ring, Finality::Confirmed).await? else {
             return Ok(false);
         };
         let (address, _) = OwnerGrant::find_address(&root.registry, &owner, &reader);

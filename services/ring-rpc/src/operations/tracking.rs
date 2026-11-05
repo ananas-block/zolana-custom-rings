@@ -5,6 +5,10 @@
 //! a rotation moves only its viewing key. Leaves are appended in order, so every enrolled owner sits
 //! below the root's next index and a scan by leaf index under one root finds each of them once.
 //!
+//! A scan reads only the root the registry names at finalized commitment. A confirmed root can leave
+//! the chain with its fork, and a cursor moved past a forked leaf would never read the canonical row
+//! that replaces it, so nothing a fork wrote ever enters the store or derives a note's key.
+//!
 //! The ring indexer serves the rows unverified. Each row's path must rebuild the root the tracking
 //! registry account names, and its seal must hash to the row's `ct_hash` and open to the row's key
 //! and list tag. A page holds consecutive leaves from the cursor, only the last page may be short.
@@ -39,7 +43,7 @@ use crate::{
     bounded_map::{BoundedMap, Cached},
     error::RingRpcError,
     spent_index::ProjectionWriter,
-    upstream::{TrackingRoot, TransactionSource},
+    upstream::{Finality, TrackingRoot, TransactionSource},
     utxos::AuditStore,
 };
 
@@ -127,6 +131,7 @@ pub trait TrackingSource: Sync {
     fn root(
         &self,
         ring: Address,
+        finality: Finality,
     ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send;
 
     fn records(
@@ -149,8 +154,9 @@ impl<S: TransactionSource> TrackingSource for S {
     fn root(
         &self,
         ring: Address,
+        finality: Finality,
     ) -> impl Future<Output = Result<Option<TrackingRoot>, ClientError>> + Send {
-        self.tracking_root(ring)
+        self.tracking_root(ring, finality)
     }
 
     fn records(
@@ -343,8 +349,8 @@ impl EnrollmentAdmission {
 impl<S: TrackingSource> TrackingScan<'_, S> {
     /// Reads from leaf `cursor` under the registry's newest root until its next index or the cap.
     pub async fn run(self, cursor: &mut TrackingCursor) -> Result<ScanEnd, RingRpcError> {
-        // 1. One root for the whole pass, a later apply appends leaves the next pass reads.
-        let Some(root) = self.source.root(self.ring).await? else {
+        // 1. One finalized root for the whole pass, a later apply appends leaves the next pass reads.
+        let Some(root) = self.source.root(self.ring, Finality::Finalized).await? else {
             return Ok(ScanEnd::Complete);
         };
         for _ in 0..MAX_TRACKING_PAGES {
