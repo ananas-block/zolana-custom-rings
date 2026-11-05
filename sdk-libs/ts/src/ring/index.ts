@@ -649,6 +649,7 @@ export {
 export {
   checkAbsenceFloor,
   resolveCredential,
+  resolveCredentials,
   resolveRecipientKeys,
   type AbsentCredential,
   type CredentialClient,
