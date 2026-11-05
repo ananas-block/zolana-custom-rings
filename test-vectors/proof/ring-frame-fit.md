@@ -1,2486 +1,1952 @@
 Measured with the frame encoders, SPP's account builders and the v1 compiler. Ceilings 4096 B, 64 accounts, 12 signatures.
-min: one credential state tree, no co-signer, no leg, no fee, the payer an owner where it may be. full: own and curator roots, two credential state trees, one co-signer, 4 SOL legs, a fee, an outside payer, a body on every slot and one exit. Shared loads start credential state trees at tree zero and reuse the first SPP input tree as the address tree. Both full+4credential loads carry four credential state trees and two SPP input trees. The disjoint load uses separate address, credential state and SPP input trees. Full deposits use one credential state tree per slot. Ring-authority merges read one credential state tree. Owner-signed merges read none. The owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.
-Every row is one transaction. fits: the row clears the transaction and CPI ceilings and the selected key credential capacity. limit: what refuses a row, rail for a shape the rail has no SPP key for, else the excess in credential trees, accounts, signatures, bytes or CPI data at that row's load. A missing catalog key has no encoded measurement.
+min: tracking root, no co-signer, no leg, no fee, the payer an owner where it may be. full: own, curator and tracking roots, one co-signer, 4 SOL legs, a fee, an outside payer, a body on every slot and one exit. The owner run is the ceilings' bound under full, the key's rows bound it apart. A shape's every input and output slot is published.
+Every row is one transaction. fits: the row clears the transaction and CPI ceilings. limit: what refuses a row, rail for a shape the rail has no SPP key for, else the excess in accounts, signatures, bytes or CPI data at that row's load. A missing catalog key has no encoded measurement.
 | shape | rail | load | catalog key | bytes | accounts | signatures | owner run | frame | SPP CPI | fits | limit |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 1x2 | confidential signer | min | yes | 1314 | 8 | 1 | - | 929 | 945 | yes |  |
-| 1x2 | confidential signer | full | yes | 1904 | 19 | 3 | 1 | 1018 | 990 | yes |  |
-| 1x2 | confidential signer | full+spl | yes | 2272 | 26 | 3 | - | 1150 | 994 | yes |  |
-| 1x2 | confidential signer | full+data | yes | 2104 | 19 | 3 | - | 1218 | 1186 | yes |  |
-| 1x2 | confidential signer | full+reply | yes | 1904 | 19 | 3 | - | 1018 | 990 | yes |  |
-| 1x2 | confidential signer | full+2tree | yes | 1910 | 19 | 3 | - | 1023 | 994 | yes |  |
-| 1x2 | confidential signer | full+4credential-shared | yes | 1980 | 21 | 3 | - | 1027 | 994 | yes |  |
-| 1x2 | confidential signer | full+4credential-disjoint | yes | 2076 | 24 | 3 | - | 1027 | 994 | yes |  |
-| 1x2 | confidential in-proof | min | yes | 1409 | 8 | 1 | - | 1025 | 1042 | yes |  |
-| 1x2 | confidential in-proof | full | yes | 1903 | 18 | 2 | 1 | 1114 | 1087 | yes |  |
-| 1x2 | confidential in-proof | full+spl | yes | 2271 | 25 | 2 | - | 1246 | 1091 | yes |  |
-| 1x2 | confidential in-proof | full+data | yes | 2103 | 18 | 2 | - | 1314 | 1283 | yes |  |
-| 1x2 | confidential in-proof | full+reply | yes | 1903 | 18 | 2 | - | 1114 | 1087 | yes |  |
-| 1x2 | confidential in-proof | full+2tree | yes | 1909 | 18 | 2 | - | 1119 | 1091 | yes |  |
-| 1x2 | confidential in-proof | full+4credential-shared | yes | 1979 | 20 | 2 | - | 1123 | 1091 | yes |  |
-| 1x2 | confidential in-proof | full+4credential-disjoint | yes | 2075 | 23 | 2 | - | 1123 | 1091 | yes |  |
-| 1x2 | anonymous hidden | min | yes | 1481 | 8 | 1 | - | 1097 | 1144 | yes |  |
-| 1x2 | anonymous hidden | full | yes | 1951 | 15 | 2 | 1 | 1258 | 1271 | yes |  |
-| 1x2 | anonymous hidden | full+spl | yes | 2319 | 22 | 2 | - | 1390 | 1275 | yes |  |
-| 1x2 | anonymous hidden | full+data | yes | 2151 | 15 | 2 | - | 1458 | 1467 | yes |  |
-| 1x2 | anonymous hidden | full+reply | yes | 2050 | 15 | 2 | - | 1357 | 1368 | yes |  |
-| 1x2 | anonymous hidden | full+2tree | yes | 1957 | 15 | 2 | - | 1263 | 1275 | yes |  |
-| 1x2 | anonymous hidden | full+4credential-shared | yes | 2027 | 17 | 2 | - | 1267 | 1275 | yes |  |
-| 1x2 | anonymous hidden | full+4credential-disjoint | yes | 2123 | 20 | 2 | - | 1267 | 1275 | yes |  |
-| 1x2 | anonymous public owners | min | yes | 1418 | 8 | 1 | - | 1033 | 1047 | yes |  |
-| 1x2 | anonymous public owners | full | yes | 2080 | 19 | 3 | 1 | 1194 | 1174 | yes |  |
-| 1x2 | anonymous public owners | full+spl | yes | 2448 | 26 | 3 | - | 1326 | 1178 | yes |  |
-| 1x2 | anonymous public owners | full+data | yes | 2280 | 19 | 3 | - | 1394 | 1370 | yes |  |
-| 1x2 | anonymous public owners | full+reply | yes | 2179 | 19 | 3 | - | 1293 | 1271 | yes |  |
-| 1x2 | anonymous public owners | full+2tree | yes | 2086 | 19 | 3 | - | 1199 | 1178 | yes |  |
-| 1x2 | anonymous public owners | full+4credential-shared | yes | 2156 | 21 | 3 | - | 1203 | 1178 | yes |  |
-| 1x2 | anonymous public owners | full+4credential-disjoint | yes | 2252 | 24 | 3 | - | 1203 | 1178 | yes |  |
-| 1x2 | confidential entry | min | yes | 1522 | 8 | 1 | - | 1137 | 1153 | yes |  |
-| 1x2 | confidential entry | full | yes | 2112 | 19 | 3 | 1 | 1226 | 1198 | yes |  |
-| 1x2 | confidential entry | full+spl | yes | 2480 | 26 | 3 | - | 1358 | 1202 | yes |  |
-| 1x2 | confidential entry | full+data | yes | 2312 | 19 | 3 | - | 1426 | 1394 | yes |  |
-| 1x2 | confidential entry | full+reply | yes | 2112 | 19 | 3 | - | 1226 | 1198 | yes |  |
-| 1x2 | confidential entry | full+2tree | yes | 2118 | 19 | 3 | - | 1231 | 1202 | yes |  |
-| 1x2 | confidential entry | full+4credential-shared | yes | 2188 | 21 | 3 | - | 1235 | 1202 | yes |  |
-| 1x2 | confidential entry | full+4credential-disjoint | yes | 2284 | 24 | 3 | - | 1235 | 1202 | yes |  |
-| 1x2 | anonymous entry | min | yes | 1721 | 8 | 1 | - | 1337 | 1352 | yes |  |
-| 1x2 | anonymous entry | full | yes | 2191 | 15 | 2 | 1 | 1498 | 1479 | yes |  |
-| 1x2 | anonymous entry | full+spl | yes | 2559 | 22 | 2 | - | 1630 | 1483 | yes |  |
-| 1x2 | anonymous entry | full+data | yes | 2391 | 15 | 2 | - | 1698 | 1675 | yes |  |
-| 1x2 | anonymous entry | full+reply | yes | 2290 | 15 | 2 | - | 1597 | 1576 | yes |  |
-| 1x2 | anonymous entry | full+2tree | yes | 2197 | 15 | 2 | - | 1503 | 1483 | yes |  |
-| 1x2 | anonymous entry | full+4credential-shared | yes | 2267 | 17 | 2 | - | 1507 | 1483 | yes |  |
-| 1x2 | anonymous entry | full+4credential-disjoint | yes | 2363 | 20 | 2 | - | 1507 | 1483 | yes |  |
+| 1x2 | confidential signer | min | yes | 1348 | 9 | 1 | - | 932 | 945 | yes |  |
+| 1x2 | confidential signer | full | yes | 1903 | 19 | 3 | 1 | 1019 | 990 | yes |  |
+| 1x2 | confidential signer | full+spl | yes | 2271 | 26 | 3 | - | 1151 | 994 | yes |  |
+| 1x2 | confidential signer | full+data | yes | 2103 | 19 | 3 | - | 1219 | 1186 | yes |  |
+| 1x2 | confidential signer | full+reply | yes | 1903 | 19 | 3 | - | 1019 | 990 | yes |  |
+| 1x2 | confidential signer | full+2tree | yes | 1941 | 20 | 3 | - | 1024 | 994 | yes |  |
+| 1x2 | confidential in-proof | min | yes | 1443 | 9 | 1 | - | 1028 | 1042 | yes |  |
+| 1x2 | confidential in-proof | full | yes | 1902 | 18 | 2 | 1 | 1115 | 1087 | yes |  |
+| 1x2 | confidential in-proof | full+spl | yes | 2270 | 25 | 2 | - | 1247 | 1091 | yes |  |
+| 1x2 | confidential in-proof | full+data | yes | 2102 | 18 | 2 | - | 1315 | 1283 | yes |  |
+| 1x2 | confidential in-proof | full+reply | yes | 1902 | 18 | 2 | - | 1115 | 1087 | yes |  |
+| 1x2 | confidential in-proof | full+2tree | yes | 1940 | 19 | 2 | - | 1120 | 1091 | yes |  |
+| 1x2 | anonymous hidden | min | yes | 1475 | 9 | 1 | - | 1060 | 1104 | yes |  |
+| 1x2 | anonymous hidden | full | yes | 1902 | 15 | 2 | 1 | 1211 | 1223 | yes |  |
+| 1x2 | anonymous hidden | full+spl | yes | 2270 | 22 | 2 | - | 1343 | 1227 | yes |  |
+| 1x2 | anonymous hidden | full+data | yes | 2102 | 15 | 2 | - | 1411 | 1419 | yes |  |
+| 1x2 | anonymous hidden | full+reply | yes | 2001 | 15 | 2 | - | 1310 | 1320 | yes |  |
+| 1x2 | anonymous hidden | full+2tree | yes | 1940 | 16 | 2 | - | 1216 | 1227 | yes |  |
+| 1x2 | anonymous public owners | min | yes | 1412 | 9 | 1 | - | 996 | 1007 | yes |  |
+| 1x2 | anonymous public owners | full | yes | 2031 | 19 | 3 | 1 | 1147 | 1126 | yes |  |
+| 1x2 | anonymous public owners | full+spl | yes | 2399 | 26 | 3 | - | 1279 | 1130 | yes |  |
+| 1x2 | anonymous public owners | full+data | yes | 2231 | 19 | 3 | - | 1347 | 1322 | yes |  |
+| 1x2 | anonymous public owners | full+reply | yes | 2130 | 19 | 3 | - | 1246 | 1223 | yes |  |
+| 1x2 | anonymous public owners | full+2tree | yes | 2069 | 20 | 3 | - | 1152 | 1130 | yes |  |
+| 1x2 | confidential entry | min | yes | 1556 | 9 | 1 | - | 1140 | 1153 | yes |  |
+| 1x2 | confidential entry | full | yes | 2111 | 19 | 3 | 1 | 1227 | 1198 | yes |  |
+| 1x2 | confidential entry | full+spl | yes | 2479 | 26 | 3 | - | 1359 | 1202 | yes |  |
+| 1x2 | confidential entry | full+data | yes | 2311 | 19 | 3 | - | 1427 | 1394 | yes |  |
+| 1x2 | confidential entry | full+reply | yes | 2111 | 19 | 3 | - | 1227 | 1198 | yes |  |
+| 1x2 | confidential entry | full+2tree | yes | 2149 | 20 | 3 | - | 1232 | 1202 | yes |  |
+| 1x2 | anonymous entry | min | yes | 1715 | 9 | 1 | - | 1300 | 1312 | yes |  |
+| 1x2 | anonymous entry | full | yes | 2142 | 15 | 2 | 1 | 1451 | 1431 | yes |  |
+| 1x2 | anonymous entry | full+spl | yes | 2510 | 22 | 2 | - | 1583 | 1435 | yes |  |
+| 1x2 | anonymous entry | full+data | yes | 2342 | 15 | 2 | - | 1651 | 1627 | yes |  |
+| 1x2 | anonymous entry | full+reply | yes | 2241 | 15 | 2 | - | 1550 | 1528 | yes |  |
+| 1x2 | anonymous entry | full+2tree | yes | 2180 | 16 | 2 | - | 1456 | 1435 | yes |  |
 | 1x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 1x4 | confidential signer | min | yes | 1748 | 8 | 1 | - | 1363 | 1451 | yes |  |
-| 1x4 | confidential signer | full | yes | 2338 | 19 | 3 | 1 | 1452 | 1496 | yes |  |
-| 1x4 | confidential signer | full+spl | yes | 2706 | 26 | 3 | - | 1584 | 1500 | yes |  |
-| 1x4 | confidential signer | full+data | yes | 2736 | 19 | 3 | - | 1850 | 1886 | yes |  |
-| 1x4 | confidential signer | full+reply | yes | 2338 | 19 | 3 | - | 1452 | 1496 | yes |  |
-| 1x4 | confidential signer | full+2tree | yes | 2344 | 19 | 3 | - | 1457 | 1500 | yes |  |
-| 1x4 | confidential signer | full+4credential-shared | yes | 2414 | 21 | 3 | - | 1461 | 1500 | yes |  |
-| 1x4 | confidential signer | full+4credential-disjoint | yes | 2510 | 24 | 3 | - | 1461 | 1500 | yes |  |
-| 1x4 | confidential in-proof | min | yes | 1843 | 8 | 1 | - | 1459 | 1548 | yes |  |
-| 1x4 | confidential in-proof | full | yes | 2337 | 18 | 2 | 1 | 1548 | 1593 | yes |  |
-| 1x4 | confidential in-proof | full+spl | yes | 2705 | 25 | 2 | - | 1680 | 1597 | yes |  |
-| 1x4 | confidential in-proof | full+data | yes | 2735 | 18 | 2 | - | 1946 | 1983 | yes |  |
-| 1x4 | confidential in-proof | full+reply | yes | 2337 | 18 | 2 | - | 1548 | 1593 | yes |  |
-| 1x4 | confidential in-proof | full+2tree | yes | 2343 | 18 | 2 | - | 1553 | 1597 | yes |  |
-| 1x4 | confidential in-proof | full+4credential-shared | yes | 2413 | 20 | 2 | - | 1557 | 1597 | yes |  |
-| 1x4 | confidential in-proof | full+4credential-disjoint | yes | 2509 | 23 | 2 | - | 1557 | 1597 | yes |  |
-| 1x4 | anonymous hidden | min | yes | 1979 | 8 | 1 | - | 1595 | 1714 | yes |  |
-| 1x4 | anonymous hidden | full | yes | 2449 | 15 | 2 | 1 | 1756 | 1841 | yes |  |
-| 1x4 | anonymous hidden | full+spl | yes | 2817 | 22 | 2 | - | 1888 | 1845 | yes |  |
-| 1x4 | anonymous hidden | full+data | yes | 2847 | 15 | 2 | - | 2154 | 2231 | yes |  |
-| 1x4 | anonymous hidden | full+reply | yes | 2742 | 15 | 2 | - | 2049 | 2132 | yes |  |
-| 1x4 | anonymous hidden | full+2tree | yes | 2455 | 15 | 2 | - | 1761 | 1845 | yes |  |
-| 1x4 | anonymous hidden | full+4credential-shared | yes | 2525 | 17 | 2 | - | 1765 | 1845 | yes |  |
-| 1x4 | anonymous hidden | full+4credential-disjoint | yes | 2621 | 20 | 2 | - | 1765 | 1845 | yes |  |
-| 1x4 | anonymous public owners | min | yes | 1916 | 8 | 1 | - | 1531 | 1617 | yes |  |
-| 1x4 | anonymous public owners | full | yes | 2578 | 19 | 3 | 1 | 1692 | 1744 | yes |  |
-| 1x4 | anonymous public owners | full+spl | yes | 2946 | 26 | 3 | - | 1824 | 1748 | yes |  |
-| 1x4 | anonymous public owners | full+data | yes | 2976 | 19 | 3 | - | 2090 | 2134 | yes |  |
-| 1x4 | anonymous public owners | full+reply | yes | 2871 | 19 | 3 | - | 1985 | 2035 | yes |  |
-| 1x4 | anonymous public owners | full+2tree | yes | 2584 | 19 | 3 | - | 1697 | 1748 | yes |  |
-| 1x4 | anonymous public owners | full+4credential-shared | yes | 2654 | 21 | 3 | - | 1701 | 1748 | yes |  |
-| 1x4 | anonymous public owners | full+4credential-disjoint | yes | 2750 | 24 | 3 | - | 1701 | 1748 | yes |  |
-| 1x4 | confidential entry | min | yes | 1956 | 8 | 1 | - | 1571 | 1659 | yes |  |
-| 1x4 | confidential entry | full | yes | 2546 | 19 | 3 | 1 | 1660 | 1704 | yes |  |
-| 1x4 | confidential entry | full+spl | yes | 2914 | 26 | 3 | - | 1792 | 1708 | yes |  |
-| 1x4 | confidential entry | full+data | yes | 2944 | 19 | 3 | - | 2058 | 2094 | yes |  |
-| 1x4 | confidential entry | full+reply | yes | 2546 | 19 | 3 | - | 1660 | 1704 | yes |  |
-| 1x4 | confidential entry | full+2tree | yes | 2552 | 19 | 3 | - | 1665 | 1708 | yes |  |
-| 1x4 | confidential entry | full+4credential-shared | yes | 2622 | 21 | 3 | - | 1669 | 1708 | yes |  |
-| 1x4 | confidential entry | full+4credential-disjoint | yes | 2718 | 24 | 3 | - | 1669 | 1708 | yes |  |
-| 1x4 | anonymous entry | min | yes | 2219 | 8 | 1 | - | 1835 | 1922 | yes |  |
-| 1x4 | anonymous entry | full | yes | 2689 | 15 | 2 | 1 | 1996 | 2049 | yes |  |
-| 1x4 | anonymous entry | full+spl | yes | 3057 | 22 | 2 | - | 2128 | 2053 | yes |  |
-| 1x4 | anonymous entry | full+data | yes | 3087 | 15 | 2 | - | 2394 | 2439 | yes |  |
-| 1x4 | anonymous entry | full+reply | yes | 2982 | 15 | 2 | - | 2289 | 2340 | yes |  |
-| 1x4 | anonymous entry | full+2tree | yes | 2695 | 15 | 2 | - | 2001 | 2053 | yes |  |
-| 1x4 | anonymous entry | full+4credential-shared | yes | 2765 | 17 | 2 | - | 2005 | 2053 | yes |  |
-| 1x4 | anonymous entry | full+4credential-disjoint | yes | 2861 | 20 | 2 | - | 2005 | 2053 | yes |  |
+| 1x4 | confidential signer | min | yes | 1782 | 9 | 1 | - | 1366 | 1451 | yes |  |
+| 1x4 | confidential signer | full | yes | 2337 | 19 | 3 | 1 | 1453 | 1496 | yes |  |
+| 1x4 | confidential signer | full+spl | yes | 2705 | 26 | 3 | - | 1585 | 1500 | yes |  |
+| 1x4 | confidential signer | full+data | yes | 2735 | 19 | 3 | - | 1851 | 1886 | yes |  |
+| 1x4 | confidential signer | full+reply | yes | 2337 | 19 | 3 | - | 1453 | 1496 | yes |  |
+| 1x4 | confidential signer | full+2tree | yes | 2375 | 20 | 3 | - | 1458 | 1500 | yes |  |
+| 1x4 | confidential in-proof | min | yes | 1877 | 9 | 1 | - | 1462 | 1548 | yes |  |
+| 1x4 | confidential in-proof | full | yes | 2336 | 18 | 2 | 1 | 1549 | 1593 | yes |  |
+| 1x4 | confidential in-proof | full+spl | yes | 2704 | 25 | 2 | - | 1681 | 1597 | yes |  |
+| 1x4 | confidential in-proof | full+data | yes | 2734 | 18 | 2 | - | 1947 | 1983 | yes |  |
+| 1x4 | confidential in-proof | full+reply | yes | 2336 | 18 | 2 | - | 1549 | 1593 | yes |  |
+| 1x4 | confidential in-proof | full+2tree | yes | 2374 | 19 | 2 | - | 1554 | 1597 | yes |  |
+| 1x4 | anonymous hidden | min | yes | 1973 | 9 | 1 | - | 1558 | 1674 | yes |  |
+| 1x4 | anonymous hidden | full | yes | 2400 | 15 | 2 | 1 | 1709 | 1793 | yes |  |
+| 1x4 | anonymous hidden | full+spl | yes | 2768 | 22 | 2 | - | 1841 | 1797 | yes |  |
+| 1x4 | anonymous hidden | full+data | yes | 2798 | 15 | 2 | - | 2107 | 2183 | yes |  |
+| 1x4 | anonymous hidden | full+reply | yes | 2693 | 15 | 2 | - | 2002 | 2084 | yes |  |
+| 1x4 | anonymous hidden | full+2tree | yes | 2438 | 16 | 2 | - | 1714 | 1797 | yes |  |
+| 1x4 | anonymous public owners | min | yes | 1910 | 9 | 1 | - | 1494 | 1577 | yes |  |
+| 1x4 | anonymous public owners | full | yes | 2529 | 19 | 3 | 1 | 1645 | 1696 | yes |  |
+| 1x4 | anonymous public owners | full+spl | yes | 2897 | 26 | 3 | - | 1777 | 1700 | yes |  |
+| 1x4 | anonymous public owners | full+data | yes | 2927 | 19 | 3 | - | 2043 | 2086 | yes |  |
+| 1x4 | anonymous public owners | full+reply | yes | 2822 | 19 | 3 | - | 1938 | 1987 | yes |  |
+| 1x4 | anonymous public owners | full+2tree | yes | 2567 | 20 | 3 | - | 1650 | 1700 | yes |  |
+| 1x4 | confidential entry | min | yes | 1990 | 9 | 1 | - | 1574 | 1659 | yes |  |
+| 1x4 | confidential entry | full | yes | 2545 | 19 | 3 | 1 | 1661 | 1704 | yes |  |
+| 1x4 | confidential entry | full+spl | yes | 2913 | 26 | 3 | - | 1793 | 1708 | yes |  |
+| 1x4 | confidential entry | full+data | yes | 2943 | 19 | 3 | - | 2059 | 2094 | yes |  |
+| 1x4 | confidential entry | full+reply | yes | 2545 | 19 | 3 | - | 1661 | 1704 | yes |  |
+| 1x4 | confidential entry | full+2tree | yes | 2583 | 20 | 3 | - | 1666 | 1708 | yes |  |
+| 1x4 | anonymous entry | min | yes | 2213 | 9 | 1 | - | 1798 | 1882 | yes |  |
+| 1x4 | anonymous entry | full | yes | 2640 | 15 | 2 | 1 | 1949 | 2001 | yes |  |
+| 1x4 | anonymous entry | full+spl | yes | 3008 | 22 | 2 | - | 2081 | 2005 | yes |  |
+| 1x4 | anonymous entry | full+data | yes | 3038 | 15 | 2 | - | 2347 | 2391 | yes |  |
+| 1x4 | anonymous entry | full+reply | yes | 2933 | 15 | 2 | - | 2242 | 2292 | yes |  |
+| 1x4 | anonymous entry | full+2tree | yes | 2678 | 16 | 2 | - | 1954 | 2005 | yes |  |
 | 1x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 1x8 | confidential signer | min | yes | 2616 | 8 | 1 | - | 2231 | 2463 | yes |  |
-| 1x8 | confidential signer | full | yes | 3206 | 19 | 3 | 1 | 2320 | 2508 | yes |  |
-| 1x8 | confidential signer | full+spl | yes | 3574 | 26 | 3 | - | 2452 | 2512 | yes |  |
-| 1x8 | confidential signer | full+data | yes | 4000 | 19 | 3 | - | 3114 | 3286 | yes |  |
-| 1x8 | confidential signer | full+reply | yes | 3206 | 19 | 3 | - | 2320 | 2508 | yes |  |
-| 1x8 | confidential signer | full+2tree | yes | 3212 | 19 | 3 | - | 2325 | 2512 | yes |  |
-| 1x8 | confidential signer | full+4credential-shared | yes | 3282 | 21 | 3 | - | 2329 | 2512 | yes |  |
-| 1x8 | confidential signer | full+4credential-disjoint | yes | 3378 | 24 | 3 | - | 2329 | 2512 | yes |  |
-| 1x8 | confidential in-proof | min | yes | 2711 | 8 | 1 | - | 2327 | 2560 | yes |  |
-| 1x8 | confidential in-proof | full | yes | 3205 | 18 | 2 | 1 | 2416 | 2605 | yes |  |
-| 1x8 | confidential in-proof | full+spl | yes | 3573 | 25 | 2 | - | 2548 | 2609 | yes |  |
-| 1x8 | confidential in-proof | full+data | yes | 3999 | 18 | 2 | - | 3210 | 3383 | yes |  |
-| 1x8 | confidential in-proof | full+reply | yes | 3205 | 18 | 2 | - | 2416 | 2605 | yes |  |
-| 1x8 | confidential in-proof | full+2tree | yes | 3211 | 18 | 2 | - | 2421 | 2609 | yes |  |
-| 1x8 | confidential in-proof | full+4credential-shared | yes | 3281 | 20 | 2 | - | 2425 | 2609 | yes |  |
-| 1x8 | confidential in-proof | full+4credential-disjoint | yes | 3377 | 23 | 2 | - | 2425 | 2609 | yes |  |
-| 1x8 | anonymous hidden | min | yes | 2975 | 8 | 1 | - | 2591 | 2854 | yes |  |
-| 1x8 | anonymous hidden | full | yes | 3445 | 15 | 2 | 1 | 2752 | 2981 | yes |  |
-| 1x8 | anonymous hidden | full+spl | yes | 3813 | 22 | 2 | - | 2884 | 2985 | yes |  |
-| 1x8 | anonymous hidden | full+data | yes | 4239 | 15 | 2 | - | 3546 | 3759 | no | 143 B |
-| 1x8 | anonymous hidden | full+reply | yes | 4126 | 15 | 2 | - | 3433 | 3660 | no | 30 B |
-| 1x8 | anonymous hidden | full+2tree | yes | 3451 | 15 | 2 | - | 2757 | 2985 | yes |  |
-| 1x8 | anonymous hidden | full+4credential-shared | yes | 3521 | 17 | 2 | - | 2761 | 2985 | yes |  |
-| 1x8 | anonymous hidden | full+4credential-disjoint | yes | 3617 | 20 | 2 | - | 2761 | 2985 | yes |  |
-| 1x8 | anonymous public owners | min | yes | 2912 | 8 | 1 | - | 2527 | 2757 | yes |  |
-| 1x8 | anonymous public owners | full | yes | 3574 | 19 | 3 | 1 | 2688 | 2884 | yes |  |
-| 1x8 | anonymous public owners | full+spl | yes | 3942 | 26 | 3 | - | 2820 | 2888 | yes |  |
-| 1x8 | anonymous public owners | full+data | yes | 4368 | 19 | 3 | - | 3482 | 3662 | no | 272 B |
-| 1x8 | anonymous public owners | full+reply | yes | 4255 | 19 | 3 | - | 3369 | 3563 | no | 159 B |
-| 1x8 | anonymous public owners | full+2tree | yes | 3580 | 19 | 3 | - | 2693 | 2888 | yes |  |
-| 1x8 | anonymous public owners | full+4credential-shared | yes | 3650 | 21 | 3 | - | 2697 | 2888 | yes |  |
-| 1x8 | anonymous public owners | full+4credential-disjoint | yes | 3746 | 24 | 3 | - | 2697 | 2888 | yes |  |
-| 1x8 | confidential entry | min | yes | 2824 | 8 | 1 | - | 2439 | 2671 | yes |  |
-| 1x8 | confidential entry | full | yes | 3414 | 19 | 3 | 1 | 2528 | 2716 | yes |  |
-| 1x8 | confidential entry | full+spl | yes | 3782 | 26 | 3 | - | 2660 | 2720 | yes |  |
-| 1x8 | confidential entry | full+data | yes | 4208 | 19 | 3 | - | 3322 | 3494 | no | 112 B |
-| 1x8 | confidential entry | full+reply | yes | 3414 | 19 | 3 | - | 2528 | 2716 | yes |  |
-| 1x8 | confidential entry | full+2tree | yes | 3420 | 19 | 3 | - | 2533 | 2720 | yes |  |
-| 1x8 | confidential entry | full+4credential-shared | yes | 3490 | 21 | 3 | - | 2537 | 2720 | yes |  |
-| 1x8 | confidential entry | full+4credential-disjoint | yes | 3586 | 24 | 3 | - | 2537 | 2720 | yes |  |
-| 1x8 | anonymous entry | min | yes | 3215 | 8 | 1 | - | 2831 | 3062 | yes |  |
-| 1x8 | anonymous entry | full | yes | 3685 | 15 | 2 | 1 | 2992 | 3189 | yes |  |
-| 1x8 | anonymous entry | full+spl | yes | 4053 | 22 | 2 | - | 3124 | 3193 | yes |  |
-| 1x8 | anonymous entry | full+data | yes | 4479 | 15 | 2 | - | 3786 | 3967 | no | 383 B |
-| 1x8 | anonymous entry | full+reply | yes | 4366 | 15 | 2 | - | 3673 | 3868 | no | 270 B |
-| 1x8 | anonymous entry | full+2tree | yes | 3691 | 15 | 2 | - | 2997 | 3193 | yes |  |
-| 1x8 | anonymous entry | full+4credential-shared | yes | 3761 | 17 | 2 | - | 3001 | 3193 | yes |  |
-| 1x8 | anonymous entry | full+4credential-disjoint | yes | 3857 | 20 | 2 | - | 3001 | 3193 | yes |  |
+| 1x8 | confidential signer | min | yes | 2650 | 9 | 1 | - | 2234 | 2463 | yes |  |
+| 1x8 | confidential signer | full | yes | 3205 | 19 | 3 | 1 | 2321 | 2508 | yes |  |
+| 1x8 | confidential signer | full+spl | yes | 3573 | 26 | 3 | - | 2453 | 2512 | yes |  |
+| 1x8 | confidential signer | full+data | yes | 3999 | 19 | 3 | - | 3115 | 3286 | yes |  |
+| 1x8 | confidential signer | full+reply | yes | 3205 | 19 | 3 | - | 2321 | 2508 | yes |  |
+| 1x8 | confidential signer | full+2tree | yes | 3243 | 20 | 3 | - | 2326 | 2512 | yes |  |
+| 1x8 | confidential in-proof | min | yes | 2745 | 9 | 1 | - | 2330 | 2560 | yes |  |
+| 1x8 | confidential in-proof | full | yes | 3204 | 18 | 2 | 1 | 2417 | 2605 | yes |  |
+| 1x8 | confidential in-proof | full+spl | yes | 3572 | 25 | 2 | - | 2549 | 2609 | yes |  |
+| 1x8 | confidential in-proof | full+data | yes | 3998 | 18 | 2 | - | 3211 | 3383 | yes |  |
+| 1x8 | confidential in-proof | full+reply | yes | 3204 | 18 | 2 | - | 2417 | 2605 | yes |  |
+| 1x8 | confidential in-proof | full+2tree | yes | 3242 | 19 | 2 | - | 2422 | 2609 | yes |  |
+| 1x8 | anonymous hidden | min | yes | 2969 | 9 | 1 | - | 2554 | 2814 | yes |  |
+| 1x8 | anonymous hidden | full | yes | 3396 | 15 | 2 | 1 | 2705 | 2933 | yes |  |
+| 1x8 | anonymous hidden | full+spl | yes | 3764 | 22 | 2 | - | 2837 | 2937 | yes |  |
+| 1x8 | anonymous hidden | full+data | yes | 4190 | 15 | 2 | - | 3499 | 3711 | no | 94 B |
+| 1x8 | anonymous hidden | full+reply | yes | 4077 | 15 | 2 | - | 3386 | 3612 | yes |  |
+| 1x8 | anonymous hidden | full+2tree | yes | 3434 | 16 | 2 | - | 2710 | 2937 | yes |  |
+| 1x8 | anonymous public owners | min | yes | 2906 | 9 | 1 | - | 2490 | 2717 | yes |  |
+| 1x8 | anonymous public owners | full | yes | 3525 | 19 | 3 | 1 | 2641 | 2836 | yes |  |
+| 1x8 | anonymous public owners | full+spl | yes | 3893 | 26 | 3 | - | 2773 | 2840 | yes |  |
+| 1x8 | anonymous public owners | full+data | yes | 4319 | 19 | 3 | - | 3435 | 3614 | no | 223 B |
+| 1x8 | anonymous public owners | full+reply | yes | 4206 | 19 | 3 | - | 3322 | 3515 | no | 110 B |
+| 1x8 | anonymous public owners | full+2tree | yes | 3563 | 20 | 3 | - | 2646 | 2840 | yes |  |
+| 1x8 | confidential entry | min | yes | 2858 | 9 | 1 | - | 2442 | 2671 | yes |  |
+| 1x8 | confidential entry | full | yes | 3413 | 19 | 3 | 1 | 2529 | 2716 | yes |  |
+| 1x8 | confidential entry | full+spl | yes | 3781 | 26 | 3 | - | 2661 | 2720 | yes |  |
+| 1x8 | confidential entry | full+data | yes | 4207 | 19 | 3 | - | 3323 | 3494 | no | 111 B |
+| 1x8 | confidential entry | full+reply | yes | 3413 | 19 | 3 | - | 2529 | 2716 | yes |  |
+| 1x8 | confidential entry | full+2tree | yes | 3451 | 20 | 3 | - | 2534 | 2720 | yes |  |
+| 1x8 | anonymous entry | min | yes | 3209 | 9 | 1 | - | 2794 | 3022 | yes |  |
+| 1x8 | anonymous entry | full | yes | 3636 | 15 | 2 | 1 | 2945 | 3141 | yes |  |
+| 1x8 | anonymous entry | full+spl | yes | 4004 | 22 | 2 | - | 3077 | 3145 | yes |  |
+| 1x8 | anonymous entry | full+data | yes | 4430 | 15 | 2 | - | 3739 | 3919 | no | 334 B |
+| 1x8 | anonymous entry | full+reply | yes | 4317 | 15 | 2 | - | 3626 | 3820 | no | 221 B |
+| 1x8 | anonymous entry | full+2tree | yes | 3674 | 16 | 2 | - | 2950 | 3145 | yes |  |
 | 1x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 2x2 | confidential signer | min | yes | 1379 | 9 | 1 | - | 961 | 978 | yes |  |
-| 2x2 | confidential signer | full | yes | 1969 | 20 | 3 | 2 | 1050 | 1023 | yes |  |
-| 2x2 | confidential signer | full+spl | yes | 2337 | 27 | 3 | - | 1182 | 1027 | yes |  |
-| 2x2 | confidential signer | full+data | yes | 2169 | 20 | 3 | - | 1250 | 1219 | yes |  |
-| 2x2 | confidential signer | full+reply | yes | 1969 | 20 | 3 | - | 1050 | 1023 | yes |  |
-| 2x2 | confidential signer | full+2tree | yes | 1975 | 20 | 3 | - | 1055 | 1027 | yes |  |
-| 2x2 | confidential signer | full+4credential-shared | yes | 2045 | 22 | 3 | - | 1059 | 1027 | yes |  |
-| 2x2 | confidential signer | full+4credential-disjoint | yes | 2141 | 25 | 3 | - | 1059 | 1027 | yes |  |
-| 2x2 | confidential in-proof | min | yes | 1474 | 9 | 1 | - | 1057 | 1075 | yes |  |
-| 2x2 | confidential in-proof | full | yes | 1968 | 19 | 2 | 2 | 1146 | 1120 | yes |  |
-| 2x2 | confidential in-proof | full+spl | yes | 2336 | 26 | 2 | - | 1278 | 1124 | yes |  |
-| 2x2 | confidential in-proof | full+data | yes | 2168 | 19 | 2 | - | 1346 | 1316 | yes |  |
-| 2x2 | confidential in-proof | full+reply | yes | 1968 | 19 | 2 | - | 1146 | 1120 | yes |  |
-| 2x2 | confidential in-proof | full+2tree | yes | 1974 | 19 | 2 | - | 1151 | 1124 | yes |  |
-| 2x2 | confidential in-proof | full+4credential-shared | yes | 2044 | 21 | 2 | - | 1155 | 1124 | yes |  |
-| 2x2 | confidential in-proof | full+4credential-disjoint | yes | 2140 | 24 | 2 | - | 1155 | 1124 | yes |  |
-| 2x2 | anonymous hidden | min | yes | 1546 | 9 | 1 | - | 1129 | 1177 | yes |  |
-| 2x2 | anonymous hidden | full | yes | 2016 | 16 | 2 | 2 | 1290 | 1304 | yes |  |
-| 2x2 | anonymous hidden | full+spl | yes | 2384 | 23 | 2 | - | 1422 | 1308 | yes |  |
-| 2x2 | anonymous hidden | full+data | yes | 2216 | 16 | 2 | - | 1490 | 1500 | yes |  |
-| 2x2 | anonymous hidden | full+reply | yes | 2115 | 16 | 2 | - | 1389 | 1401 | yes |  |
-| 2x2 | anonymous hidden | full+2tree | yes | 2022 | 16 | 2 | - | 1295 | 1308 | yes |  |
-| 2x2 | anonymous hidden | full+4credential-shared | yes | 2092 | 18 | 2 | - | 1299 | 1308 | yes |  |
-| 2x2 | anonymous hidden | full+4credential-disjoint | yes | 2188 | 21 | 2 | - | 1299 | 1308 | yes |  |
-| 2x2 | anonymous public owners | min | yes | 1483 | 9 | 1 | - | 1065 | 1080 | yes |  |
-| 2x2 | anonymous public owners | full | yes | 2145 | 20 | 3 | 2 | 1226 | 1207 | yes |  |
-| 2x2 | anonymous public owners | full+spl | yes | 2513 | 27 | 3 | - | 1358 | 1211 | yes |  |
-| 2x2 | anonymous public owners | full+data | yes | 2345 | 20 | 3 | - | 1426 | 1403 | yes |  |
-| 2x2 | anonymous public owners | full+reply | yes | 2244 | 20 | 3 | - | 1325 | 1304 | yes |  |
-| 2x2 | anonymous public owners | full+2tree | yes | 2151 | 20 | 3 | - | 1231 | 1211 | yes |  |
-| 2x2 | anonymous public owners | full+4credential-shared | yes | 2221 | 22 | 3 | - | 1235 | 1211 | yes |  |
-| 2x2 | anonymous public owners | full+4credential-disjoint | yes | 2317 | 25 | 3 | - | 1235 | 1211 | yes |  |
-| 2x2 | confidential entry | min | yes | 1787 | 9 | 1 | - | 1369 | 1386 | yes |  |
-| 2x2 | confidential entry | full | yes | 2377 | 20 | 3 | 2 | 1458 | 1431 | yes |  |
-| 2x2 | confidential entry | full+spl | yes | 2745 | 27 | 3 | - | 1590 | 1435 | yes |  |
-| 2x2 | confidential entry | full+data | yes | 2577 | 20 | 3 | - | 1658 | 1627 | yes |  |
-| 2x2 | confidential entry | full+reply | yes | 2377 | 20 | 3 | - | 1458 | 1431 | yes |  |
-| 2x2 | confidential entry | full+2tree | yes | 2383 | 20 | 3 | - | 1463 | 1435 | yes |  |
-| 2x2 | confidential entry | full+4credential-shared | yes | 2453 | 22 | 3 | - | 1467 | 1435 | yes |  |
-| 2x2 | confidential entry | full+4credential-disjoint | yes | 2549 | 25 | 3 | - | 1467 | 1435 | yes |  |
-| 2x2 | anonymous entry | min | yes | 1986 | 9 | 1 | - | 1569 | 1585 | yes |  |
-| 2x2 | anonymous entry | full | yes | 2456 | 16 | 2 | 2 | 1730 | 1712 | yes |  |
-| 2x2 | anonymous entry | full+spl | yes | 2824 | 23 | 2 | - | 1862 | 1716 | yes |  |
-| 2x2 | anonymous entry | full+data | yes | 2656 | 16 | 2 | - | 1930 | 1908 | yes |  |
-| 2x2 | anonymous entry | full+reply | yes | 2555 | 16 | 2 | - | 1829 | 1809 | yes |  |
-| 2x2 | anonymous entry | full+2tree | yes | 2462 | 16 | 2 | - | 1735 | 1716 | yes |  |
-| 2x2 | anonymous entry | full+4credential-shared | yes | 2532 | 18 | 2 | - | 1739 | 1716 | yes |  |
-| 2x2 | anonymous entry | full+4credential-disjoint | yes | 2628 | 21 | 2 | - | 1739 | 1716 | yes |  |
-| 2x2 | delegate | min | yes | 1379 | 9 | 1 | - | 961 | 978 | yes |  |
-| 2x2 | delegate | full | yes | 1757 | 16 | 2 | - | 1034 | 1023 | yes |  |
-| 2x2 | delegate | full+spl | yes | 1997 | 23 | 2 | - | 1038 | 1027 | yes |  |
-| 2x2 | delegate | full+data | yes | 1957 | 16 | 2 | - | 1234 | 1219 | yes |  |
-| 2x2 | delegate | full+reply | yes | 1757 | 16 | 2 | - | 1034 | 1023 | yes |  |
-| 2x2 | delegate | full+2tree | yes | 1763 | 16 | 2 | - | 1039 | 1027 | yes |  |
-| 2x2 | delegate | full+4credential-shared | yes | 1833 | 18 | 2 | - | 1043 | 1027 | yes |  |
-| 2x2 | delegate | full+4credential-disjoint | yes | 1929 | 21 | 2 | - | 1043 | 1027 | yes |  |
-| 2x2 | anonymous delegate | min | yes | 1483 | 9 | 1 | - | 1065 | 1080 | yes |  |
-| 2x2 | anonymous delegate | full | yes | 1933 | 16 | 2 | - | 1210 | 1207 | yes |  |
-| 2x2 | anonymous delegate | full+spl | yes | 2173 | 23 | 2 | - | 1214 | 1211 | yes |  |
-| 2x2 | anonymous delegate | full+data | yes | 2133 | 16 | 2 | - | 1410 | 1403 | yes |  |
-| 2x2 | anonymous delegate | full+reply | yes | 2032 | 16 | 2 | - | 1309 | 1304 | yes |  |
-| 2x2 | anonymous delegate | full+2tree | yes | 1939 | 16 | 2 | - | 1215 | 1211 | yes |  |
-| 2x2 | anonymous delegate | full+4credential-shared | yes | 2009 | 18 | 2 | - | 1219 | 1211 | yes |  |
-| 2x2 | anonymous delegate | full+4credential-disjoint | yes | 2105 | 21 | 2 | - | 1219 | 1211 | yes |  |
-| 2x4 | confidential signer | min | yes | 1813 | 9 | 1 | - | 1395 | 1484 | yes |  |
-| 2x4 | confidential signer | full | yes | 2403 | 20 | 3 | 2 | 1484 | 1529 | yes |  |
-| 2x4 | confidential signer | full+spl | yes | 2771 | 27 | 3 | - | 1616 | 1533 | yes |  |
-| 2x4 | confidential signer | full+data | yes | 2801 | 20 | 3 | - | 1882 | 1919 | yes |  |
-| 2x4 | confidential signer | full+reply | yes | 2403 | 20 | 3 | - | 1484 | 1529 | yes |  |
-| 2x4 | confidential signer | full+2tree | yes | 2409 | 20 | 3 | - | 1489 | 1533 | yes |  |
-| 2x4 | confidential signer | full+4credential-shared | yes | 2479 | 22 | 3 | - | 1493 | 1533 | yes |  |
-| 2x4 | confidential signer | full+4credential-disjoint | yes | 2575 | 25 | 3 | - | 1493 | 1533 | yes |  |
-| 2x4 | confidential in-proof | min | yes | 1908 | 9 | 1 | - | 1491 | 1581 | yes |  |
-| 2x4 | confidential in-proof | full | yes | 2402 | 19 | 2 | 2 | 1580 | 1626 | yes |  |
-| 2x4 | confidential in-proof | full+spl | yes | 2770 | 26 | 2 | - | 1712 | 1630 | yes |  |
-| 2x4 | confidential in-proof | full+data | yes | 2800 | 19 | 2 | - | 1978 | 2016 | yes |  |
-| 2x4 | confidential in-proof | full+reply | yes | 2402 | 19 | 2 | - | 1580 | 1626 | yes |  |
-| 2x4 | confidential in-proof | full+2tree | yes | 2408 | 19 | 2 | - | 1585 | 1630 | yes |  |
-| 2x4 | confidential in-proof | full+4credential-shared | yes | 2478 | 21 | 2 | - | 1589 | 1630 | yes |  |
-| 2x4 | confidential in-proof | full+4credential-disjoint | yes | 2574 | 24 | 2 | - | 1589 | 1630 | yes |  |
-| 2x4 | anonymous hidden | min | yes | 2044 | 9 | 1 | - | 1627 | 1747 | yes |  |
-| 2x4 | anonymous hidden | full | yes | 2514 | 16 | 2 | 2 | 1788 | 1874 | yes |  |
-| 2x4 | anonymous hidden | full+spl | yes | 2882 | 23 | 2 | - | 1920 | 1878 | yes |  |
-| 2x4 | anonymous hidden | full+data | yes | 2912 | 16 | 2 | - | 2186 | 2264 | yes |  |
-| 2x4 | anonymous hidden | full+reply | yes | 2807 | 16 | 2 | - | 2081 | 2165 | yes |  |
-| 2x4 | anonymous hidden | full+2tree | yes | 2520 | 16 | 2 | - | 1793 | 1878 | yes |  |
-| 2x4 | anonymous hidden | full+4credential-shared | yes | 2590 | 18 | 2 | - | 1797 | 1878 | yes |  |
-| 2x4 | anonymous hidden | full+4credential-disjoint | yes | 2686 | 21 | 2 | - | 1797 | 1878 | yes |  |
-| 2x4 | anonymous public owners | min | yes | 1981 | 9 | 1 | - | 1563 | 1650 | yes |  |
-| 2x4 | anonymous public owners | full | yes | 2643 | 20 | 3 | 2 | 1724 | 1777 | yes |  |
-| 2x4 | anonymous public owners | full+spl | yes | 3011 | 27 | 3 | - | 1856 | 1781 | yes |  |
-| 2x4 | anonymous public owners | full+data | yes | 3041 | 20 | 3 | - | 2122 | 2167 | yes |  |
-| 2x4 | anonymous public owners | full+reply | yes | 2936 | 20 | 3 | - | 2017 | 2068 | yes |  |
-| 2x4 | anonymous public owners | full+2tree | yes | 2649 | 20 | 3 | - | 1729 | 1781 | yes |  |
-| 2x4 | anonymous public owners | full+4credential-shared | yes | 2719 | 22 | 3 | - | 1733 | 1781 | yes |  |
-| 2x4 | anonymous public owners | full+4credential-disjoint | yes | 2815 | 25 | 3 | - | 1733 | 1781 | yes |  |
-| 2x4 | confidential entry | min | yes | 2221 | 9 | 1 | - | 1803 | 1892 | yes |  |
-| 2x4 | confidential entry | full | yes | 2811 | 20 | 3 | 2 | 1892 | 1937 | yes |  |
-| 2x4 | confidential entry | full+spl | yes | 3179 | 27 | 3 | - | 2024 | 1941 | yes |  |
-| 2x4 | confidential entry | full+data | yes | 3209 | 20 | 3 | - | 2290 | 2327 | yes |  |
-| 2x4 | confidential entry | full+reply | yes | 2811 | 20 | 3 | - | 1892 | 1937 | yes |  |
-| 2x4 | confidential entry | full+2tree | yes | 2817 | 20 | 3 | - | 1897 | 1941 | yes |  |
-| 2x4 | confidential entry | full+4credential-shared | yes | 2887 | 22 | 3 | - | 1901 | 1941 | yes |  |
-| 2x4 | confidential entry | full+4credential-disjoint | yes | 2983 | 25 | 3 | - | 1901 | 1941 | yes |  |
-| 2x4 | anonymous entry | min | yes | 2484 | 9 | 1 | - | 2067 | 2155 | yes |  |
-| 2x4 | anonymous entry | full | yes | 2954 | 16 | 2 | 2 | 2228 | 2282 | yes |  |
-| 2x4 | anonymous entry | full+spl | yes | 3322 | 23 | 2 | - | 2360 | 2286 | yes |  |
-| 2x4 | anonymous entry | full+data | yes | 3352 | 16 | 2 | - | 2626 | 2672 | yes |  |
-| 2x4 | anonymous entry | full+reply | yes | 3247 | 16 | 2 | - | 2521 | 2573 | yes |  |
-| 2x4 | anonymous entry | full+2tree | yes | 2960 | 16 | 2 | - | 2233 | 2286 | yes |  |
-| 2x4 | anonymous entry | full+4credential-shared | yes | 3030 | 18 | 2 | - | 2237 | 2286 | yes |  |
-| 2x4 | anonymous entry | full+4credential-disjoint | yes | 3126 | 21 | 2 | - | 2237 | 2286 | yes |  |
+| 2x2 | confidential signer | min | yes | 1413 | 10 | 1 | - | 964 | 978 | yes |  |
+| 2x2 | confidential signer | full | yes | 1968 | 20 | 3 | 2 | 1051 | 1023 | yes |  |
+| 2x2 | confidential signer | full+spl | yes | 2336 | 27 | 3 | - | 1183 | 1027 | yes |  |
+| 2x2 | confidential signer | full+data | yes | 2168 | 20 | 3 | - | 1251 | 1219 | yes |  |
+| 2x2 | confidential signer | full+reply | yes | 1968 | 20 | 3 | - | 1051 | 1023 | yes |  |
+| 2x2 | confidential signer | full+2tree | yes | 2006 | 21 | 3 | - | 1056 | 1027 | yes |  |
+| 2x2 | confidential in-proof | min | yes | 1508 | 10 | 1 | - | 1060 | 1075 | yes |  |
+| 2x2 | confidential in-proof | full | yes | 1967 | 19 | 2 | 2 | 1147 | 1120 | yes |  |
+| 2x2 | confidential in-proof | full+spl | yes | 2335 | 26 | 2 | - | 1279 | 1124 | yes |  |
+| 2x2 | confidential in-proof | full+data | yes | 2167 | 19 | 2 | - | 1347 | 1316 | yes |  |
+| 2x2 | confidential in-proof | full+reply | yes | 1967 | 19 | 2 | - | 1147 | 1120 | yes |  |
+| 2x2 | confidential in-proof | full+2tree | yes | 2005 | 20 | 2 | - | 1152 | 1124 | yes |  |
+| 2x2 | anonymous hidden | min | yes | 1540 | 10 | 1 | - | 1092 | 1137 | yes |  |
+| 2x2 | anonymous hidden | full | yes | 1967 | 16 | 2 | 2 | 1243 | 1256 | yes |  |
+| 2x2 | anonymous hidden | full+spl | yes | 2335 | 23 | 2 | - | 1375 | 1260 | yes |  |
+| 2x2 | anonymous hidden | full+data | yes | 2167 | 16 | 2 | - | 1443 | 1452 | yes |  |
+| 2x2 | anonymous hidden | full+reply | yes | 2066 | 16 | 2 | - | 1342 | 1353 | yes |  |
+| 2x2 | anonymous hidden | full+2tree | yes | 2005 | 17 | 2 | - | 1248 | 1260 | yes |  |
+| 2x2 | anonymous public owners | min | yes | 1477 | 10 | 1 | - | 1028 | 1040 | yes |  |
+| 2x2 | anonymous public owners | full | yes | 2096 | 20 | 3 | 2 | 1179 | 1159 | yes |  |
+| 2x2 | anonymous public owners | full+spl | yes | 2464 | 27 | 3 | - | 1311 | 1163 | yes |  |
+| 2x2 | anonymous public owners | full+data | yes | 2296 | 20 | 3 | - | 1379 | 1355 | yes |  |
+| 2x2 | anonymous public owners | full+reply | yes | 2195 | 20 | 3 | - | 1278 | 1256 | yes |  |
+| 2x2 | anonymous public owners | full+2tree | yes | 2134 | 21 | 3 | - | 1184 | 1163 | yes |  |
+| 2x2 | confidential entry | min | yes | 1821 | 10 | 1 | - | 1372 | 1386 | yes |  |
+| 2x2 | confidential entry | full | yes | 2376 | 20 | 3 | 2 | 1459 | 1431 | yes |  |
+| 2x2 | confidential entry | full+spl | yes | 2744 | 27 | 3 | - | 1591 | 1435 | yes |  |
+| 2x2 | confidential entry | full+data | yes | 2576 | 20 | 3 | - | 1659 | 1627 | yes |  |
+| 2x2 | confidential entry | full+reply | yes | 2376 | 20 | 3 | - | 1459 | 1431 | yes |  |
+| 2x2 | confidential entry | full+2tree | yes | 2414 | 21 | 3 | - | 1464 | 1435 | yes |  |
+| 2x2 | anonymous entry | min | yes | 1980 | 10 | 1 | - | 1532 | 1545 | yes |  |
+| 2x2 | anonymous entry | full | yes | 2407 | 16 | 2 | 2 | 1683 | 1664 | yes |  |
+| 2x2 | anonymous entry | full+spl | yes | 2775 | 23 | 2 | - | 1815 | 1668 | yes |  |
+| 2x2 | anonymous entry | full+data | yes | 2607 | 16 | 2 | - | 1883 | 1860 | yes |  |
+| 2x2 | anonymous entry | full+reply | yes | 2506 | 16 | 2 | - | 1782 | 1761 | yes |  |
+| 2x2 | anonymous entry | full+2tree | yes | 2445 | 17 | 2 | - | 1688 | 1668 | yes |  |
+| 2x2 | delegate | min | yes | 1413 | 10 | 1 | - | 964 | 978 | yes |  |
+| 2x2 | delegate | full | yes | 1756 | 16 | 2 | - | 1035 | 1023 | yes |  |
+| 2x2 | delegate | full+spl | yes | 1996 | 23 | 2 | - | 1039 | 1027 | yes |  |
+| 2x2 | delegate | full+data | yes | 1956 | 16 | 2 | - | 1235 | 1219 | yes |  |
+| 2x2 | delegate | full+reply | yes | 1756 | 16 | 2 | - | 1035 | 1023 | yes |  |
+| 2x2 | delegate | full+2tree | yes | 1794 | 17 | 2 | - | 1040 | 1027 | yes |  |
+| 2x2 | anonymous delegate | min | yes | 1477 | 10 | 1 | - | 1028 | 1040 | yes |  |
+| 2x2 | anonymous delegate | full | yes | 1884 | 16 | 2 | - | 1163 | 1159 | yes |  |
+| 2x2 | anonymous delegate | full+spl | yes | 2124 | 23 | 2 | - | 1167 | 1163 | yes |  |
+| 2x2 | anonymous delegate | full+data | yes | 2084 | 16 | 2 | - | 1363 | 1355 | yes |  |
+| 2x2 | anonymous delegate | full+reply | yes | 1983 | 16 | 2 | - | 1262 | 1256 | yes |  |
+| 2x2 | anonymous delegate | full+2tree | yes | 1922 | 17 | 2 | - | 1168 | 1163 | yes |  |
+| 2x4 | confidential signer | min | yes | 1847 | 10 | 1 | - | 1398 | 1484 | yes |  |
+| 2x4 | confidential signer | full | yes | 2402 | 20 | 3 | 2 | 1485 | 1529 | yes |  |
+| 2x4 | confidential signer | full+spl | yes | 2770 | 27 | 3 | - | 1617 | 1533 | yes |  |
+| 2x4 | confidential signer | full+data | yes | 2800 | 20 | 3 | - | 1883 | 1919 | yes |  |
+| 2x4 | confidential signer | full+reply | yes | 2402 | 20 | 3 | - | 1485 | 1529 | yes |  |
+| 2x4 | confidential signer | full+2tree | yes | 2440 | 21 | 3 | - | 1490 | 1533 | yes |  |
+| 2x4 | confidential in-proof | min | yes | 1942 | 10 | 1 | - | 1494 | 1581 | yes |  |
+| 2x4 | confidential in-proof | full | yes | 2401 | 19 | 2 | 2 | 1581 | 1626 | yes |  |
+| 2x4 | confidential in-proof | full+spl | yes | 2769 | 26 | 2 | - | 1713 | 1630 | yes |  |
+| 2x4 | confidential in-proof | full+data | yes | 2799 | 19 | 2 | - | 1979 | 2016 | yes |  |
+| 2x4 | confidential in-proof | full+reply | yes | 2401 | 19 | 2 | - | 1581 | 1626 | yes |  |
+| 2x4 | confidential in-proof | full+2tree | yes | 2439 | 20 | 2 | - | 1586 | 1630 | yes |  |
+| 2x4 | anonymous hidden | min | yes | 2038 | 10 | 1 | - | 1590 | 1707 | yes |  |
+| 2x4 | anonymous hidden | full | yes | 2465 | 16 | 2 | 2 | 1741 | 1826 | yes |  |
+| 2x4 | anonymous hidden | full+spl | yes | 2833 | 23 | 2 | - | 1873 | 1830 | yes |  |
+| 2x4 | anonymous hidden | full+data | yes | 2863 | 16 | 2 | - | 2139 | 2216 | yes |  |
+| 2x4 | anonymous hidden | full+reply | yes | 2758 | 16 | 2 | - | 2034 | 2117 | yes |  |
+| 2x4 | anonymous hidden | full+2tree | yes | 2503 | 17 | 2 | - | 1746 | 1830 | yes |  |
+| 2x4 | anonymous public owners | min | yes | 1975 | 10 | 1 | - | 1526 | 1610 | yes |  |
+| 2x4 | anonymous public owners | full | yes | 2594 | 20 | 3 | 2 | 1677 | 1729 | yes |  |
+| 2x4 | anonymous public owners | full+spl | yes | 2962 | 27 | 3 | - | 1809 | 1733 | yes |  |
+| 2x4 | anonymous public owners | full+data | yes | 2992 | 20 | 3 | - | 2075 | 2119 | yes |  |
+| 2x4 | anonymous public owners | full+reply | yes | 2887 | 20 | 3 | - | 1970 | 2020 | yes |  |
+| 2x4 | anonymous public owners | full+2tree | yes | 2632 | 21 | 3 | - | 1682 | 1733 | yes |  |
+| 2x4 | confidential entry | min | yes | 2255 | 10 | 1 | - | 1806 | 1892 | yes |  |
+| 2x4 | confidential entry | full | yes | 2810 | 20 | 3 | 2 | 1893 | 1937 | yes |  |
+| 2x4 | confidential entry | full+spl | yes | 3178 | 27 | 3 | - | 2025 | 1941 | yes |  |
+| 2x4 | confidential entry | full+data | yes | 3208 | 20 | 3 | - | 2291 | 2327 | yes |  |
+| 2x4 | confidential entry | full+reply | yes | 2810 | 20 | 3 | - | 1893 | 1937 | yes |  |
+| 2x4 | confidential entry | full+2tree | yes | 2848 | 21 | 3 | - | 1898 | 1941 | yes |  |
+| 2x4 | anonymous entry | min | yes | 2478 | 10 | 1 | - | 2030 | 2115 | yes |  |
+| 2x4 | anonymous entry | full | yes | 2905 | 16 | 2 | 2 | 2181 | 2234 | yes |  |
+| 2x4 | anonymous entry | full+spl | yes | 3273 | 23 | 2 | - | 2313 | 2238 | yes |  |
+| 2x4 | anonymous entry | full+data | yes | 3303 | 16 | 2 | - | 2579 | 2624 | yes |  |
+| 2x4 | anonymous entry | full+reply | yes | 3198 | 16 | 2 | - | 2474 | 2525 | yes |  |
+| 2x4 | anonymous entry | full+2tree | yes | 2943 | 17 | 2 | - | 2186 | 2238 | yes |  |
 | 2x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 1x16 | confidential signer | min | yes | 4354 | 8 | 1 | - | 3969 | 4487 | no | 258 B |
-| 1x16 | confidential signer | full | yes | 4944 | 19 | 3 | none | 4058 | 4532 | no | 848 B |
-| 1x16 | confidential signer | full+spl | yes | 5312 | 26 | 3 | - | 4190 | 4536 | no | 1216 B |
-| 1x16 | confidential signer | full+data | yes | 6530 | 19 | 3 | - | 5644 | 6086 | no | 2434 B |
-| 1x16 | confidential signer | full+reply | yes | 4944 | 19 | 3 | - | 4058 | 4532 | no | 848 B |
-| 1x16 | confidential signer | full+2tree | yes | 4950 | 19 | 3 | - | 4063 | 4536 | no | 854 B |
-| 1x16 | confidential signer | full+4credential-shared | yes | 5020 | 21 | 3 | - | 4067 | 4536 | no | 924 B |
-| 1x16 | confidential signer | full+4credential-disjoint | yes | 5116 | 24 | 3 | - | 4067 | 4536 | no | 1020 B |
-| 1x16 | confidential in-proof | min | yes | 4449 | 8 | 1 | - | 4065 | 4584 | no | 353 B |
-| 1x16 | confidential in-proof | full | yes | 4943 | 18 | 2 | none | 4154 | 4629 | no | 847 B |
-| 1x16 | confidential in-proof | full+spl | yes | 5311 | 25 | 2 | - | 4286 | 4633 | no | 1215 B |
-| 1x16 | confidential in-proof | full+data | yes | 6529 | 18 | 2 | - | 5740 | 6183 | no | 2433 B |
-| 1x16 | confidential in-proof | full+reply | yes | 4943 | 18 | 2 | - | 4154 | 4629 | no | 847 B |
-| 1x16 | confidential in-proof | full+2tree | yes | 4949 | 18 | 2 | - | 4159 | 4633 | no | 853 B |
-| 1x16 | confidential in-proof | full+4credential-shared | yes | 5019 | 20 | 2 | - | 4163 | 4633 | no | 923 B |
-| 1x16 | confidential in-proof | full+4credential-disjoint | yes | 5115 | 23 | 2 | - | 4163 | 4633 | no | 1019 B |
-| 1x16 | anonymous hidden | min | yes | 4969 | 8 | 1 | - | 4585 | 5134 | no | 873 B |
-| 1x16 | anonymous hidden | full | yes | 5439 | 15 | 2 | none | 4746 | 5261 | no | 1343 B |
-| 1x16 | anonymous hidden | full+spl | yes | 5807 | 22 | 2 | - | 4878 | 5265 | no | 1711 B |
-| 1x16 | anonymous hidden | full+data | yes | 7025 | 15 | 2 | - | 6332 | 6815 | no | 2929 B |
-| 1x16 | anonymous hidden | full+reply | yes | 6896 | 15 | 2 | - | 6203 | 6716 | no | 2800 B |
-| 1x16 | anonymous hidden | full+2tree | yes | 5445 | 15 | 2 | - | 4751 | 5265 | no | 1349 B |
-| 1x16 | anonymous hidden | full+4credential-shared | yes | 5515 | 17 | 2 | - | 4755 | 5265 | no | 1419 B |
-| 1x16 | anonymous hidden | full+4credential-disjoint | yes | 5611 | 20 | 2 | - | 4755 | 5265 | no | 1515 B |
-| 1x16 | anonymous public owners | min | yes | 4906 | 8 | 1 | - | 4521 | 5037 | no | 810 B |
-| 1x16 | anonymous public owners | full | yes | 5568 | 19 | 3 | none | 4682 | 5164 | no | 1472 B |
-| 1x16 | anonymous public owners | full+spl | yes | 5936 | 26 | 3 | - | 4814 | 5168 | no | 1840 B |
-| 1x16 | anonymous public owners | full+data | yes | 7154 | 19 | 3 | - | 6268 | 6718 | no | 3058 B |
-| 1x16 | anonymous public owners | full+reply | yes | 7025 | 19 | 3 | - | 6139 | 6619 | no | 2929 B |
-| 1x16 | anonymous public owners | full+2tree | yes | 5574 | 19 | 3 | - | 4687 | 5168 | no | 1478 B |
-| 1x16 | anonymous public owners | full+4credential-shared | yes | 5644 | 21 | 3 | - | 4691 | 5168 | no | 1548 B |
-| 1x16 | anonymous public owners | full+4credential-disjoint | yes | 5740 | 24 | 3 | - | 4691 | 5168 | no | 1644 B |
+| 1x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 1x16 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 1x16 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 1x16 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 1x16 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 1x16 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 1x16 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 1x16 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 2x8 | confidential signer | min | yes | 2681 | 9 | 1 | - | 2263 | 2496 | yes |  |
-| 2x8 | confidential signer | full | yes | 3271 | 20 | 3 | 2 | 2352 | 2541 | yes |  |
-| 2x8 | confidential signer | full+spl | yes | 3639 | 27 | 3 | - | 2484 | 2545 | yes |  |
-| 2x8 | confidential signer | full+data | yes | 4065 | 20 | 3 | - | 3146 | 3319 | yes |  |
-| 2x8 | confidential signer | full+reply | yes | 3271 | 20 | 3 | - | 2352 | 2541 | yes |  |
-| 2x8 | confidential signer | full+2tree | yes | 3277 | 20 | 3 | - | 2357 | 2545 | yes |  |
-| 2x8 | confidential signer | full+4credential-shared | yes | 3347 | 22 | 3 | - | 2361 | 2545 | yes |  |
-| 2x8 | confidential signer | full+4credential-disjoint | yes | 3443 | 25 | 3 | - | 2361 | 2545 | yes |  |
-| 2x8 | confidential in-proof | min | yes | 2776 | 9 | 1 | - | 2359 | 2593 | yes |  |
-| 2x8 | confidential in-proof | full | yes | 3270 | 19 | 2 | 2 | 2448 | 2638 | yes |  |
-| 2x8 | confidential in-proof | full+spl | yes | 3638 | 26 | 2 | - | 2580 | 2642 | yes |  |
-| 2x8 | confidential in-proof | full+data | yes | 4064 | 19 | 2 | - | 3242 | 3416 | yes |  |
-| 2x8 | confidential in-proof | full+reply | yes | 3270 | 19 | 2 | - | 2448 | 2638 | yes |  |
-| 2x8 | confidential in-proof | full+2tree | yes | 3276 | 19 | 2 | - | 2453 | 2642 | yes |  |
-| 2x8 | confidential in-proof | full+4credential-shared | yes | 3346 | 21 | 2 | - | 2457 | 2642 | yes |  |
-| 2x8 | confidential in-proof | full+4credential-disjoint | yes | 3442 | 24 | 2 | - | 2457 | 2642 | yes |  |
-| 2x8 | anonymous hidden | min | yes | 3040 | 9 | 1 | - | 2623 | 2887 | yes |  |
-| 2x8 | anonymous hidden | full | yes | 3510 | 16 | 2 | 2 | 2784 | 3014 | yes |  |
-| 2x8 | anonymous hidden | full+spl | yes | 3878 | 23 | 2 | - | 2916 | 3018 | yes |  |
-| 2x8 | anonymous hidden | full+data | yes | 4304 | 16 | 2 | - | 3578 | 3792 | no | 208 B |
-| 2x8 | anonymous hidden | full+reply | yes | 4191 | 16 | 2 | - | 3465 | 3693 | no | 95 B |
-| 2x8 | anonymous hidden | full+2tree | yes | 3516 | 16 | 2 | - | 2789 | 3018 | yes |  |
-| 2x8 | anonymous hidden | full+4credential-shared | yes | 3586 | 18 | 2 | - | 2793 | 3018 | yes |  |
-| 2x8 | anonymous hidden | full+4credential-disjoint | yes | 3682 | 21 | 2 | - | 2793 | 3018 | yes |  |
-| 2x8 | anonymous public owners | min | yes | 2977 | 9 | 1 | - | 2559 | 2790 | yes |  |
-| 2x8 | anonymous public owners | full | yes | 3639 | 20 | 3 | 2 | 2720 | 2917 | yes |  |
-| 2x8 | anonymous public owners | full+spl | yes | 4007 | 27 | 3 | - | 2852 | 2921 | yes |  |
-| 2x8 | anonymous public owners | full+data | yes | 4433 | 20 | 3 | - | 3514 | 3695 | no | 337 B |
-| 2x8 | anonymous public owners | full+reply | yes | 4320 | 20 | 3 | - | 3401 | 3596 | no | 224 B |
-| 2x8 | anonymous public owners | full+2tree | yes | 3645 | 20 | 3 | - | 2725 | 2921 | yes |  |
-| 2x8 | anonymous public owners | full+4credential-shared | yes | 3715 | 22 | 3 | - | 2729 | 2921 | yes |  |
-| 2x8 | anonymous public owners | full+4credential-disjoint | yes | 3811 | 25 | 3 | - | 2729 | 2921 | yes |  |
-| 2x8 | confidential entry | min | yes | 3089 | 9 | 1 | - | 2671 | 2904 | yes |  |
-| 2x8 | confidential entry | full | yes | 3679 | 20 | 3 | 2 | 2760 | 2949 | yes |  |
-| 2x8 | confidential entry | full+spl | yes | 4047 | 27 | 3 | - | 2892 | 2953 | yes |  |
-| 2x8 | confidential entry | full+data | yes | 4473 | 20 | 3 | - | 3554 | 3727 | no | 377 B |
-| 2x8 | confidential entry | full+reply | yes | 3679 | 20 | 3 | - | 2760 | 2949 | yes |  |
-| 2x8 | confidential entry | full+2tree | yes | 3685 | 20 | 3 | - | 2765 | 2953 | yes |  |
-| 2x8 | confidential entry | full+4credential-shared | yes | 3755 | 22 | 3 | - | 2769 | 2953 | yes |  |
-| 2x8 | confidential entry | full+4credential-disjoint | yes | 3851 | 25 | 3 | - | 2769 | 2953 | yes |  |
-| 2x8 | anonymous entry | min | yes | 3480 | 9 | 1 | - | 3063 | 3295 | yes |  |
-| 2x8 | anonymous entry | full | yes | 3950 | 16 | 2 | 1 | 3224 | 3422 | yes |  |
-| 2x8 | anonymous entry | full+spl | yes | 4318 | 23 | 2 | - | 3356 | 3426 | no | 222 B |
-| 2x8 | anonymous entry | full+data | yes | 4744 | 16 | 2 | - | 4018 | 4200 | no | 648 B |
-| 2x8 | anonymous entry | full+reply | yes | 4631 | 16 | 2 | - | 3905 | 4101 | no | 535 B |
-| 2x8 | anonymous entry | full+2tree | yes | 3956 | 16 | 2 | - | 3229 | 3426 | yes |  |
-| 2x8 | anonymous entry | full+4credential-shared | yes | 4026 | 18 | 2 | - | 3233 | 3426 | yes |  |
-| 2x8 | anonymous entry | full+4credential-disjoint | yes | 4122 | 21 | 2 | - | 3233 | 3426 | no | 26 B |
+| 2x8 | confidential signer | min | yes | 2715 | 10 | 1 | - | 2266 | 2496 | yes |  |
+| 2x8 | confidential signer | full | yes | 3270 | 20 | 3 | 2 | 2353 | 2541 | yes |  |
+| 2x8 | confidential signer | full+spl | yes | 3638 | 27 | 3 | - | 2485 | 2545 | yes |  |
+| 2x8 | confidential signer | full+data | yes | 4064 | 20 | 3 | - | 3147 | 3319 | yes |  |
+| 2x8 | confidential signer | full+reply | yes | 3270 | 20 | 3 | - | 2353 | 2541 | yes |  |
+| 2x8 | confidential signer | full+2tree | yes | 3308 | 21 | 3 | - | 2358 | 2545 | yes |  |
+| 2x8 | confidential in-proof | min | yes | 2810 | 10 | 1 | - | 2362 | 2593 | yes |  |
+| 2x8 | confidential in-proof | full | yes | 3269 | 19 | 2 | 2 | 2449 | 2638 | yes |  |
+| 2x8 | confidential in-proof | full+spl | yes | 3637 | 26 | 2 | - | 2581 | 2642 | yes |  |
+| 2x8 | confidential in-proof | full+data | yes | 4063 | 19 | 2 | - | 3243 | 3416 | yes |  |
+| 2x8 | confidential in-proof | full+reply | yes | 3269 | 19 | 2 | - | 2449 | 2638 | yes |  |
+| 2x8 | confidential in-proof | full+2tree | yes | 3307 | 20 | 2 | - | 2454 | 2642 | yes |  |
+| 2x8 | anonymous hidden | min | yes | 3034 | 10 | 1 | - | 2586 | 2847 | yes |  |
+| 2x8 | anonymous hidden | full | yes | 3461 | 16 | 2 | 2 | 2737 | 2966 | yes |  |
+| 2x8 | anonymous hidden | full+spl | yes | 3829 | 23 | 2 | - | 2869 | 2970 | yes |  |
+| 2x8 | anonymous hidden | full+data | yes | 4255 | 16 | 2 | - | 3531 | 3744 | no | 159 B |
+| 2x8 | anonymous hidden | full+reply | yes | 4142 | 16 | 2 | - | 3418 | 3645 | no | 46 B |
+| 2x8 | anonymous hidden | full+2tree | yes | 3499 | 17 | 2 | - | 2742 | 2970 | yes |  |
+| 2x8 | anonymous public owners | min | yes | 2971 | 10 | 1 | - | 2522 | 2750 | yes |  |
+| 2x8 | anonymous public owners | full | yes | 3590 | 20 | 3 | 2 | 2673 | 2869 | yes |  |
+| 2x8 | anonymous public owners | full+spl | yes | 3958 | 27 | 3 | - | 2805 | 2873 | yes |  |
+| 2x8 | anonymous public owners | full+data | yes | 4384 | 20 | 3 | - | 3467 | 3647 | no | 288 B |
+| 2x8 | anonymous public owners | full+reply | yes | 4271 | 20 | 3 | - | 3354 | 3548 | no | 175 B |
+| 2x8 | anonymous public owners | full+2tree | yes | 3628 | 21 | 3 | - | 2678 | 2873 | yes |  |
+| 2x8 | confidential entry | min | yes | 3123 | 10 | 1 | - | 2674 | 2904 | yes |  |
+| 2x8 | confidential entry | full | yes | 3678 | 20 | 3 | 2 | 2761 | 2949 | yes |  |
+| 2x8 | confidential entry | full+spl | yes | 4046 | 27 | 3 | - | 2893 | 2953 | yes |  |
+| 2x8 | confidential entry | full+data | yes | 4472 | 20 | 3 | - | 3555 | 3727 | no | 376 B |
+| 2x8 | confidential entry | full+reply | yes | 3678 | 20 | 3 | - | 2761 | 2949 | yes |  |
+| 2x8 | confidential entry | full+2tree | yes | 3716 | 21 | 3 | - | 2766 | 2953 | yes |  |
+| 2x8 | anonymous entry | min | yes | 3474 | 10 | 1 | - | 3026 | 3255 | yes |  |
+| 2x8 | anonymous entry | full | yes | 3901 | 16 | 2 | 2 | 3177 | 3374 | yes |  |
+| 2x8 | anonymous entry | full+spl | yes | 4269 | 23 | 2 | - | 3309 | 3378 | no | 173 B |
+| 2x8 | anonymous entry | full+data | yes | 4695 | 16 | 2 | - | 3971 | 4152 | no | 599 B |
+| 2x8 | anonymous entry | full+reply | yes | 4582 | 16 | 2 | - | 3858 | 4053 | no | 486 B |
+| 2x8 | anonymous entry | full+2tree | yes | 3939 | 17 | 2 | - | 3182 | 3378 | yes |  |
 | 2x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 3x2 | confidential signer | min | yes | 1444 | 10 | 1 | - | 993 | 1011 | yes |  |
-| 3x2 | confidential signer | full | yes | 2034 | 21 | 3 | 3 | 1082 | 1056 | yes |  |
-| 3x2 | confidential signer | full+spl | yes | 2402 | 28 | 3 | - | 1214 | 1060 | yes |  |
-| 3x2 | confidential signer | full+data | yes | 2234 | 21 | 3 | - | 1282 | 1252 | yes |  |
-| 3x2 | confidential signer | full+reply | yes | 2034 | 21 | 3 | - | 1082 | 1056 | yes |  |
-| 3x2 | confidential signer | full+2tree | yes | 2040 | 21 | 3 | - | 1087 | 1060 | yes |  |
-| 3x2 | confidential signer | full+4credential-shared | yes | 2110 | 23 | 3 | - | 1091 | 1060 | yes |  |
-| 3x2 | confidential signer | full+4credential-disjoint | yes | 2206 | 26 | 3 | - | 1091 | 1060 | yes |  |
-| 3x2 | confidential in-proof | min | yes | 1539 | 10 | 1 | - | 1089 | 1108 | yes |  |
-| 3x2 | confidential in-proof | full | yes | 2033 | 20 | 2 | 3 | 1178 | 1153 | yes |  |
-| 3x2 | confidential in-proof | full+spl | yes | 2401 | 27 | 2 | - | 1310 | 1157 | yes |  |
-| 3x2 | confidential in-proof | full+data | yes | 2233 | 20 | 2 | - | 1378 | 1349 | yes |  |
-| 3x2 | confidential in-proof | full+reply | yes | 2033 | 20 | 2 | - | 1178 | 1153 | yes |  |
-| 3x2 | confidential in-proof | full+2tree | yes | 2039 | 20 | 2 | - | 1183 | 1157 | yes |  |
-| 3x2 | confidential in-proof | full+4credential-shared | yes | 2109 | 22 | 2 | - | 1187 | 1157 | yes |  |
-| 3x2 | confidential in-proof | full+4credential-disjoint | yes | 2205 | 25 | 2 | - | 1187 | 1157 | yes |  |
-| 3x2 | anonymous hidden | min | yes | 1611 | 10 | 1 | - | 1161 | 1210 | yes |  |
-| 3x2 | anonymous hidden | full | yes | 2081 | 17 | 2 | 3 | 1322 | 1337 | yes |  |
-| 3x2 | anonymous hidden | full+spl | yes | 2449 | 24 | 2 | - | 1454 | 1341 | yes |  |
-| 3x2 | anonymous hidden | full+data | yes | 2281 | 17 | 2 | - | 1522 | 1533 | yes |  |
-| 3x2 | anonymous hidden | full+reply | yes | 2180 | 17 | 2 | - | 1421 | 1434 | yes |  |
-| 3x2 | anonymous hidden | full+2tree | yes | 2087 | 17 | 2 | - | 1327 | 1341 | yes |  |
-| 3x2 | anonymous hidden | full+4credential-shared | yes | 2157 | 19 | 2 | - | 1331 | 1341 | yes |  |
-| 3x2 | anonymous hidden | full+4credential-disjoint | yes | 2253 | 22 | 2 | - | 1331 | 1341 | yes |  |
-| 3x2 | anonymous public owners | min | yes | 1548 | 10 | 1 | - | 1097 | 1113 | yes |  |
-| 3x2 | anonymous public owners | full | yes | 2210 | 21 | 3 | 3 | 1258 | 1240 | yes |  |
-| 3x2 | anonymous public owners | full+spl | yes | 2578 | 28 | 3 | - | 1390 | 1244 | yes |  |
-| 3x2 | anonymous public owners | full+data | yes | 2410 | 21 | 3 | - | 1458 | 1436 | yes |  |
-| 3x2 | anonymous public owners | full+reply | yes | 2309 | 21 | 3 | - | 1357 | 1337 | yes |  |
-| 3x2 | anonymous public owners | full+2tree | yes | 2216 | 21 | 3 | - | 1263 | 1244 | yes |  |
-| 3x2 | anonymous public owners | full+4credential-shared | yes | 2286 | 23 | 3 | - | 1267 | 1244 | yes |  |
-| 3x2 | anonymous public owners | full+4credential-disjoint | yes | 2382 | 26 | 3 | - | 1267 | 1244 | yes |  |
-| 3x2 | confidential entry | min | yes | 2052 | 10 | 1 | - | 1601 | 1619 | yes |  |
-| 3x2 | confidential entry | full | yes | 2642 | 21 | 3 | 3 | 1690 | 1664 | yes |  |
-| 3x2 | confidential entry | full+spl | yes | 3010 | 28 | 3 | - | 1822 | 1668 | yes |  |
-| 3x2 | confidential entry | full+data | yes | 2842 | 21 | 3 | - | 1890 | 1860 | yes |  |
-| 3x2 | confidential entry | full+reply | yes | 2642 | 21 | 3 | - | 1690 | 1664 | yes |  |
-| 3x2 | confidential entry | full+2tree | yes | 2648 | 21 | 3 | - | 1695 | 1668 | yes |  |
-| 3x2 | confidential entry | full+4credential-shared | yes | 2718 | 23 | 3 | - | 1699 | 1668 | yes |  |
-| 3x2 | confidential entry | full+4credential-disjoint | yes | 2814 | 26 | 3 | - | 1699 | 1668 | yes |  |
-| 3x2 | anonymous entry | min | yes | 2251 | 10 | 1 | - | 1801 | 1818 | yes |  |
-| 3x2 | anonymous entry | full | yes | 2721 | 17 | 2 | 3 | 1962 | 1945 | yes |  |
-| 3x2 | anonymous entry | full+spl | yes | 3089 | 24 | 2 | - | 2094 | 1949 | yes |  |
-| 3x2 | anonymous entry | full+data | yes | 2921 | 17 | 2 | - | 2162 | 2141 | yes |  |
-| 3x2 | anonymous entry | full+reply | yes | 2820 | 17 | 2 | - | 2061 | 2042 | yes |  |
-| 3x2 | anonymous entry | full+2tree | yes | 2727 | 17 | 2 | - | 1967 | 1949 | yes |  |
-| 3x2 | anonymous entry | full+4credential-shared | yes | 2797 | 19 | 2 | - | 1971 | 1949 | yes |  |
-| 3x2 | anonymous entry | full+4credential-disjoint | yes | 2893 | 22 | 2 | - | 1971 | 1949 | yes |  |
+| 3x2 | confidential signer | min | yes | 1478 | 11 | 1 | - | 996 | 1011 | yes |  |
+| 3x2 | confidential signer | full | yes | 2033 | 21 | 3 | 3 | 1083 | 1056 | yes |  |
+| 3x2 | confidential signer | full+spl | yes | 2401 | 28 | 3 | - | 1215 | 1060 | yes |  |
+| 3x2 | confidential signer | full+data | yes | 2233 | 21 | 3 | - | 1283 | 1252 | yes |  |
+| 3x2 | confidential signer | full+reply | yes | 2033 | 21 | 3 | - | 1083 | 1056 | yes |  |
+| 3x2 | confidential signer | full+2tree | yes | 2071 | 22 | 3 | - | 1088 | 1060 | yes |  |
+| 3x2 | confidential in-proof | min | yes | 1573 | 11 | 1 | - | 1092 | 1108 | yes |  |
+| 3x2 | confidential in-proof | full | yes | 2032 | 20 | 2 | 3 | 1179 | 1153 | yes |  |
+| 3x2 | confidential in-proof | full+spl | yes | 2400 | 27 | 2 | - | 1311 | 1157 | yes |  |
+| 3x2 | confidential in-proof | full+data | yes | 2232 | 20 | 2 | - | 1379 | 1349 | yes |  |
+| 3x2 | confidential in-proof | full+reply | yes | 2032 | 20 | 2 | - | 1179 | 1153 | yes |  |
+| 3x2 | confidential in-proof | full+2tree | yes | 2070 | 21 | 2 | - | 1184 | 1157 | yes |  |
+| 3x2 | anonymous hidden | min | yes | 1605 | 11 | 1 | - | 1124 | 1170 | yes |  |
+| 3x2 | anonymous hidden | full | yes | 2032 | 17 | 2 | 3 | 1275 | 1289 | yes |  |
+| 3x2 | anonymous hidden | full+spl | yes | 2400 | 24 | 2 | - | 1407 | 1293 | yes |  |
+| 3x2 | anonymous hidden | full+data | yes | 2232 | 17 | 2 | - | 1475 | 1485 | yes |  |
+| 3x2 | anonymous hidden | full+reply | yes | 2131 | 17 | 2 | - | 1374 | 1386 | yes |  |
+| 3x2 | anonymous hidden | full+2tree | yes | 2070 | 18 | 2 | - | 1280 | 1293 | yes |  |
+| 3x2 | anonymous public owners | min | yes | 1542 | 11 | 1 | - | 1060 | 1073 | yes |  |
+| 3x2 | anonymous public owners | full | yes | 2161 | 21 | 3 | 3 | 1211 | 1192 | yes |  |
+| 3x2 | anonymous public owners | full+spl | yes | 2529 | 28 | 3 | - | 1343 | 1196 | yes |  |
+| 3x2 | anonymous public owners | full+data | yes | 2361 | 21 | 3 | - | 1411 | 1388 | yes |  |
+| 3x2 | anonymous public owners | full+reply | yes | 2260 | 21 | 3 | - | 1310 | 1289 | yes |  |
+| 3x2 | anonymous public owners | full+2tree | yes | 2199 | 22 | 3 | - | 1216 | 1196 | yes |  |
+| 3x2 | confidential entry | min | yes | 2086 | 11 | 1 | - | 1604 | 1619 | yes |  |
+| 3x2 | confidential entry | full | yes | 2641 | 21 | 3 | 3 | 1691 | 1664 | yes |  |
+| 3x2 | confidential entry | full+spl | yes | 3009 | 28 | 3 | - | 1823 | 1668 | yes |  |
+| 3x2 | confidential entry | full+data | yes | 2841 | 21 | 3 | - | 1891 | 1860 | yes |  |
+| 3x2 | confidential entry | full+reply | yes | 2641 | 21 | 3 | - | 1691 | 1664 | yes |  |
+| 3x2 | confidential entry | full+2tree | yes | 2679 | 22 | 3 | - | 1696 | 1668 | yes |  |
+| 3x2 | anonymous entry | min | yes | 2245 | 11 | 1 | - | 1764 | 1778 | yes |  |
+| 3x2 | anonymous entry | full | yes | 2672 | 17 | 2 | 3 | 1915 | 1897 | yes |  |
+| 3x2 | anonymous entry | full+spl | yes | 3040 | 24 | 2 | - | 2047 | 1901 | yes |  |
+| 3x2 | anonymous entry | full+data | yes | 2872 | 17 | 2 | - | 2115 | 2093 | yes |  |
+| 3x2 | anonymous entry | full+reply | yes | 2771 | 17 | 2 | - | 2014 | 1994 | yes |  |
+| 3x2 | anonymous entry | full+2tree | yes | 2710 | 18 | 2 | - | 1920 | 1901 | yes |  |
 | 3x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 3x4 | confidential signer | min | yes | 1878 | 10 | 1 | - | 1427 | 1517 | yes |  |
-| 3x4 | confidential signer | full | yes | 2468 | 21 | 3 | 3 | 1516 | 1562 | yes |  |
-| 3x4 | confidential signer | full+spl | yes | 2836 | 28 | 3 | - | 1648 | 1566 | yes |  |
-| 3x4 | confidential signer | full+data | yes | 2866 | 21 | 3 | - | 1914 | 1952 | yes |  |
-| 3x4 | confidential signer | full+reply | yes | 2468 | 21 | 3 | - | 1516 | 1562 | yes |  |
-| 3x4 | confidential signer | full+2tree | yes | 2474 | 21 | 3 | - | 1521 | 1566 | yes |  |
-| 3x4 | confidential signer | full+4credential-shared | yes | 2544 | 23 | 3 | - | 1525 | 1566 | yes |  |
-| 3x4 | confidential signer | full+4credential-disjoint | yes | 2640 | 26 | 3 | - | 1525 | 1566 | yes |  |
-| 3x4 | confidential in-proof | min | yes | 1973 | 10 | 1 | - | 1523 | 1614 | yes |  |
-| 3x4 | confidential in-proof | full | yes | 2467 | 20 | 2 | 3 | 1612 | 1659 | yes |  |
-| 3x4 | confidential in-proof | full+spl | yes | 2835 | 27 | 2 | - | 1744 | 1663 | yes |  |
-| 3x4 | confidential in-proof | full+data | yes | 2865 | 20 | 2 | - | 2010 | 2049 | yes |  |
-| 3x4 | confidential in-proof | full+reply | yes | 2467 | 20 | 2 | - | 1612 | 1659 | yes |  |
-| 3x4 | confidential in-proof | full+2tree | yes | 2473 | 20 | 2 | - | 1617 | 1663 | yes |  |
-| 3x4 | confidential in-proof | full+4credential-shared | yes | 2543 | 22 | 2 | - | 1621 | 1663 | yes |  |
-| 3x4 | confidential in-proof | full+4credential-disjoint | yes | 2639 | 25 | 2 | - | 1621 | 1663 | yes |  |
-| 3x4 | anonymous hidden | min | yes | 2109 | 10 | 1 | - | 1659 | 1780 | yes |  |
-| 3x4 | anonymous hidden | full | yes | 2579 | 17 | 2 | 3 | 1820 | 1907 | yes |  |
-| 3x4 | anonymous hidden | full+spl | yes | 2947 | 24 | 2 | - | 1952 | 1911 | yes |  |
-| 3x4 | anonymous hidden | full+data | yes | 2977 | 17 | 2 | - | 2218 | 2297 | yes |  |
-| 3x4 | anonymous hidden | full+reply | yes | 2872 | 17 | 2 | - | 2113 | 2198 | yes |  |
-| 3x4 | anonymous hidden | full+2tree | yes | 2585 | 17 | 2 | - | 1825 | 1911 | yes |  |
-| 3x4 | anonymous hidden | full+4credential-shared | yes | 2655 | 19 | 2 | - | 1829 | 1911 | yes |  |
-| 3x4 | anonymous hidden | full+4credential-disjoint | yes | 2751 | 22 | 2 | - | 1829 | 1911 | yes |  |
-| 3x4 | anonymous public owners | min | yes | 2046 | 10 | 1 | - | 1595 | 1683 | yes |  |
-| 3x4 | anonymous public owners | full | yes | 2708 | 21 | 3 | 3 | 1756 | 1810 | yes |  |
-| 3x4 | anonymous public owners | full+spl | yes | 3076 | 28 | 3 | - | 1888 | 1814 | yes |  |
-| 3x4 | anonymous public owners | full+data | yes | 3106 | 21 | 3 | - | 2154 | 2200 | yes |  |
-| 3x4 | anonymous public owners | full+reply | yes | 3001 | 21 | 3 | - | 2049 | 2101 | yes |  |
-| 3x4 | anonymous public owners | full+2tree | yes | 2714 | 21 | 3 | - | 1761 | 1814 | yes |  |
-| 3x4 | anonymous public owners | full+4credential-shared | yes | 2784 | 23 | 3 | - | 1765 | 1814 | yes |  |
-| 3x4 | anonymous public owners | full+4credential-disjoint | yes | 2880 | 26 | 3 | - | 1765 | 1814 | yes |  |
-| 3x4 | confidential entry | min | yes | 2486 | 10 | 1 | - | 2035 | 2125 | yes |  |
-| 3x4 | confidential entry | full | yes | 3076 | 21 | 3 | 3 | 2124 | 2170 | yes |  |
-| 3x4 | confidential entry | full+spl | yes | 3444 | 28 | 3 | - | 2256 | 2174 | yes |  |
-| 3x4 | confidential entry | full+data | yes | 3474 | 21 | 3 | - | 2522 | 2560 | yes |  |
-| 3x4 | confidential entry | full+reply | yes | 3076 | 21 | 3 | - | 2124 | 2170 | yes |  |
-| 3x4 | confidential entry | full+2tree | yes | 3082 | 21 | 3 | - | 2129 | 2174 | yes |  |
-| 3x4 | confidential entry | full+4credential-shared | yes | 3152 | 23 | 3 | - | 2133 | 2174 | yes |  |
-| 3x4 | confidential entry | full+4credential-disjoint | yes | 3248 | 26 | 3 | - | 2133 | 2174 | yes |  |
-| 3x4 | anonymous entry | min | yes | 2749 | 10 | 1 | - | 2299 | 2388 | yes |  |
-| 3x4 | anonymous entry | full | yes | 3219 | 17 | 2 | 3 | 2460 | 2515 | yes |  |
-| 3x4 | anonymous entry | full+spl | yes | 3587 | 24 | 2 | - | 2592 | 2519 | yes |  |
-| 3x4 | anonymous entry | full+data | yes | 3617 | 17 | 2 | - | 2858 | 2905 | yes |  |
-| 3x4 | anonymous entry | full+reply | yes | 3512 | 17 | 2 | - | 2753 | 2806 | yes |  |
-| 3x4 | anonymous entry | full+2tree | yes | 3225 | 17 | 2 | - | 2465 | 2519 | yes |  |
-| 3x4 | anonymous entry | full+4credential-shared | yes | 3295 | 19 | 2 | - | 2469 | 2519 | yes |  |
-| 3x4 | anonymous entry | full+4credential-disjoint | yes | 3391 | 22 | 2 | - | 2469 | 2519 | yes |  |
+| 3x4 | confidential signer | min | yes | 1912 | 11 | 1 | - | 1430 | 1517 | yes |  |
+| 3x4 | confidential signer | full | yes | 2467 | 21 | 3 | 3 | 1517 | 1562 | yes |  |
+| 3x4 | confidential signer | full+spl | yes | 2835 | 28 | 3 | - | 1649 | 1566 | yes |  |
+| 3x4 | confidential signer | full+data | yes | 2865 | 21 | 3 | - | 1915 | 1952 | yes |  |
+| 3x4 | confidential signer | full+reply | yes | 2467 | 21 | 3 | - | 1517 | 1562 | yes |  |
+| 3x4 | confidential signer | full+2tree | yes | 2505 | 22 | 3 | - | 1522 | 1566 | yes |  |
+| 3x4 | confidential in-proof | min | yes | 2007 | 11 | 1 | - | 1526 | 1614 | yes |  |
+| 3x4 | confidential in-proof | full | yes | 2466 | 20 | 2 | 3 | 1613 | 1659 | yes |  |
+| 3x4 | confidential in-proof | full+spl | yes | 2834 | 27 | 2 | - | 1745 | 1663 | yes |  |
+| 3x4 | confidential in-proof | full+data | yes | 2864 | 20 | 2 | - | 2011 | 2049 | yes |  |
+| 3x4 | confidential in-proof | full+reply | yes | 2466 | 20 | 2 | - | 1613 | 1659 | yes |  |
+| 3x4 | confidential in-proof | full+2tree | yes | 2504 | 21 | 2 | - | 1618 | 1663 | yes |  |
+| 3x4 | anonymous hidden | min | yes | 2103 | 11 | 1 | - | 1622 | 1740 | yes |  |
+| 3x4 | anonymous hidden | full | yes | 2530 | 17 | 2 | 3 | 1773 | 1859 | yes |  |
+| 3x4 | anonymous hidden | full+spl | yes | 2898 | 24 | 2 | - | 1905 | 1863 | yes |  |
+| 3x4 | anonymous hidden | full+data | yes | 2928 | 17 | 2 | - | 2171 | 2249 | yes |  |
+| 3x4 | anonymous hidden | full+reply | yes | 2823 | 17 | 2 | - | 2066 | 2150 | yes |  |
+| 3x4 | anonymous hidden | full+2tree | yes | 2568 | 18 | 2 | - | 1778 | 1863 | yes |  |
+| 3x4 | anonymous public owners | min | yes | 2040 | 11 | 1 | - | 1558 | 1643 | yes |  |
+| 3x4 | anonymous public owners | full | yes | 2659 | 21 | 3 | 3 | 1709 | 1762 | yes |  |
+| 3x4 | anonymous public owners | full+spl | yes | 3027 | 28 | 3 | - | 1841 | 1766 | yes |  |
+| 3x4 | anonymous public owners | full+data | yes | 3057 | 21 | 3 | - | 2107 | 2152 | yes |  |
+| 3x4 | anonymous public owners | full+reply | yes | 2952 | 21 | 3 | - | 2002 | 2053 | yes |  |
+| 3x4 | anonymous public owners | full+2tree | yes | 2697 | 22 | 3 | - | 1714 | 1766 | yes |  |
+| 3x4 | confidential entry | min | yes | 2520 | 11 | 1 | - | 2038 | 2125 | yes |  |
+| 3x4 | confidential entry | full | yes | 3075 | 21 | 3 | 3 | 2125 | 2170 | yes |  |
+| 3x4 | confidential entry | full+spl | yes | 3443 | 28 | 3 | - | 2257 | 2174 | yes |  |
+| 3x4 | confidential entry | full+data | yes | 3473 | 21 | 3 | - | 2523 | 2560 | yes |  |
+| 3x4 | confidential entry | full+reply | yes | 3075 | 21 | 3 | - | 2125 | 2170 | yes |  |
+| 3x4 | confidential entry | full+2tree | yes | 3113 | 22 | 3 | - | 2130 | 2174 | yes |  |
+| 3x4 | anonymous entry | min | yes | 2743 | 11 | 1 | - | 2262 | 2348 | yes |  |
+| 3x4 | anonymous entry | full | yes | 3170 | 17 | 2 | 3 | 2413 | 2467 | yes |  |
+| 3x4 | anonymous entry | full+spl | yes | 3538 | 24 | 2 | - | 2545 | 2471 | yes |  |
+| 3x4 | anonymous entry | full+data | yes | 3568 | 17 | 2 | - | 2811 | 2857 | yes |  |
+| 3x4 | anonymous entry | full+reply | yes | 3463 | 17 | 2 | - | 2706 | 2758 | yes |  |
+| 3x4 | anonymous entry | full+2tree | yes | 3208 | 18 | 2 | - | 2418 | 2471 | yes |  |
 | 3x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 2x16 | confidential signer | min | yes | 4419 | 9 | 1 | - | 4001 | 4520 | no | 323 B |
-| 2x16 | confidential signer | full | yes | 5009 | 20 | 3 | none | 4090 | 4565 | no | 913 B |
-| 2x16 | confidential signer | full+spl | yes | 5377 | 27 | 3 | - | 4222 | 4569 | no | 1281 B |
-| 2x16 | confidential signer | full+data | yes | 6595 | 20 | 3 | - | 5676 | 6119 | no | 2499 B |
-| 2x16 | confidential signer | full+reply | yes | 5009 | 20 | 3 | - | 4090 | 4565 | no | 913 B |
-| 2x16 | confidential signer | full+2tree | yes | 5015 | 20 | 3 | - | 4095 | 4569 | no | 919 B |
-| 2x16 | confidential signer | full+4credential-shared | yes | 5085 | 22 | 3 | - | 4099 | 4569 | no | 989 B |
-| 2x16 | confidential signer | full+4credential-disjoint | yes | 5181 | 25 | 3 | - | 4099 | 4569 | no | 1085 B |
-| 2x16 | confidential in-proof | min | yes | 4514 | 9 | 1 | - | 4097 | 4617 | no | 418 B |
-| 2x16 | confidential in-proof | full | yes | 5008 | 19 | 2 | none | 4186 | 4662 | no | 912 B |
-| 2x16 | confidential in-proof | full+spl | yes | 5376 | 26 | 2 | - | 4318 | 4666 | no | 1280 B |
-| 2x16 | confidential in-proof | full+data | yes | 6594 | 19 | 2 | - | 5772 | 6216 | no | 2498 B |
-| 2x16 | confidential in-proof | full+reply | yes | 5008 | 19 | 2 | - | 4186 | 4662 | no | 912 B |
-| 2x16 | confidential in-proof | full+2tree | yes | 5014 | 19 | 2 | - | 4191 | 4666 | no | 918 B |
-| 2x16 | confidential in-proof | full+4credential-shared | yes | 5084 | 21 | 2 | - | 4195 | 4666 | no | 988 B |
-| 2x16 | confidential in-proof | full+4credential-disjoint | yes | 5180 | 24 | 2 | - | 4195 | 4666 | no | 1084 B |
-| 2x16 | anonymous hidden | min | yes | 5034 | 9 | 1 | - | 4617 | 5167 | no | 938 B |
-| 2x16 | anonymous hidden | full | yes | 5504 | 16 | 2 | none | 4778 | 5294 | no | 1408 B |
-| 2x16 | anonymous hidden | full+spl | yes | 5872 | 23 | 2 | - | 4910 | 5298 | no | 1776 B |
-| 2x16 | anonymous hidden | full+data | yes | 7090 | 16 | 2 | - | 6364 | 6848 | no | 2994 B |
-| 2x16 | anonymous hidden | full+reply | yes | 6961 | 16 | 2 | - | 6235 | 6749 | no | 2865 B |
-| 2x16 | anonymous hidden | full+2tree | yes | 5510 | 16 | 2 | - | 4783 | 5298 | no | 1414 B |
-| 2x16 | anonymous hidden | full+4credential-shared | yes | 5580 | 18 | 2 | - | 4787 | 5298 | no | 1484 B |
-| 2x16 | anonymous hidden | full+4credential-disjoint | yes | 5676 | 21 | 2 | - | 4787 | 5298 | no | 1580 B |
-| 2x16 | anonymous public owners | min | yes | 4971 | 9 | 1 | - | 4553 | 5070 | no | 875 B |
-| 2x16 | anonymous public owners | full | yes | 5633 | 20 | 3 | none | 4714 | 5197 | no | 1537 B |
-| 2x16 | anonymous public owners | full+spl | yes | 6001 | 27 | 3 | - | 4846 | 5201 | no | 1905 B |
-| 2x16 | anonymous public owners | full+data | yes | 7219 | 20 | 3 | - | 6300 | 6751 | no | 3123 B |
-| 2x16 | anonymous public owners | full+reply | yes | 7090 | 20 | 3 | - | 6171 | 6652 | no | 2994 B |
-| 2x16 | anonymous public owners | full+2tree | yes | 5639 | 20 | 3 | - | 4719 | 5201 | no | 1543 B |
-| 2x16 | anonymous public owners | full+4credential-shared | yes | 5709 | 22 | 3 | - | 4723 | 5201 | no | 1613 B |
-| 2x16 | anonymous public owners | full+4credential-disjoint | yes | 5805 | 25 | 3 | - | 4723 | 5201 | no | 1709 B |
+| 2x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 2x16 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 2x16 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 2x16 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 2x16 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 2x16 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 2x16 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 2x16 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 3x8 | confidential signer | min | yes | 2746 | 10 | 1 | - | 2295 | 2529 | yes |  |
-| 3x8 | confidential signer | full | yes | 3336 | 21 | 3 | 3 | 2384 | 2574 | yes |  |
-| 3x8 | confidential signer | full+spl | yes | 3704 | 28 | 3 | - | 2516 | 2578 | yes |  |
-| 3x8 | confidential signer | full+data | yes | 4130 | 21 | 3 | - | 3178 | 3352 | no | 34 B |
-| 3x8 | confidential signer | full+reply | yes | 3336 | 21 | 3 | - | 2384 | 2574 | yes |  |
-| 3x8 | confidential signer | full+2tree | yes | 3342 | 21 | 3 | - | 2389 | 2578 | yes |  |
-| 3x8 | confidential signer | full+4credential-shared | yes | 3412 | 23 | 3 | - | 2393 | 2578 | yes |  |
-| 3x8 | confidential signer | full+4credential-disjoint | yes | 3508 | 26 | 3 | - | 2393 | 2578 | yes |  |
-| 3x8 | confidential in-proof | min | yes | 2841 | 10 | 1 | - | 2391 | 2626 | yes |  |
-| 3x8 | confidential in-proof | full | yes | 3335 | 20 | 2 | 3 | 2480 | 2671 | yes |  |
-| 3x8 | confidential in-proof | full+spl | yes | 3703 | 27 | 2 | - | 2612 | 2675 | yes |  |
-| 3x8 | confidential in-proof | full+data | yes | 4129 | 20 | 2 | - | 3274 | 3449 | no | 33 B |
-| 3x8 | confidential in-proof | full+reply | yes | 3335 | 20 | 2 | - | 2480 | 2671 | yes |  |
-| 3x8 | confidential in-proof | full+2tree | yes | 3341 | 20 | 2 | - | 2485 | 2675 | yes |  |
-| 3x8 | confidential in-proof | full+4credential-shared | yes | 3411 | 22 | 2 | - | 2489 | 2675 | yes |  |
-| 3x8 | confidential in-proof | full+4credential-disjoint | yes | 3507 | 25 | 2 | - | 2489 | 2675 | yes |  |
-| 3x8 | anonymous hidden | min | yes | 3105 | 10 | 1 | - | 2655 | 2920 | yes |  |
-| 3x8 | anonymous hidden | full | yes | 3575 | 17 | 2 | 3 | 2816 | 3047 | yes |  |
-| 3x8 | anonymous hidden | full+spl | yes | 3943 | 24 | 2 | - | 2948 | 3051 | yes |  |
-| 3x8 | anonymous hidden | full+data | yes | 4369 | 17 | 2 | - | 3610 | 3825 | no | 273 B |
-| 3x8 | anonymous hidden | full+reply | yes | 4256 | 17 | 2 | - | 3497 | 3726 | no | 160 B |
-| 3x8 | anonymous hidden | full+2tree | yes | 3581 | 17 | 2 | - | 2821 | 3051 | yes |  |
-| 3x8 | anonymous hidden | full+4credential-shared | yes | 3651 | 19 | 2 | - | 2825 | 3051 | yes |  |
-| 3x8 | anonymous hidden | full+4credential-disjoint | yes | 3747 | 22 | 2 | - | 2825 | 3051 | yes |  |
-| 3x8 | anonymous public owners | min | yes | 3042 | 10 | 1 | - | 2591 | 2823 | yes |  |
-| 3x8 | anonymous public owners | full | yes | 3704 | 21 | 3 | 3 | 2752 | 2950 | yes |  |
-| 3x8 | anonymous public owners | full+spl | yes | 4072 | 28 | 3 | - | 2884 | 2954 | yes |  |
-| 3x8 | anonymous public owners | full+data | yes | 4498 | 21 | 3 | - | 3546 | 3728 | no | 402 B |
-| 3x8 | anonymous public owners | full+reply | yes | 4385 | 21 | 3 | - | 3433 | 3629 | no | 289 B |
-| 3x8 | anonymous public owners | full+2tree | yes | 3710 | 21 | 3 | - | 2757 | 2954 | yes |  |
-| 3x8 | anonymous public owners | full+4credential-shared | yes | 3780 | 23 | 3 | - | 2761 | 2954 | yes |  |
-| 3x8 | anonymous public owners | full+4credential-disjoint | yes | 3876 | 26 | 3 | - | 2761 | 2954 | yes |  |
-| 3x8 | confidential entry | min | yes | 3354 | 10 | 1 | - | 2903 | 3137 | yes |  |
-| 3x8 | confidential entry | full | yes | 3944 | 21 | 3 | 2 | 2992 | 3182 | yes |  |
-| 3x8 | confidential entry | full+spl | yes | 4312 | 28 | 3 | - | 3124 | 3186 | no | 216 B |
-| 3x8 | confidential entry | full+data | yes | 4738 | 21 | 3 | - | 3786 | 3960 | no | 642 B |
-| 3x8 | confidential entry | full+reply | yes | 3944 | 21 | 3 | - | 2992 | 3182 | yes |  |
-| 3x8 | confidential entry | full+2tree | yes | 3950 | 21 | 3 | - | 2997 | 3186 | yes |  |
-| 3x8 | confidential entry | full+4credential-shared | yes | 4020 | 23 | 3 | - | 3001 | 3186 | yes |  |
-| 3x8 | confidential entry | full+4credential-disjoint | yes | 4116 | 26 | 3 | - | 3001 | 3186 | no | 20 B |
-| 3x8 | anonymous entry | min | yes | 3745 | 10 | 1 | - | 3295 | 3528 | yes |  |
-| 3x8 | anonymous entry | full | yes | 4215 | 17 | 2 | none | 3456 | 3655 | no | 119 B |
-| 3x8 | anonymous entry | full+spl | yes | 4583 | 24 | 2 | - | 3588 | 3659 | no | 487 B |
-| 3x8 | anonymous entry | full+data | yes | 5009 | 17 | 2 | - | 4250 | 4433 | no | 913 B |
-| 3x8 | anonymous entry | full+reply | yes | 4896 | 17 | 2 | - | 4137 | 4334 | no | 800 B |
-| 3x8 | anonymous entry | full+2tree | yes | 4221 | 17 | 2 | - | 3461 | 3659 | no | 125 B |
-| 3x8 | anonymous entry | full+4credential-shared | yes | 4291 | 19 | 2 | - | 3465 | 3659 | no | 195 B |
-| 3x8 | anonymous entry | full+4credential-disjoint | yes | 4387 | 22 | 2 | - | 3465 | 3659 | no | 291 B |
+| 3x8 | confidential signer | min | yes | 2780 | 11 | 1 | - | 2298 | 2529 | yes |  |
+| 3x8 | confidential signer | full | yes | 3335 | 21 | 3 | 3 | 2385 | 2574 | yes |  |
+| 3x8 | confidential signer | full+spl | yes | 3703 | 28 | 3 | - | 2517 | 2578 | yes |  |
+| 3x8 | confidential signer | full+data | yes | 4129 | 21 | 3 | - | 3179 | 3352 | no | 33 B |
+| 3x8 | confidential signer | full+reply | yes | 3335 | 21 | 3 | - | 2385 | 2574 | yes |  |
+| 3x8 | confidential signer | full+2tree | yes | 3373 | 22 | 3 | - | 2390 | 2578 | yes |  |
+| 3x8 | confidential in-proof | min | yes | 2875 | 11 | 1 | - | 2394 | 2626 | yes |  |
+| 3x8 | confidential in-proof | full | yes | 3334 | 20 | 2 | 3 | 2481 | 2671 | yes |  |
+| 3x8 | confidential in-proof | full+spl | yes | 3702 | 27 | 2 | - | 2613 | 2675 | yes |  |
+| 3x8 | confidential in-proof | full+data | yes | 4128 | 20 | 2 | - | 3275 | 3449 | no | 32 B |
+| 3x8 | confidential in-proof | full+reply | yes | 3334 | 20 | 2 | - | 2481 | 2671 | yes |  |
+| 3x8 | confidential in-proof | full+2tree | yes | 3372 | 21 | 2 | - | 2486 | 2675 | yes |  |
+| 3x8 | anonymous hidden | min | yes | 3099 | 11 | 1 | - | 2618 | 2880 | yes |  |
+| 3x8 | anonymous hidden | full | yes | 3526 | 17 | 2 | 3 | 2769 | 2999 | yes |  |
+| 3x8 | anonymous hidden | full+spl | yes | 3894 | 24 | 2 | - | 2901 | 3003 | yes |  |
+| 3x8 | anonymous hidden | full+data | yes | 4320 | 17 | 2 | - | 3563 | 3777 | no | 224 B |
+| 3x8 | anonymous hidden | full+reply | yes | 4207 | 17 | 2 | - | 3450 | 3678 | no | 111 B |
+| 3x8 | anonymous hidden | full+2tree | yes | 3564 | 18 | 2 | - | 2774 | 3003 | yes |  |
+| 3x8 | anonymous public owners | min | yes | 3036 | 11 | 1 | - | 2554 | 2783 | yes |  |
+| 3x8 | anonymous public owners | full | yes | 3655 | 21 | 3 | 3 | 2705 | 2902 | yes |  |
+| 3x8 | anonymous public owners | full+spl | yes | 4023 | 28 | 3 | - | 2837 | 2906 | yes |  |
+| 3x8 | anonymous public owners | full+data | yes | 4449 | 21 | 3 | - | 3499 | 3680 | no | 353 B |
+| 3x8 | anonymous public owners | full+reply | yes | 4336 | 21 | 3 | - | 3386 | 3581 | no | 240 B |
+| 3x8 | anonymous public owners | full+2tree | yes | 3693 | 22 | 3 | - | 2710 | 2906 | yes |  |
+| 3x8 | confidential entry | min | yes | 3388 | 11 | 1 | - | 2906 | 3137 | yes |  |
+| 3x8 | confidential entry | full | yes | 3943 | 21 | 3 | 2 | 2993 | 3182 | yes |  |
+| 3x8 | confidential entry | full+spl | yes | 4311 | 28 | 3 | - | 3125 | 3186 | no | 215 B |
+| 3x8 | confidential entry | full+data | yes | 4737 | 21 | 3 | - | 3787 | 3960 | no | 641 B |
+| 3x8 | confidential entry | full+reply | yes | 3943 | 21 | 3 | - | 2993 | 3182 | yes |  |
+| 3x8 | confidential entry | full+2tree | yes | 3981 | 22 | 3 | - | 2998 | 3186 | yes |  |
+| 3x8 | anonymous entry | min | yes | 3739 | 11 | 1 | - | 3258 | 3488 | yes |  |
+| 3x8 | anonymous entry | full | yes | 4166 | 17 | 2 | none | 3409 | 3607 | no | 70 B |
+| 3x8 | anonymous entry | full+spl | yes | 4534 | 24 | 2 | - | 3541 | 3611 | no | 438 B |
+| 3x8 | anonymous entry | full+data | yes | 4960 | 17 | 2 | - | 4203 | 4385 | no | 864 B |
+| 3x8 | anonymous entry | full+reply | yes | 4847 | 17 | 2 | - | 4090 | 4286 | no | 751 B |
+| 3x8 | anonymous entry | full+2tree | yes | 4204 | 18 | 2 | - | 3414 | 3611 | no | 108 B |
 | 3x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 3x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 4x2 | confidential signer | min | yes | 1509 | 11 | 1 | - | 1025 | 1044 | yes |  |
-| 4x2 | confidential signer | full | yes | 2099 | 22 | 3 | 4 | 1114 | 1089 | yes |  |
-| 4x2 | confidential signer | full+spl | yes | 2467 | 29 | 3 | - | 1246 | 1093 | yes |  |
-| 4x2 | confidential signer | full+data | yes | 2299 | 22 | 3 | - | 1314 | 1285 | yes |  |
-| 4x2 | confidential signer | full+reply | yes | 2099 | 22 | 3 | - | 1114 | 1089 | yes |  |
-| 4x2 | confidential signer | full+2tree | yes | 2105 | 22 | 3 | - | 1119 | 1093 | yes |  |
-| 4x2 | confidential signer | full+4credential-shared | yes | 2175 | 24 | 3 | - | 1123 | 1093 | yes |  |
-| 4x2 | confidential signer | full+4credential-disjoint | yes | 2271 | 27 | 3 | - | 1123 | 1093 | yes |  |
-| 4x2 | confidential in-proof | min | yes | 1604 | 11 | 1 | - | 1121 | 1141 | yes |  |
-| 4x2 | confidential in-proof | full | yes | 2098 | 21 | 2 | 4 | 1210 | 1186 | yes |  |
-| 4x2 | confidential in-proof | full+spl | yes | 2466 | 28 | 2 | - | 1342 | 1190 | yes |  |
-| 4x2 | confidential in-proof | full+data | yes | 2298 | 21 | 2 | - | 1410 | 1382 | yes |  |
-| 4x2 | confidential in-proof | full+reply | yes | 2098 | 21 | 2 | - | 1210 | 1186 | yes |  |
-| 4x2 | confidential in-proof | full+2tree | yes | 2104 | 21 | 2 | - | 1215 | 1190 | yes |  |
-| 4x2 | confidential in-proof | full+4credential-shared | yes | 2174 | 23 | 2 | - | 1219 | 1190 | yes |  |
-| 4x2 | confidential in-proof | full+4credential-disjoint | yes | 2270 | 26 | 2 | - | 1219 | 1190 | yes |  |
-| 4x2 | anonymous hidden | min | yes | 1676 | 11 | 1 | - | 1193 | 1243 | yes |  |
-| 4x2 | anonymous hidden | full | yes | 2146 | 18 | 2 | 4 | 1354 | 1370 | yes |  |
-| 4x2 | anonymous hidden | full+spl | yes | 2514 | 25 | 2 | - | 1486 | 1374 | yes |  |
-| 4x2 | anonymous hidden | full+data | yes | 2346 | 18 | 2 | - | 1554 | 1566 | yes |  |
-| 4x2 | anonymous hidden | full+reply | yes | 2245 | 18 | 2 | - | 1453 | 1467 | yes |  |
-| 4x2 | anonymous hidden | full+2tree | yes | 2152 | 18 | 2 | - | 1359 | 1374 | yes |  |
-| 4x2 | anonymous hidden | full+4credential-shared | yes | 2222 | 20 | 2 | - | 1363 | 1374 | yes |  |
-| 4x2 | anonymous hidden | full+4credential-disjoint | yes | 2318 | 23 | 2 | - | 1363 | 1374 | yes |  |
-| 4x2 | anonymous public owners | min | yes | 1613 | 11 | 1 | - | 1129 | 1146 | yes |  |
-| 4x2 | anonymous public owners | full | yes | 2275 | 22 | 3 | 4 | 1290 | 1273 | yes |  |
-| 4x2 | anonymous public owners | full+spl | yes | 2643 | 29 | 3 | - | 1422 | 1277 | yes |  |
-| 4x2 | anonymous public owners | full+data | yes | 2475 | 22 | 3 | - | 1490 | 1469 | yes |  |
-| 4x2 | anonymous public owners | full+reply | yes | 2374 | 22 | 3 | - | 1389 | 1370 | yes |  |
-| 4x2 | anonymous public owners | full+2tree | yes | 2281 | 22 | 3 | - | 1295 | 1277 | yes |  |
-| 4x2 | anonymous public owners | full+4credential-shared | yes | 2351 | 24 | 3 | - | 1299 | 1277 | yes |  |
-| 4x2 | anonymous public owners | full+4credential-disjoint | yes | 2447 | 27 | 3 | - | 1299 | 1277 | yes |  |
-| 4x2 | confidential entry | min | yes | 2317 | 11 | 1 | - | 1833 | 1852 | yes |  |
-| 4x2 | confidential entry | full | yes | 2907 | 22 | 3 | 4 | 1922 | 1897 | yes |  |
-| 4x2 | confidential entry | full+spl | yes | 3275 | 29 | 3 | - | 2054 | 1901 | yes |  |
-| 4x2 | confidential entry | full+data | yes | 3107 | 22 | 3 | - | 2122 | 2093 | yes |  |
-| 4x2 | confidential entry | full+reply | yes | 2907 | 22 | 3 | - | 1922 | 1897 | yes |  |
-| 4x2 | confidential entry | full+2tree | yes | 2913 | 22 | 3 | - | 1927 | 1901 | yes |  |
-| 4x2 | confidential entry | full+4credential-shared | yes | 2983 | 24 | 3 | - | 1931 | 1901 | yes |  |
-| 4x2 | confidential entry | full+4credential-disjoint | yes | 3079 | 27 | 3 | - | 1931 | 1901 | yes |  |
-| 4x2 | anonymous entry | min | yes | 2516 | 11 | 1 | - | 2033 | 2051 | yes |  |
-| 4x2 | anonymous entry | full | yes | 2986 | 18 | 2 | 4 | 2194 | 2178 | yes |  |
-| 4x2 | anonymous entry | full+spl | yes | 3354 | 25 | 2 | - | 2326 | 2182 | yes |  |
-| 4x2 | anonymous entry | full+data | yes | 3186 | 18 | 2 | - | 2394 | 2374 | yes |  |
-| 4x2 | anonymous entry | full+reply | yes | 3085 | 18 | 2 | - | 2293 | 2275 | yes |  |
-| 4x2 | anonymous entry | full+2tree | yes | 2992 | 18 | 2 | - | 2199 | 2182 | yes |  |
-| 4x2 | anonymous entry | full+4credential-shared | yes | 3062 | 20 | 2 | - | 2203 | 2182 | yes |  |
-| 4x2 | anonymous entry | full+4credential-disjoint | yes | 3158 | 23 | 2 | - | 2203 | 2182 | yes |  |
+| 4x2 | confidential signer | min | yes | 1543 | 12 | 1 | - | 1028 | 1044 | yes |  |
+| 4x2 | confidential signer | full | yes | 2098 | 22 | 3 | 4 | 1115 | 1089 | yes |  |
+| 4x2 | confidential signer | full+spl | yes | 2466 | 29 | 3 | - | 1247 | 1093 | yes |  |
+| 4x2 | confidential signer | full+data | yes | 2298 | 22 | 3 | - | 1315 | 1285 | yes |  |
+| 4x2 | confidential signer | full+reply | yes | 2098 | 22 | 3 | - | 1115 | 1089 | yes |  |
+| 4x2 | confidential signer | full+2tree | yes | 2136 | 23 | 3 | - | 1120 | 1093 | yes |  |
+| 4x2 | confidential in-proof | min | yes | 1638 | 12 | 1 | - | 1124 | 1141 | yes |  |
+| 4x2 | confidential in-proof | full | yes | 2097 | 21 | 2 | 4 | 1211 | 1186 | yes |  |
+| 4x2 | confidential in-proof | full+spl | yes | 2465 | 28 | 2 | - | 1343 | 1190 | yes |  |
+| 4x2 | confidential in-proof | full+data | yes | 2297 | 21 | 2 | - | 1411 | 1382 | yes |  |
+| 4x2 | confidential in-proof | full+reply | yes | 2097 | 21 | 2 | - | 1211 | 1186 | yes |  |
+| 4x2 | confidential in-proof | full+2tree | yes | 2135 | 22 | 2 | - | 1216 | 1190 | yes |  |
+| 4x2 | anonymous hidden | min | yes | 1670 | 12 | 1 | - | 1156 | 1203 | yes |  |
+| 4x2 | anonymous hidden | full | yes | 2097 | 18 | 2 | 4 | 1307 | 1322 | yes |  |
+| 4x2 | anonymous hidden | full+spl | yes | 2465 | 25 | 2 | - | 1439 | 1326 | yes |  |
+| 4x2 | anonymous hidden | full+data | yes | 2297 | 18 | 2 | - | 1507 | 1518 | yes |  |
+| 4x2 | anonymous hidden | full+reply | yes | 2196 | 18 | 2 | - | 1406 | 1419 | yes |  |
+| 4x2 | anonymous hidden | full+2tree | yes | 2135 | 19 | 2 | - | 1312 | 1326 | yes |  |
+| 4x2 | anonymous public owners | min | yes | 1607 | 12 | 1 | - | 1092 | 1106 | yes |  |
+| 4x2 | anonymous public owners | full | yes | 2226 | 22 | 3 | 4 | 1243 | 1225 | yes |  |
+| 4x2 | anonymous public owners | full+spl | yes | 2594 | 29 | 3 | - | 1375 | 1229 | yes |  |
+| 4x2 | anonymous public owners | full+data | yes | 2426 | 22 | 3 | - | 1443 | 1421 | yes |  |
+| 4x2 | anonymous public owners | full+reply | yes | 2325 | 22 | 3 | - | 1342 | 1322 | yes |  |
+| 4x2 | anonymous public owners | full+2tree | yes | 2264 | 23 | 3 | - | 1248 | 1229 | yes |  |
+| 4x2 | confidential entry | min | yes | 2351 | 12 | 1 | - | 1836 | 1852 | yes |  |
+| 4x2 | confidential entry | full | yes | 2906 | 22 | 3 | 4 | 1923 | 1897 | yes |  |
+| 4x2 | confidential entry | full+spl | yes | 3274 | 29 | 3 | - | 2055 | 1901 | yes |  |
+| 4x2 | confidential entry | full+data | yes | 3106 | 22 | 3 | - | 2123 | 2093 | yes |  |
+| 4x2 | confidential entry | full+reply | yes | 2906 | 22 | 3 | - | 1923 | 1897 | yes |  |
+| 4x2 | confidential entry | full+2tree | yes | 2944 | 23 | 3 | - | 1928 | 1901 | yes |  |
+| 4x2 | anonymous entry | min | yes | 2510 | 12 | 1 | - | 1996 | 2011 | yes |  |
+| 4x2 | anonymous entry | full | yes | 2937 | 18 | 2 | 4 | 2147 | 2130 | yes |  |
+| 4x2 | anonymous entry | full+spl | yes | 3305 | 25 | 2 | - | 2279 | 2134 | yes |  |
+| 4x2 | anonymous entry | full+data | yes | 3137 | 18 | 2 | - | 2347 | 2326 | yes |  |
+| 4x2 | anonymous entry | full+reply | yes | 3036 | 18 | 2 | - | 2246 | 2227 | yes |  |
+| 4x2 | anonymous entry | full+2tree | yes | 2975 | 19 | 2 | - | 2152 | 2134 | yes |  |
 | 4x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 4x4 | confidential signer | min | yes | 1943 | 11 | 1 | - | 1459 | 1550 | yes |  |
-| 4x4 | confidential signer | full | yes | 2533 | 22 | 3 | 4 | 1548 | 1595 | yes |  |
-| 4x4 | confidential signer | full+spl | yes | 2901 | 29 | 3 | - | 1680 | 1599 | yes |  |
-| 4x4 | confidential signer | full+data | yes | 2931 | 22 | 3 | - | 1946 | 1985 | yes |  |
-| 4x4 | confidential signer | full+reply | yes | 2533 | 22 | 3 | - | 1548 | 1595 | yes |  |
-| 4x4 | confidential signer | full+2tree | yes | 2539 | 22 | 3 | - | 1553 | 1599 | yes |  |
-| 4x4 | confidential signer | full+4credential-shared | yes | 2609 | 24 | 3 | - | 1557 | 1599 | yes |  |
-| 4x4 | confidential signer | full+4credential-disjoint | yes | 2705 | 27 | 3 | - | 1557 | 1599 | yes |  |
-| 4x4 | confidential in-proof | min | yes | 2038 | 11 | 1 | - | 1555 | 1647 | yes |  |
-| 4x4 | confidential in-proof | full | yes | 2532 | 21 | 2 | 4 | 1644 | 1692 | yes |  |
-| 4x4 | confidential in-proof | full+spl | yes | 2900 | 28 | 2 | - | 1776 | 1696 | yes |  |
-| 4x4 | confidential in-proof | full+data | yes | 2930 | 21 | 2 | - | 2042 | 2082 | yes |  |
-| 4x4 | confidential in-proof | full+reply | yes | 2532 | 21 | 2 | - | 1644 | 1692 | yes |  |
-| 4x4 | confidential in-proof | full+2tree | yes | 2538 | 21 | 2 | - | 1649 | 1696 | yes |  |
-| 4x4 | confidential in-proof | full+4credential-shared | yes | 2608 | 23 | 2 | - | 1653 | 1696 | yes |  |
-| 4x4 | confidential in-proof | full+4credential-disjoint | yes | 2704 | 26 | 2 | - | 1653 | 1696 | yes |  |
-| 4x4 | anonymous hidden | min | yes | 2174 | 11 | 1 | - | 1691 | 1813 | yes |  |
-| 4x4 | anonymous hidden | full | yes | 2644 | 18 | 2 | 4 | 1852 | 1940 | yes |  |
-| 4x4 | anonymous hidden | full+spl | yes | 3012 | 25 | 2 | - | 1984 | 1944 | yes |  |
-| 4x4 | anonymous hidden | full+data | yes | 3042 | 18 | 2 | - | 2250 | 2330 | yes |  |
-| 4x4 | anonymous hidden | full+reply | yes | 2937 | 18 | 2 | - | 2145 | 2231 | yes |  |
-| 4x4 | anonymous hidden | full+2tree | yes | 2650 | 18 | 2 | - | 1857 | 1944 | yes |  |
-| 4x4 | anonymous hidden | full+4credential-shared | yes | 2720 | 20 | 2 | - | 1861 | 1944 | yes |  |
-| 4x4 | anonymous hidden | full+4credential-disjoint | yes | 2816 | 23 | 2 | - | 1861 | 1944 | yes |  |
-| 4x4 | anonymous public owners | min | yes | 2111 | 11 | 1 | - | 1627 | 1716 | yes |  |
-| 4x4 | anonymous public owners | full | yes | 2773 | 22 | 3 | 4 | 1788 | 1843 | yes |  |
-| 4x4 | anonymous public owners | full+spl | yes | 3141 | 29 | 3 | - | 1920 | 1847 | yes |  |
-| 4x4 | anonymous public owners | full+data | yes | 3171 | 22 | 3 | - | 2186 | 2233 | yes |  |
-| 4x4 | anonymous public owners | full+reply | yes | 3066 | 22 | 3 | - | 2081 | 2134 | yes |  |
-| 4x4 | anonymous public owners | full+2tree | yes | 2779 | 22 | 3 | - | 1793 | 1847 | yes |  |
-| 4x4 | anonymous public owners | full+4credential-shared | yes | 2849 | 24 | 3 | - | 1797 | 1847 | yes |  |
-| 4x4 | anonymous public owners | full+4credential-disjoint | yes | 2945 | 27 | 3 | - | 1797 | 1847 | yes |  |
-| 4x4 | confidential entry | min | yes | 2751 | 11 | 1 | - | 2267 | 2358 | yes |  |
-| 4x4 | confidential entry | full | yes | 3341 | 22 | 3 | 4 | 2356 | 2403 | yes |  |
-| 4x4 | confidential entry | full+spl | yes | 3709 | 29 | 3 | - | 2488 | 2407 | yes |  |
-| 4x4 | confidential entry | full+data | yes | 3739 | 22 | 3 | - | 2754 | 2793 | yes |  |
-| 4x4 | confidential entry | full+reply | yes | 3341 | 22 | 3 | - | 2356 | 2403 | yes |  |
-| 4x4 | confidential entry | full+2tree | yes | 3347 | 22 | 3 | - | 2361 | 2407 | yes |  |
-| 4x4 | confidential entry | full+4credential-shared | yes | 3417 | 24 | 3 | - | 2365 | 2407 | yes |  |
-| 4x4 | confidential entry | full+4credential-disjoint | yes | 3513 | 27 | 3 | - | 2365 | 2407 | yes |  |
-| 4x4 | anonymous entry | min | yes | 3014 | 11 | 1 | - | 2531 | 2621 | yes |  |
-| 4x4 | anonymous entry | full | yes | 3484 | 18 | 2 | 4 | 2692 | 2748 | yes |  |
-| 4x4 | anonymous entry | full+spl | yes | 3852 | 25 | 2 | - | 2824 | 2752 | yes |  |
-| 4x4 | anonymous entry | full+data | yes | 3882 | 18 | 2 | - | 3090 | 3138 | yes |  |
-| 4x4 | anonymous entry | full+reply | yes | 3777 | 18 | 2 | - | 2985 | 3039 | yes |  |
-| 4x4 | anonymous entry | full+2tree | yes | 3490 | 18 | 2 | - | 2697 | 2752 | yes |  |
-| 4x4 | anonymous entry | full+4credential-shared | yes | 3560 | 20 | 2 | - | 2701 | 2752 | yes |  |
-| 4x4 | anonymous entry | full+4credential-disjoint | yes | 3656 | 23 | 2 | - | 2701 | 2752 | yes |  |
-| 4x4 | delegate | min | yes | 1943 | 11 | 1 | - | 1459 | 1550 | yes |  |
-| 4x4 | delegate | full | yes | 2321 | 18 | 2 | - | 1532 | 1595 | yes |  |
-| 4x4 | delegate | full+spl | yes | 2561 | 25 | 2 | - | 1536 | 1599 | yes |  |
-| 4x4 | delegate | full+data | yes | 2719 | 18 | 2 | - | 1930 | 1985 | yes |  |
-| 4x4 | delegate | full+reply | yes | 2321 | 18 | 2 | - | 1532 | 1595 | yes |  |
-| 4x4 | delegate | full+2tree | yes | 2327 | 18 | 2 | - | 1537 | 1599 | yes |  |
-| 4x4 | delegate | full+4credential-shared | yes | 2397 | 20 | 2 | - | 1541 | 1599 | yes |  |
-| 4x4 | delegate | full+4credential-disjoint | yes | 2493 | 23 | 2 | - | 1541 | 1599 | yes |  |
-| 4x4 | anonymous delegate | min | yes | 2111 | 11 | 1 | - | 1627 | 1716 | yes |  |
-| 4x4 | anonymous delegate | full | yes | 2561 | 18 | 2 | - | 1772 | 1843 | yes |  |
-| 4x4 | anonymous delegate | full+spl | yes | 2801 | 25 | 2 | - | 1776 | 1847 | yes |  |
-| 4x4 | anonymous delegate | full+data | yes | 2959 | 18 | 2 | - | 2170 | 2233 | yes |  |
-| 4x4 | anonymous delegate | full+reply | yes | 2854 | 18 | 2 | - | 2065 | 2134 | yes |  |
-| 4x4 | anonymous delegate | full+2tree | yes | 2567 | 18 | 2 | - | 1777 | 1847 | yes |  |
-| 4x4 | anonymous delegate | full+4credential-shared | yes | 2637 | 20 | 2 | - | 1781 | 1847 | yes |  |
-| 4x4 | anonymous delegate | full+4credential-disjoint | yes | 2733 | 23 | 2 | - | 1781 | 1847 | yes |  |
-| 4x8 | confidential signer | min | yes | 2811 | 11 | 1 | - | 2327 | 2562 | yes |  |
-| 4x8 | confidential signer | full | yes | 3401 | 22 | 3 | 4 | 2416 | 2607 | yes |  |
-| 4x8 | confidential signer | full+spl | yes | 3769 | 29 | 3 | - | 2548 | 2611 | yes |  |
-| 4x8 | confidential signer | full+data | yes | 4195 | 22 | 3 | - | 3210 | 3385 | no | 99 B |
-| 4x8 | confidential signer | full+reply | yes | 3401 | 22 | 3 | - | 2416 | 2607 | yes |  |
-| 4x8 | confidential signer | full+2tree | yes | 3407 | 22 | 3 | - | 2421 | 2611 | yes |  |
-| 4x8 | confidential signer | full+4credential-shared | yes | 3477 | 24 | 3 | - | 2425 | 2611 | yes |  |
-| 4x8 | confidential signer | full+4credential-disjoint | yes | 3573 | 27 | 3 | - | 2425 | 2611 | yes |  |
-| 4x8 | confidential in-proof | min | yes | 2906 | 11 | 1 | - | 2423 | 2659 | yes |  |
-| 4x8 | confidential in-proof | full | yes | 3400 | 21 | 2 | 4 | 2512 | 2704 | yes |  |
-| 4x8 | confidential in-proof | full+spl | yes | 3768 | 28 | 2 | - | 2644 | 2708 | yes |  |
-| 4x8 | confidential in-proof | full+data | yes | 4194 | 21 | 2 | - | 3306 | 3482 | no | 98 B |
-| 4x8 | confidential in-proof | full+reply | yes | 3400 | 21 | 2 | - | 2512 | 2704 | yes |  |
-| 4x8 | confidential in-proof | full+2tree | yes | 3406 | 21 | 2 | - | 2517 | 2708 | yes |  |
-| 4x8 | confidential in-proof | full+4credential-shared | yes | 3476 | 23 | 2 | - | 2521 | 2708 | yes |  |
-| 4x8 | confidential in-proof | full+4credential-disjoint | yes | 3572 | 26 | 2 | - | 2521 | 2708 | yes |  |
-| 4x8 | anonymous hidden | min | yes | 3170 | 11 | 1 | - | 2687 | 2953 | yes |  |
-| 4x8 | anonymous hidden | full | yes | 3640 | 18 | 2 | 4 | 2848 | 3080 | yes |  |
-| 4x8 | anonymous hidden | full+spl | yes | 4008 | 25 | 2 | - | 2980 | 3084 | yes |  |
-| 4x8 | anonymous hidden | full+data | yes | 4434 | 18 | 2 | - | 3642 | 3858 | no | 338 B |
-| 4x8 | anonymous hidden | full+reply | yes | 4321 | 18 | 2 | - | 3529 | 3759 | no | 225 B |
-| 4x8 | anonymous hidden | full+2tree | yes | 3646 | 18 | 2 | - | 2853 | 3084 | yes |  |
-| 4x8 | anonymous hidden | full+4credential-shared | yes | 3716 | 20 | 2 | - | 2857 | 3084 | yes |  |
-| 4x8 | anonymous hidden | full+4credential-disjoint | yes | 3812 | 23 | 2 | - | 2857 | 3084 | yes |  |
-| 4x8 | anonymous public owners | min | yes | 3107 | 11 | 1 | - | 2623 | 2856 | yes |  |
-| 4x8 | anonymous public owners | full | yes | 3769 | 22 | 3 | 4 | 2784 | 2983 | yes |  |
-| 4x8 | anonymous public owners | full+spl | yes | 4137 | 29 | 3 | - | 2916 | 2987 | no | 41 B |
-| 4x8 | anonymous public owners | full+data | yes | 4563 | 22 | 3 | - | 3578 | 3761 | no | 467 B |
-| 4x8 | anonymous public owners | full+reply | yes | 4450 | 22 | 3 | - | 3465 | 3662 | no | 354 B |
-| 4x8 | anonymous public owners | full+2tree | yes | 3775 | 22 | 3 | - | 2789 | 2987 | yes |  |
-| 4x8 | anonymous public owners | full+4credential-shared | yes | 3845 | 24 | 3 | - | 2793 | 2987 | yes |  |
-| 4x8 | anonymous public owners | full+4credential-disjoint | yes | 3941 | 27 | 3 | - | 2793 | 2987 | yes |  |
-| 4x8 | confidential entry | min | yes | 3619 | 11 | 1 | - | 3135 | 3370 | yes |  |
-| 4x8 | confidential entry | full | yes | 4209 | 22 | 3 | none | 3224 | 3415 | no | 113 B |
-| 4x8 | confidential entry | full+spl | yes | 4577 | 29 | 3 | - | 3356 | 3419 | no | 481 B |
-| 4x8 | confidential entry | full+data | yes | 5003 | 22 | 3 | - | 4018 | 4193 | no | 907 B |
-| 4x8 | confidential entry | full+reply | yes | 4209 | 22 | 3 | - | 3224 | 3415 | no | 113 B |
-| 4x8 | confidential entry | full+2tree | yes | 4215 | 22 | 3 | - | 3229 | 3419 | no | 119 B |
-| 4x8 | confidential entry | full+4credential-shared | yes | 4285 | 24 | 3 | - | 3233 | 3419 | no | 189 B |
-| 4x8 | confidential entry | full+4credential-disjoint | yes | 4381 | 27 | 3 | - | 3233 | 3419 | no | 285 B |
-| 4x8 | anonymous entry | min | yes | 4010 | 11 | 1 | - | 3527 | 3761 | yes |  |
-| 4x8 | anonymous entry | full | yes | 4480 | 18 | 2 | none | 3688 | 3888 | no | 384 B |
-| 4x8 | anonymous entry | full+spl | yes | 4848 | 25 | 2 | - | 3820 | 3892 | no | 752 B |
-| 4x8 | anonymous entry | full+data | yes | 5274 | 18 | 2 | - | 4482 | 4666 | no | 1178 B |
-| 4x8 | anonymous entry | full+reply | yes | 5161 | 18 | 2 | - | 4369 | 4567 | no | 1065 B |
-| 4x8 | anonymous entry | full+2tree | yes | 4486 | 18 | 2 | - | 3693 | 3892 | no | 390 B |
-| 4x8 | anonymous entry | full+4credential-shared | yes | 4556 | 20 | 2 | - | 3697 | 3892 | no | 460 B |
-| 4x8 | anonymous entry | full+4credential-disjoint | yes | 4652 | 23 | 2 | - | 3697 | 3892 | no | 556 B |
+| 4x4 | confidential signer | min | yes | 1977 | 12 | 1 | - | 1462 | 1550 | yes |  |
+| 4x4 | confidential signer | full | yes | 2532 | 22 | 3 | 4 | 1549 | 1595 | yes |  |
+| 4x4 | confidential signer | full+spl | yes | 2900 | 29 | 3 | - | 1681 | 1599 | yes |  |
+| 4x4 | confidential signer | full+data | yes | 2930 | 22 | 3 | - | 1947 | 1985 | yes |  |
+| 4x4 | confidential signer | full+reply | yes | 2532 | 22 | 3 | - | 1549 | 1595 | yes |  |
+| 4x4 | confidential signer | full+2tree | yes | 2570 | 23 | 3 | - | 1554 | 1599 | yes |  |
+| 4x4 | confidential in-proof | min | yes | 2072 | 12 | 1 | - | 1558 | 1647 | yes |  |
+| 4x4 | confidential in-proof | full | yes | 2531 | 21 | 2 | 4 | 1645 | 1692 | yes |  |
+| 4x4 | confidential in-proof | full+spl | yes | 2899 | 28 | 2 | - | 1777 | 1696 | yes |  |
+| 4x4 | confidential in-proof | full+data | yes | 2929 | 21 | 2 | - | 2043 | 2082 | yes |  |
+| 4x4 | confidential in-proof | full+reply | yes | 2531 | 21 | 2 | - | 1645 | 1692 | yes |  |
+| 4x4 | confidential in-proof | full+2tree | yes | 2569 | 22 | 2 | - | 1650 | 1696 | yes |  |
+| 4x4 | anonymous hidden | min | yes | 2168 | 12 | 1 | - | 1654 | 1773 | yes |  |
+| 4x4 | anonymous hidden | full | yes | 2595 | 18 | 2 | 4 | 1805 | 1892 | yes |  |
+| 4x4 | anonymous hidden | full+spl | yes | 2963 | 25 | 2 | - | 1937 | 1896 | yes |  |
+| 4x4 | anonymous hidden | full+data | yes | 2993 | 18 | 2 | - | 2203 | 2282 | yes |  |
+| 4x4 | anonymous hidden | full+reply | yes | 2888 | 18 | 2 | - | 2098 | 2183 | yes |  |
+| 4x4 | anonymous hidden | full+2tree | yes | 2633 | 19 | 2 | - | 1810 | 1896 | yes |  |
+| 4x4 | anonymous public owners | min | yes | 2105 | 12 | 1 | - | 1590 | 1676 | yes |  |
+| 4x4 | anonymous public owners | full | yes | 2724 | 22 | 3 | 4 | 1741 | 1795 | yes |  |
+| 4x4 | anonymous public owners | full+spl | yes | 3092 | 29 | 3 | - | 1873 | 1799 | yes |  |
+| 4x4 | anonymous public owners | full+data | yes | 3122 | 22 | 3 | - | 2139 | 2185 | yes |  |
+| 4x4 | anonymous public owners | full+reply | yes | 3017 | 22 | 3 | - | 2034 | 2086 | yes |  |
+| 4x4 | anonymous public owners | full+2tree | yes | 2762 | 23 | 3 | - | 1746 | 1799 | yes |  |
+| 4x4 | confidential entry | min | yes | 2785 | 12 | 1 | - | 2270 | 2358 | yes |  |
+| 4x4 | confidential entry | full | yes | 3340 | 22 | 3 | 4 | 2357 | 2403 | yes |  |
+| 4x4 | confidential entry | full+spl | yes | 3708 | 29 | 3 | - | 2489 | 2407 | yes |  |
+| 4x4 | confidential entry | full+data | yes | 3738 | 22 | 3 | - | 2755 | 2793 | yes |  |
+| 4x4 | confidential entry | full+reply | yes | 3340 | 22 | 3 | - | 2357 | 2403 | yes |  |
+| 4x4 | confidential entry | full+2tree | yes | 3378 | 23 | 3 | - | 2362 | 2407 | yes |  |
+| 4x4 | anonymous entry | min | yes | 3008 | 12 | 1 | - | 2494 | 2581 | yes |  |
+| 4x4 | anonymous entry | full | yes | 3435 | 18 | 2 | 4 | 2645 | 2700 | yes |  |
+| 4x4 | anonymous entry | full+spl | yes | 3803 | 25 | 2 | - | 2777 | 2704 | yes |  |
+| 4x4 | anonymous entry | full+data | yes | 3833 | 18 | 2 | - | 3043 | 3090 | yes |  |
+| 4x4 | anonymous entry | full+reply | yes | 3728 | 18 | 2 | - | 2938 | 2991 | yes |  |
+| 4x4 | anonymous entry | full+2tree | yes | 3473 | 19 | 2 | - | 2650 | 2704 | yes |  |
+| 4x4 | delegate | min | yes | 1977 | 12 | 1 | - | 1462 | 1550 | yes |  |
+| 4x4 | delegate | full | yes | 2320 | 18 | 2 | - | 1533 | 1595 | yes |  |
+| 4x4 | delegate | full+spl | yes | 2560 | 25 | 2 | - | 1537 | 1599 | yes |  |
+| 4x4 | delegate | full+data | yes | 2718 | 18 | 2 | - | 1931 | 1985 | yes |  |
+| 4x4 | delegate | full+reply | yes | 2320 | 18 | 2 | - | 1533 | 1595 | yes |  |
+| 4x4 | delegate | full+2tree | yes | 2358 | 19 | 2 | - | 1538 | 1599 | yes |  |
+| 4x4 | anonymous delegate | min | yes | 2105 | 12 | 1 | - | 1590 | 1676 | yes |  |
+| 4x4 | anonymous delegate | full | yes | 2512 | 18 | 2 | - | 1725 | 1795 | yes |  |
+| 4x4 | anonymous delegate | full+spl | yes | 2752 | 25 | 2 | - | 1729 | 1799 | yes |  |
+| 4x4 | anonymous delegate | full+data | yes | 2910 | 18 | 2 | - | 2123 | 2185 | yes |  |
+| 4x4 | anonymous delegate | full+reply | yes | 2805 | 18 | 2 | - | 2018 | 2086 | yes |  |
+| 4x4 | anonymous delegate | full+2tree | yes | 2550 | 19 | 2 | - | 1730 | 1799 | yes |  |
+| 4x8 | confidential signer | min | yes | 2845 | 12 | 1 | - | 2330 | 2562 | yes |  |
+| 4x8 | confidential signer | full | yes | 3400 | 22 | 3 | 4 | 2417 | 2607 | yes |  |
+| 4x8 | confidential signer | full+spl | yes | 3768 | 29 | 3 | - | 2549 | 2611 | yes |  |
+| 4x8 | confidential signer | full+data | yes | 4194 | 22 | 3 | - | 3211 | 3385 | no | 98 B |
+| 4x8 | confidential signer | full+reply | yes | 3400 | 22 | 3 | - | 2417 | 2607 | yes |  |
+| 4x8 | confidential signer | full+2tree | yes | 3438 | 23 | 3 | - | 2422 | 2611 | yes |  |
+| 4x8 | confidential in-proof | min | yes | 2940 | 12 | 1 | - | 2426 | 2659 | yes |  |
+| 4x8 | confidential in-proof | full | yes | 3399 | 21 | 2 | 4 | 2513 | 2704 | yes |  |
+| 4x8 | confidential in-proof | full+spl | yes | 3767 | 28 | 2 | - | 2645 | 2708 | yes |  |
+| 4x8 | confidential in-proof | full+data | yes | 4193 | 21 | 2 | - | 3307 | 3482 | no | 97 B |
+| 4x8 | confidential in-proof | full+reply | yes | 3399 | 21 | 2 | - | 2513 | 2704 | yes |  |
+| 4x8 | confidential in-proof | full+2tree | yes | 3437 | 22 | 2 | - | 2518 | 2708 | yes |  |
+| 4x8 | anonymous hidden | min | yes | 3164 | 12 | 1 | - | 2650 | 2913 | yes |  |
+| 4x8 | anonymous hidden | full | yes | 3591 | 18 | 2 | 4 | 2801 | 3032 | yes |  |
+| 4x8 | anonymous hidden | full+spl | yes | 3959 | 25 | 2 | - | 2933 | 3036 | yes |  |
+| 4x8 | anonymous hidden | full+data | yes | 4385 | 18 | 2 | - | 3595 | 3810 | no | 289 B |
+| 4x8 | anonymous hidden | full+reply | yes | 4272 | 18 | 2 | - | 3482 | 3711 | no | 176 B |
+| 4x8 | anonymous hidden | full+2tree | yes | 3629 | 19 | 2 | - | 2806 | 3036 | yes |  |
+| 4x8 | anonymous public owners | min | yes | 3101 | 12 | 1 | - | 2586 | 2816 | yes |  |
+| 4x8 | anonymous public owners | full | yes | 3720 | 22 | 3 | 4 | 2737 | 2935 | yes |  |
+| 4x8 | anonymous public owners | full+spl | yes | 4088 | 29 | 3 | - | 2869 | 2939 | yes |  |
+| 4x8 | anonymous public owners | full+data | yes | 4514 | 22 | 3 | - | 3531 | 3713 | no | 418 B |
+| 4x8 | anonymous public owners | full+reply | yes | 4401 | 22 | 3 | - | 3418 | 3614 | no | 305 B |
+| 4x8 | anonymous public owners | full+2tree | yes | 3758 | 23 | 3 | - | 2742 | 2939 | yes |  |
+| 4x8 | confidential entry | min | yes | 3653 | 12 | 1 | - | 3138 | 3370 | yes |  |
+| 4x8 | confidential entry | full | yes | 4208 | 22 | 3 | none | 3225 | 3415 | no | 112 B |
+| 4x8 | confidential entry | full+spl | yes | 4576 | 29 | 3 | - | 3357 | 3419 | no | 480 B |
+| 4x8 | confidential entry | full+data | yes | 5002 | 22 | 3 | - | 4019 | 4193 | no | 906 B |
+| 4x8 | confidential entry | full+reply | yes | 4208 | 22 | 3 | - | 3225 | 3415 | no | 112 B |
+| 4x8 | confidential entry | full+2tree | yes | 4246 | 23 | 3 | - | 3230 | 3419 | no | 150 B |
+| 4x8 | anonymous entry | min | yes | 4004 | 12 | 1 | - | 3490 | 3721 | yes |  |
+| 4x8 | anonymous entry | full | yes | 4431 | 18 | 2 | none | 3641 | 3840 | no | 335 B |
+| 4x8 | anonymous entry | full+spl | yes | 4799 | 25 | 2 | - | 3773 | 3844 | no | 703 B |
+| 4x8 | anonymous entry | full+data | yes | 5225 | 18 | 2 | - | 4435 | 4618 | no | 1129 B |
+| 4x8 | anonymous entry | full+reply | yes | 5112 | 18 | 2 | - | 4322 | 4519 | no | 1016 B |
+| 4x8 | anonymous entry | full+2tree | yes | 4469 | 19 | 2 | - | 3646 | 3844 | no | 373 B |
 | 4x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 5x2 | confidential signer | min | yes | 1574 | 12 | 1 | - | 1057 | 1077 | yes |  |
-| 5x2 | confidential signer | full | yes | 2164 | 23 | 3 | 5 | 1146 | 1122 | yes |  |
-| 5x2 | confidential signer | full+spl | yes | 2532 | 30 | 3 | - | 1278 | 1126 | yes |  |
-| 5x2 | confidential signer | full+data | yes | 2364 | 23 | 3 | - | 1346 | 1318 | yes |  |
-| 5x2 | confidential signer | full+reply | yes | 2164 | 23 | 3 | - | 1146 | 1122 | yes |  |
-| 5x2 | confidential signer | full+2tree | yes | 2170 | 23 | 3 | - | 1151 | 1126 | yes |  |
-| 5x2 | confidential signer | full+4credential-shared | yes | 2240 | 25 | 3 | - | 1155 | 1126 | yes |  |
-| 5x2 | confidential signer | full+4credential-disjoint | yes | 2336 | 28 | 3 | - | 1155 | 1126 | yes |  |
-| 5x2 | confidential in-proof | min | yes | 1669 | 12 | 1 | - | 1153 | 1174 | yes |  |
-| 5x2 | confidential in-proof | full | yes | 2163 | 22 | 2 | 5 | 1242 | 1219 | yes |  |
-| 5x2 | confidential in-proof | full+spl | yes | 2531 | 29 | 2 | - | 1374 | 1223 | yes |  |
-| 5x2 | confidential in-proof | full+data | yes | 2363 | 22 | 2 | - | 1442 | 1415 | yes |  |
-| 5x2 | confidential in-proof | full+reply | yes | 2163 | 22 | 2 | - | 1242 | 1219 | yes |  |
-| 5x2 | confidential in-proof | full+2tree | yes | 2169 | 22 | 2 | - | 1247 | 1223 | yes |  |
-| 5x2 | confidential in-proof | full+4credential-shared | yes | 2239 | 24 | 2 | - | 1251 | 1223 | yes |  |
-| 5x2 | confidential in-proof | full+4credential-disjoint | yes | 2335 | 27 | 2 | - | 1251 | 1223 | yes |  |
-| 5x2 | anonymous hidden | min | yes | 1741 | 12 | 1 | - | 1225 | 1276 | yes |  |
-| 5x2 | anonymous hidden | full | yes | 2211 | 19 | 2 | 5 | 1386 | 1403 | yes |  |
-| 5x2 | anonymous hidden | full+spl | yes | 2579 | 26 | 2 | - | 1518 | 1407 | yes |  |
-| 5x2 | anonymous hidden | full+data | yes | 2411 | 19 | 2 | - | 1586 | 1599 | yes |  |
-| 5x2 | anonymous hidden | full+reply | yes | 2310 | 19 | 2 | - | 1485 | 1500 | yes |  |
-| 5x2 | anonymous hidden | full+2tree | yes | 2217 | 19 | 2 | - | 1391 | 1407 | yes |  |
-| 5x2 | anonymous hidden | full+4credential-shared | yes | 2287 | 21 | 2 | - | 1395 | 1407 | yes |  |
-| 5x2 | anonymous hidden | full+4credential-disjoint | yes | 2383 | 24 | 2 | - | 1395 | 1407 | yes |  |
-| 5x2 | anonymous public owners | min | yes | 1678 | 12 | 1 | - | 1161 | 1179 | yes |  |
-| 5x2 | anonymous public owners | full | yes | 2340 | 23 | 3 | 5 | 1322 | 1306 | yes |  |
-| 5x2 | anonymous public owners | full+spl | yes | 2708 | 30 | 3 | - | 1454 | 1310 | yes |  |
-| 5x2 | anonymous public owners | full+data | yes | 2540 | 23 | 3 | - | 1522 | 1502 | yes |  |
-| 5x2 | anonymous public owners | full+reply | yes | 2439 | 23 | 3 | - | 1421 | 1403 | yes |  |
-| 5x2 | anonymous public owners | full+2tree | yes | 2346 | 23 | 3 | - | 1327 | 1310 | yes |  |
-| 5x2 | anonymous public owners | full+4credential-shared | yes | 2416 | 25 | 3 | - | 1331 | 1310 | yes |  |
-| 5x2 | anonymous public owners | full+4credential-disjoint | yes | 2512 | 28 | 3 | - | 1331 | 1310 | yes |  |
-| 5x2 | confidential entry | min | yes | 2582 | 12 | 1 | - | 2065 | 2085 | yes |  |
-| 5x2 | confidential entry | full | yes | 3172 | 23 | 3 | 5 | 2154 | 2130 | yes |  |
-| 5x2 | confidential entry | full+spl | yes | 3540 | 30 | 3 | - | 2286 | 2134 | yes |  |
-| 5x2 | confidential entry | full+data | yes | 3372 | 23 | 3 | - | 2354 | 2326 | yes |  |
-| 5x2 | confidential entry | full+reply | yes | 3172 | 23 | 3 | - | 2154 | 2130 | yes |  |
-| 5x2 | confidential entry | full+2tree | yes | 3178 | 23 | 3 | - | 2159 | 2134 | yes |  |
-| 5x2 | confidential entry | full+4credential-shared | yes | 3248 | 25 | 3 | - | 2163 | 2134 | yes |  |
-| 5x2 | confidential entry | full+4credential-disjoint | yes | 3344 | 28 | 3 | - | 2163 | 2134 | yes |  |
-| 5x2 | anonymous entry | min | yes | 2781 | 12 | 1 | - | 2265 | 2284 | yes |  |
-| 5x2 | anonymous entry | full | yes | 3251 | 19 | 2 | 5 | 2426 | 2411 | yes |  |
-| 5x2 | anonymous entry | full+spl | yes | 3619 | 26 | 2 | - | 2558 | 2415 | yes |  |
-| 5x2 | anonymous entry | full+data | yes | 3451 | 19 | 2 | - | 2626 | 2607 | yes |  |
-| 5x2 | anonymous entry | full+reply | yes | 3350 | 19 | 2 | - | 2525 | 2508 | yes |  |
-| 5x2 | anonymous entry | full+2tree | yes | 3257 | 19 | 2 | - | 2431 | 2415 | yes |  |
-| 5x2 | anonymous entry | full+4credential-shared | yes | 3327 | 21 | 2 | - | 2435 | 2415 | yes |  |
-| 5x2 | anonymous entry | full+4credential-disjoint | yes | 3423 | 24 | 2 | - | 2435 | 2415 | yes |  |
+| 5x2 | confidential signer | min | yes | 1608 | 13 | 1 | - | 1060 | 1077 | yes |  |
+| 5x2 | confidential signer | full | yes | 2163 | 23 | 3 | 5 | 1147 | 1122 | yes |  |
+| 5x2 | confidential signer | full+spl | yes | 2531 | 30 | 3 | - | 1279 | 1126 | yes |  |
+| 5x2 | confidential signer | full+data | yes | 2363 | 23 | 3 | - | 1347 | 1318 | yes |  |
+| 5x2 | confidential signer | full+reply | yes | 2163 | 23 | 3 | - | 1147 | 1122 | yes |  |
+| 5x2 | confidential signer | full+2tree | yes | 2201 | 24 | 3 | - | 1152 | 1126 | yes |  |
+| 5x2 | confidential in-proof | min | yes | 1703 | 13 | 1 | - | 1156 | 1174 | yes |  |
+| 5x2 | confidential in-proof | full | yes | 2162 | 22 | 2 | 5 | 1243 | 1219 | yes |  |
+| 5x2 | confidential in-proof | full+spl | yes | 2530 | 29 | 2 | - | 1375 | 1223 | yes |  |
+| 5x2 | confidential in-proof | full+data | yes | 2362 | 22 | 2 | - | 1443 | 1415 | yes |  |
+| 5x2 | confidential in-proof | full+reply | yes | 2162 | 22 | 2 | - | 1243 | 1219 | yes |  |
+| 5x2 | confidential in-proof | full+2tree | yes | 2200 | 23 | 2 | - | 1248 | 1223 | yes |  |
+| 5x2 | anonymous hidden | min | yes | 1735 | 13 | 1 | - | 1188 | 1236 | yes |  |
+| 5x2 | anonymous hidden | full | yes | 2162 | 19 | 2 | 5 | 1339 | 1355 | yes |  |
+| 5x2 | anonymous hidden | full+spl | yes | 2530 | 26 | 2 | - | 1471 | 1359 | yes |  |
+| 5x2 | anonymous hidden | full+data | yes | 2362 | 19 | 2 | - | 1539 | 1551 | yes |  |
+| 5x2 | anonymous hidden | full+reply | yes | 2261 | 19 | 2 | - | 1438 | 1452 | yes |  |
+| 5x2 | anonymous hidden | full+2tree | yes | 2200 | 20 | 2 | - | 1344 | 1359 | yes |  |
+| 5x2 | anonymous public owners | min | yes | 1672 | 13 | 1 | - | 1124 | 1139 | yes |  |
+| 5x2 | anonymous public owners | full | yes | 2291 | 23 | 3 | 5 | 1275 | 1258 | yes |  |
+| 5x2 | anonymous public owners | full+spl | yes | 2659 | 30 | 3 | - | 1407 | 1262 | yes |  |
+| 5x2 | anonymous public owners | full+data | yes | 2491 | 23 | 3 | - | 1475 | 1454 | yes |  |
+| 5x2 | anonymous public owners | full+reply | yes | 2390 | 23 | 3 | - | 1374 | 1355 | yes |  |
+| 5x2 | anonymous public owners | full+2tree | yes | 2329 | 24 | 3 | - | 1280 | 1262 | yes |  |
+| 5x2 | confidential entry | min | yes | 2616 | 13 | 1 | - | 2068 | 2085 | yes |  |
+| 5x2 | confidential entry | full | yes | 3171 | 23 | 3 | 5 | 2155 | 2130 | yes |  |
+| 5x2 | confidential entry | full+spl | yes | 3539 | 30 | 3 | - | 2287 | 2134 | yes |  |
+| 5x2 | confidential entry | full+data | yes | 3371 | 23 | 3 | - | 2355 | 2326 | yes |  |
+| 5x2 | confidential entry | full+reply | yes | 3171 | 23 | 3 | - | 2155 | 2130 | yes |  |
+| 5x2 | confidential entry | full+2tree | yes | 3209 | 24 | 3 | - | 2160 | 2134 | yes |  |
+| 5x2 | anonymous entry | min | yes | 2775 | 13 | 1 | - | 2228 | 2244 | yes |  |
+| 5x2 | anonymous entry | full | yes | 3202 | 19 | 2 | 5 | 2379 | 2363 | yes |  |
+| 5x2 | anonymous entry | full+spl | yes | 3570 | 26 | 2 | - | 2511 | 2367 | yes |  |
+| 5x2 | anonymous entry | full+data | yes | 3402 | 19 | 2 | - | 2579 | 2559 | yes |  |
+| 5x2 | anonymous entry | full+reply | yes | 3301 | 19 | 2 | - | 2478 | 2460 | yes |  |
+| 5x2 | anonymous entry | full+2tree | yes | 3240 | 20 | 2 | - | 2384 | 2367 | yes |  |
 | 5x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 5x4 | confidential signer | min | yes | 2008 | 12 | 1 | - | 1491 | 1583 | yes |  |
-| 5x4 | confidential signer | full | yes | 2598 | 23 | 3 | 5 | 1580 | 1628 | yes |  |
-| 5x4 | confidential signer | full+spl | yes | 2966 | 30 | 3 | - | 1712 | 1632 | yes |  |
-| 5x4 | confidential signer | full+data | yes | 2996 | 23 | 3 | - | 1978 | 2018 | yes |  |
-| 5x4 | confidential signer | full+reply | yes | 2598 | 23 | 3 | - | 1580 | 1628 | yes |  |
-| 5x4 | confidential signer | full+2tree | yes | 2604 | 23 | 3 | - | 1585 | 1632 | yes |  |
-| 5x4 | confidential signer | full+4credential-shared | yes | 2674 | 25 | 3 | - | 1589 | 1632 | yes |  |
-| 5x4 | confidential signer | full+4credential-disjoint | yes | 2770 | 28 | 3 | - | 1589 | 1632 | yes |  |
-| 5x4 | confidential in-proof | min | yes | 2103 | 12 | 1 | - | 1587 | 1680 | yes |  |
-| 5x4 | confidential in-proof | full | yes | 2597 | 22 | 2 | 5 | 1676 | 1725 | yes |  |
-| 5x4 | confidential in-proof | full+spl | yes | 2965 | 29 | 2 | - | 1808 | 1729 | yes |  |
-| 5x4 | confidential in-proof | full+data | yes | 2995 | 22 | 2 | - | 2074 | 2115 | yes |  |
-| 5x4 | confidential in-proof | full+reply | yes | 2597 | 22 | 2 | - | 1676 | 1725 | yes |  |
-| 5x4 | confidential in-proof | full+2tree | yes | 2603 | 22 | 2 | - | 1681 | 1729 | yes |  |
-| 5x4 | confidential in-proof | full+4credential-shared | yes | 2673 | 24 | 2 | - | 1685 | 1729 | yes |  |
-| 5x4 | confidential in-proof | full+4credential-disjoint | yes | 2769 | 27 | 2 | - | 1685 | 1729 | yes |  |
-| 5x4 | anonymous hidden | min | yes | 2239 | 12 | 1 | - | 1723 | 1846 | yes |  |
-| 5x4 | anonymous hidden | full | yes | 2709 | 19 | 2 | 5 | 1884 | 1973 | yes |  |
-| 5x4 | anonymous hidden | full+spl | yes | 3077 | 26 | 2 | - | 2016 | 1977 | yes |  |
-| 5x4 | anonymous hidden | full+data | yes | 3107 | 19 | 2 | - | 2282 | 2363 | yes |  |
-| 5x4 | anonymous hidden | full+reply | yes | 3002 | 19 | 2 | - | 2177 | 2264 | yes |  |
-| 5x4 | anonymous hidden | full+2tree | yes | 2715 | 19 | 2 | - | 1889 | 1977 | yes |  |
-| 5x4 | anonymous hidden | full+4credential-shared | yes | 2785 | 21 | 2 | - | 1893 | 1977 | yes |  |
-| 5x4 | anonymous hidden | full+4credential-disjoint | yes | 2881 | 24 | 2 | - | 1893 | 1977 | yes |  |
-| 5x4 | anonymous public owners | min | yes | 2176 | 12 | 1 | - | 1659 | 1749 | yes |  |
-| 5x4 | anonymous public owners | full | yes | 2838 | 23 | 3 | 5 | 1820 | 1876 | yes |  |
-| 5x4 | anonymous public owners | full+spl | yes | 3206 | 30 | 3 | - | 1952 | 1880 | yes |  |
-| 5x4 | anonymous public owners | full+data | yes | 3236 | 23 | 3 | - | 2218 | 2266 | yes |  |
-| 5x4 | anonymous public owners | full+reply | yes | 3131 | 23 | 3 | - | 2113 | 2167 | yes |  |
-| 5x4 | anonymous public owners | full+2tree | yes | 2844 | 23 | 3 | - | 1825 | 1880 | yes |  |
-| 5x4 | anonymous public owners | full+4credential-shared | yes | 2914 | 25 | 3 | - | 1829 | 1880 | yes |  |
-| 5x4 | anonymous public owners | full+4credential-disjoint | yes | 3010 | 28 | 3 | - | 1829 | 1880 | yes |  |
-| 5x4 | confidential entry | min | yes | 3016 | 12 | 1 | - | 2499 | 2591 | yes |  |
-| 5x4 | confidential entry | full | yes | 3606 | 23 | 3 | 5 | 2588 | 2636 | yes |  |
-| 5x4 | confidential entry | full+spl | yes | 3974 | 30 | 3 | - | 2720 | 2640 | yes |  |
-| 5x4 | confidential entry | full+data | yes | 4004 | 23 | 3 | - | 2986 | 3026 | yes |  |
-| 5x4 | confidential entry | full+reply | yes | 3606 | 23 | 3 | - | 2588 | 2636 | yes |  |
-| 5x4 | confidential entry | full+2tree | yes | 3612 | 23 | 3 | - | 2593 | 2640 | yes |  |
-| 5x4 | confidential entry | full+4credential-shared | yes | 3682 | 25 | 3 | - | 2597 | 2640 | yes |  |
-| 5x4 | confidential entry | full+4credential-disjoint | yes | 3778 | 28 | 3 | - | 2597 | 2640 | yes |  |
-| 5x4 | anonymous entry | min | yes | 3279 | 12 | 1 | - | 2763 | 2854 | yes |  |
-| 5x4 | anonymous entry | full | yes | 3749 | 19 | 2 | 3 | 2924 | 2981 | yes |  |
-| 5x4 | anonymous entry | full+spl | yes | 4117 | 26 | 2 | - | 3056 | 2985 | no | 21 B |
-| 5x4 | anonymous entry | full+data | yes | 4147 | 19 | 2 | - | 3322 | 3371 | no | 51 B |
-| 5x4 | anonymous entry | full+reply | yes | 4042 | 19 | 2 | - | 3217 | 3272 | yes |  |
-| 5x4 | anonymous entry | full+2tree | yes | 3755 | 19 | 2 | - | 2929 | 2985 | yes |  |
-| 5x4 | anonymous entry | full+4credential-shared | yes | 3825 | 21 | 2 | - | 2933 | 2985 | yes |  |
-| 5x4 | anonymous entry | full+4credential-disjoint | yes | 3921 | 24 | 2 | - | 2933 | 2985 | yes |  |
+| 5x4 | confidential signer | min | yes | 2042 | 13 | 1 | - | 1494 | 1583 | yes |  |
+| 5x4 | confidential signer | full | yes | 2597 | 23 | 3 | 5 | 1581 | 1628 | yes |  |
+| 5x4 | confidential signer | full+spl | yes | 2965 | 30 | 3 | - | 1713 | 1632 | yes |  |
+| 5x4 | confidential signer | full+data | yes | 2995 | 23 | 3 | - | 1979 | 2018 | yes |  |
+| 5x4 | confidential signer | full+reply | yes | 2597 | 23 | 3 | - | 1581 | 1628 | yes |  |
+| 5x4 | confidential signer | full+2tree | yes | 2635 | 24 | 3 | - | 1586 | 1632 | yes |  |
+| 5x4 | confidential in-proof | min | yes | 2137 | 13 | 1 | - | 1590 | 1680 | yes |  |
+| 5x4 | confidential in-proof | full | yes | 2596 | 22 | 2 | 5 | 1677 | 1725 | yes |  |
+| 5x4 | confidential in-proof | full+spl | yes | 2964 | 29 | 2 | - | 1809 | 1729 | yes |  |
+| 5x4 | confidential in-proof | full+data | yes | 2994 | 22 | 2 | - | 2075 | 2115 | yes |  |
+| 5x4 | confidential in-proof | full+reply | yes | 2596 | 22 | 2 | - | 1677 | 1725 | yes |  |
+| 5x4 | confidential in-proof | full+2tree | yes | 2634 | 23 | 2 | - | 1682 | 1729 | yes |  |
+| 5x4 | anonymous hidden | min | yes | 2233 | 13 | 1 | - | 1686 | 1806 | yes |  |
+| 5x4 | anonymous hidden | full | yes | 2660 | 19 | 2 | 5 | 1837 | 1925 | yes |  |
+| 5x4 | anonymous hidden | full+spl | yes | 3028 | 26 | 2 | - | 1969 | 1929 | yes |  |
+| 5x4 | anonymous hidden | full+data | yes | 3058 | 19 | 2 | - | 2235 | 2315 | yes |  |
+| 5x4 | anonymous hidden | full+reply | yes | 2953 | 19 | 2 | - | 2130 | 2216 | yes |  |
+| 5x4 | anonymous hidden | full+2tree | yes | 2698 | 20 | 2 | - | 1842 | 1929 | yes |  |
+| 5x4 | anonymous public owners | min | yes | 2170 | 13 | 1 | - | 1622 | 1709 | yes |  |
+| 5x4 | anonymous public owners | full | yes | 2789 | 23 | 3 | 5 | 1773 | 1828 | yes |  |
+| 5x4 | anonymous public owners | full+spl | yes | 3157 | 30 | 3 | - | 1905 | 1832 | yes |  |
+| 5x4 | anonymous public owners | full+data | yes | 3187 | 23 | 3 | - | 2171 | 2218 | yes |  |
+| 5x4 | anonymous public owners | full+reply | yes | 3082 | 23 | 3 | - | 2066 | 2119 | yes |  |
+| 5x4 | anonymous public owners | full+2tree | yes | 2827 | 24 | 3 | - | 1778 | 1832 | yes |  |
+| 5x4 | confidential entry | min | yes | 3050 | 13 | 1 | - | 2502 | 2591 | yes |  |
+| 5x4 | confidential entry | full | yes | 3605 | 23 | 3 | 5 | 2589 | 2636 | yes |  |
+| 5x4 | confidential entry | full+spl | yes | 3973 | 30 | 3 | - | 2721 | 2640 | yes |  |
+| 5x4 | confidential entry | full+data | yes | 4003 | 23 | 3 | - | 2987 | 3026 | yes |  |
+| 5x4 | confidential entry | full+reply | yes | 3605 | 23 | 3 | - | 2589 | 2636 | yes |  |
+| 5x4 | confidential entry | full+2tree | yes | 3643 | 24 | 3 | - | 2594 | 2640 | yes |  |
+| 5x4 | anonymous entry | min | yes | 3273 | 13 | 1 | - | 2726 | 2814 | yes |  |
+| 5x4 | anonymous entry | full | yes | 3700 | 19 | 2 | 4 | 2877 | 2933 | yes |  |
+| 5x4 | anonymous entry | full+spl | yes | 4068 | 26 | 2 | - | 3009 | 2937 | yes |  |
+| 5x4 | anonymous entry | full+data | yes | 4098 | 19 | 2 | - | 3275 | 3323 | no | 2 B |
+| 5x4 | anonymous entry | full+reply | yes | 3993 | 19 | 2 | - | 3170 | 3224 | yes |  |
+| 5x4 | anonymous entry | full+2tree | yes | 3738 | 20 | 2 | - | 2882 | 2937 | yes |  |
 | 5x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 4x16 | confidential signer | min | yes | 4549 | 11 | 1 | - | 4065 | 4586 | no | 453 B |
-| 4x16 | confidential signer | full | yes | 5139 | 22 | 3 | none | 4154 | 4631 | no | 1043 B |
-| 4x16 | confidential signer | full+spl | yes | 5507 | 29 | 3 | - | 4286 | 4635 | no | 1411 B |
-| 4x16 | confidential signer | full+data | yes | 6725 | 22 | 3 | - | 5740 | 6185 | no | 2629 B |
-| 4x16 | confidential signer | full+reply | yes | 5139 | 22 | 3 | - | 4154 | 4631 | no | 1043 B |
-| 4x16 | confidential signer | full+2tree | yes | 5145 | 22 | 3 | - | 4159 | 4635 | no | 1049 B |
-| 4x16 | confidential signer | full+4credential-shared | yes | 5215 | 24 | 3 | - | 4163 | 4635 | no | 1119 B |
-| 4x16 | confidential signer | full+4credential-disjoint | yes | 5311 | 27 | 3 | - | 4163 | 4635 | no | 1215 B |
-| 4x16 | confidential in-proof | min | yes | 4644 | 11 | 1 | - | 4161 | 4683 | no | 548 B |
-| 4x16 | confidential in-proof | full | yes | 5138 | 21 | 2 | none | 4250 | 4728 | no | 1042 B |
-| 4x16 | confidential in-proof | full+spl | yes | 5506 | 28 | 2 | - | 4382 | 4732 | no | 1410 B |
-| 4x16 | confidential in-proof | full+data | yes | 6724 | 21 | 2 | - | 5836 | 6282 | no | 2628 B |
-| 4x16 | confidential in-proof | full+reply | yes | 5138 | 21 | 2 | - | 4250 | 4728 | no | 1042 B |
-| 4x16 | confidential in-proof | full+2tree | yes | 5144 | 21 | 2 | - | 4255 | 4732 | no | 1048 B |
-| 4x16 | confidential in-proof | full+4credential-shared | yes | 5214 | 23 | 2 | - | 4259 | 4732 | no | 1118 B |
-| 4x16 | confidential in-proof | full+4credential-disjoint | yes | 5310 | 26 | 2 | - | 4259 | 4732 | no | 1214 B |
-| 4x16 | anonymous hidden | min | yes | 5164 | 11 | 1 | - | 4681 | 5233 | no | 1068 B |
-| 4x16 | anonymous hidden | full | yes | 5634 | 18 | 2 | none | 4842 | 5360 | no | 1538 B |
-| 4x16 | anonymous hidden | full+spl | yes | 6002 | 25 | 2 | - | 4974 | 5364 | no | 1906 B |
-| 4x16 | anonymous hidden | full+data | yes | 7220 | 18 | 2 | - | 6428 | 6914 | no | 3124 B |
-| 4x16 | anonymous hidden | full+reply | yes | 7091 | 18 | 2 | - | 6299 | 6815 | no | 2995 B |
-| 4x16 | anonymous hidden | full+2tree | yes | 5640 | 18 | 2 | - | 4847 | 5364 | no | 1544 B |
-| 4x16 | anonymous hidden | full+4credential-shared | yes | 5710 | 20 | 2 | - | 4851 | 5364 | no | 1614 B |
-| 4x16 | anonymous hidden | full+4credential-disjoint | yes | 5806 | 23 | 2 | - | 4851 | 5364 | no | 1710 B |
-| 4x16 | anonymous public owners | min | yes | 5101 | 11 | 1 | - | 4617 | 5136 | no | 1005 B |
-| 4x16 | anonymous public owners | full | yes | 5763 | 22 | 3 | none | 4778 | 5263 | no | 1667 B |
-| 4x16 | anonymous public owners | full+spl | yes | 6131 | 29 | 3 | - | 4910 | 5267 | no | 2035 B |
-| 4x16 | anonymous public owners | full+data | yes | 7349 | 22 | 3 | - | 6364 | 6817 | no | 3253 B |
-| 4x16 | anonymous public owners | full+reply | yes | 7220 | 22 | 3 | - | 6235 | 6718 | no | 3124 B |
-| 4x16 | anonymous public owners | full+2tree | yes | 5769 | 22 | 3 | - | 4783 | 5267 | no | 1673 B |
-| 4x16 | anonymous public owners | full+4credential-shared | yes | 5839 | 24 | 3 | - | 4787 | 5267 | no | 1743 B |
-| 4x16 | anonymous public owners | full+4credential-disjoint | yes | 5935 | 27 | 3 | - | 4787 | 5267 | no | 1839 B |
+| 4x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 4x16 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 4x16 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 4x16 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 4x16 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 4x16 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 4x16 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 4x16 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 5x8 | confidential signer | min | yes | 2876 | 12 | 1 | - | 2359 | 2595 | yes |  |
-| 5x8 | confidential signer | full | yes | 3466 | 23 | 3 | 5 | 2448 | 2640 | yes |  |
-| 5x8 | confidential signer | full+spl | yes | 3834 | 30 | 3 | - | 2580 | 2644 | yes |  |
-| 5x8 | confidential signer | full+data | yes | 4260 | 23 | 3 | - | 3242 | 3418 | no | 164 B |
-| 5x8 | confidential signer | full+reply | yes | 3466 | 23 | 3 | - | 2448 | 2640 | yes |  |
-| 5x8 | confidential signer | full+2tree | yes | 3472 | 23 | 3 | - | 2453 | 2644 | yes |  |
-| 5x8 | confidential signer | full+4credential-shared | yes | 3542 | 25 | 3 | - | 2457 | 2644 | yes |  |
-| 5x8 | confidential signer | full+4credential-disjoint | yes | 3638 | 28 | 3 | - | 2457 | 2644 | yes |  |
-| 5x8 | confidential in-proof | min | yes | 2971 | 12 | 1 | - | 2455 | 2692 | yes |  |
-| 5x8 | confidential in-proof | full | yes | 3465 | 22 | 2 | 5 | 2544 | 2737 | yes |  |
-| 5x8 | confidential in-proof | full+spl | yes | 3833 | 29 | 2 | - | 2676 | 2741 | yes |  |
-| 5x8 | confidential in-proof | full+data | yes | 4259 | 22 | 2 | - | 3338 | 3515 | no | 163 B |
-| 5x8 | confidential in-proof | full+reply | yes | 3465 | 22 | 2 | - | 2544 | 2737 | yes |  |
-| 5x8 | confidential in-proof | full+2tree | yes | 3471 | 22 | 2 | - | 2549 | 2741 | yes |  |
-| 5x8 | confidential in-proof | full+4credential-shared | yes | 3541 | 24 | 2 | - | 2553 | 2741 | yes |  |
-| 5x8 | confidential in-proof | full+4credential-disjoint | yes | 3637 | 27 | 2 | - | 2553 | 2741 | yes |  |
-| 5x8 | anonymous hidden | min | yes | 3235 | 12 | 1 | - | 2719 | 2986 | yes |  |
-| 5x8 | anonymous hidden | full | yes | 3705 | 19 | 2 | 4 | 2880 | 3113 | yes |  |
-| 5x8 | anonymous hidden | full+spl | yes | 4073 | 26 | 2 | - | 3012 | 3117 | yes |  |
-| 5x8 | anonymous hidden | full+data | yes | 4499 | 19 | 2 | - | 3674 | 3891 | no | 403 B |
-| 5x8 | anonymous hidden | full+reply | yes | 4386 | 19 | 2 | - | 3561 | 3792 | no | 290 B |
-| 5x8 | anonymous hidden | full+2tree | yes | 3711 | 19 | 2 | - | 2885 | 3117 | yes |  |
-| 5x8 | anonymous hidden | full+4credential-shared | yes | 3781 | 21 | 2 | - | 2889 | 3117 | yes |  |
-| 5x8 | anonymous hidden | full+4credential-disjoint | yes | 3877 | 24 | 2 | - | 2889 | 3117 | yes |  |
-| 5x8 | anonymous public owners | min | yes | 3172 | 12 | 1 | - | 2655 | 2889 | yes |  |
-| 5x8 | anonymous public owners | full | yes | 3834 | 23 | 3 | 3 | 2816 | 3016 | yes |  |
-| 5x8 | anonymous public owners | full+spl | yes | 4202 | 30 | 3 | - | 2948 | 3020 | no | 106 B |
-| 5x8 | anonymous public owners | full+data | yes | 4628 | 23 | 3 | - | 3610 | 3794 | no | 532 B |
-| 5x8 | anonymous public owners | full+reply | yes | 4515 | 23 | 3 | - | 3497 | 3695 | no | 419 B |
-| 5x8 | anonymous public owners | full+2tree | yes | 3840 | 23 | 3 | - | 2821 | 3020 | yes |  |
-| 5x8 | anonymous public owners | full+4credential-shared | yes | 3910 | 25 | 3 | - | 2825 | 3020 | yes |  |
-| 5x8 | anonymous public owners | full+4credential-disjoint | yes | 4006 | 28 | 3 | - | 2825 | 3020 | yes |  |
-| 5x8 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 5x8 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
+| 5x8 | confidential signer | min | yes | 2910 | 13 | 1 | - | 2362 | 2595 | yes |  |
+| 5x8 | confidential signer | full | yes | 3465 | 23 | 3 | 5 | 2449 | 2640 | yes |  |
+| 5x8 | confidential signer | full+spl | yes | 3833 | 30 | 3 | - | 2581 | 2644 | yes |  |
+| 5x8 | confidential signer | full+data | yes | 4259 | 23 | 3 | - | 3243 | 3418 | no | 163 B |
+| 5x8 | confidential signer | full+reply | yes | 3465 | 23 | 3 | - | 2449 | 2640 | yes |  |
+| 5x8 | confidential signer | full+2tree | yes | 3503 | 24 | 3 | - | 2454 | 2644 | yes |  |
+| 5x8 | confidential in-proof | min | yes | 3005 | 13 | 1 | - | 2458 | 2692 | yes |  |
+| 5x8 | confidential in-proof | full | yes | 3464 | 22 | 2 | 5 | 2545 | 2737 | yes |  |
+| 5x8 | confidential in-proof | full+spl | yes | 3832 | 29 | 2 | - | 2677 | 2741 | yes |  |
+| 5x8 | confidential in-proof | full+data | yes | 4258 | 22 | 2 | - | 3339 | 3515 | no | 162 B |
+| 5x8 | confidential in-proof | full+reply | yes | 3464 | 22 | 2 | - | 2545 | 2737 | yes |  |
+| 5x8 | confidential in-proof | full+2tree | yes | 3502 | 23 | 2 | - | 2550 | 2741 | yes |  |
+| 5x8 | anonymous hidden | min | yes | 3229 | 13 | 1 | - | 2682 | 2946 | yes |  |
+| 5x8 | anonymous hidden | full | yes | 3656 | 19 | 2 | 4 | 2833 | 3065 | yes |  |
+| 5x8 | anonymous hidden | full+spl | yes | 4024 | 26 | 2 | - | 2965 | 3069 | yes |  |
+| 5x8 | anonymous hidden | full+data | yes | 4450 | 19 | 2 | - | 3627 | 3843 | no | 354 B |
+| 5x8 | anonymous hidden | full+reply | yes | 4337 | 19 | 2 | - | 3514 | 3744 | no | 241 B |
+| 5x8 | anonymous hidden | full+2tree | yes | 3694 | 20 | 2 | - | 2838 | 3069 | yes |  |
+| 5x8 | anonymous public owners | min | yes | 3166 | 13 | 1 | - | 2618 | 2849 | yes |  |
+| 5x8 | anonymous public owners | full | yes | 3785 | 23 | 3 | 4 | 2769 | 2968 | yes |  |
+| 5x8 | anonymous public owners | full+spl | yes | 4153 | 30 | 3 | - | 2901 | 2972 | no | 57 B |
+| 5x8 | anonymous public owners | full+data | yes | 4579 | 23 | 3 | - | 3563 | 3746 | no | 483 B |
+| 5x8 | anonymous public owners | full+reply | yes | 4466 | 23 | 3 | - | 3450 | 3647 | no | 370 B |
+| 5x8 | anonymous public owners | full+2tree | yes | 3823 | 24 | 3 | - | 2774 | 2972 | yes |  |
+| 5x8 | confidential entry | min | yes | 3918 | 13 | 1 | - | 3370 | 3603 | yes |  |
+| 5x8 | confidential entry | full | yes | 4473 | 23 | 3 | none | 3457 | 3648 | no | 377 B |
+| 5x8 | confidential entry | full+spl | yes | 4841 | 30 | 3 | - | 3589 | 3652 | no | 745 B |
+| 5x8 | confidential entry | full+data | yes | 5267 | 23 | 3 | - | 4251 | 4426 | no | 1171 B |
+| 5x8 | confidential entry | full+reply | yes | 4473 | 23 | 3 | - | 3457 | 3648 | no | 377 B |
+| 5x8 | confidential entry | full+2tree | yes | 4511 | 24 | 3 | - | 3462 | 3652 | no | 415 B |
+| 5x8 | anonymous entry | min | yes | 4269 | 13 | 1 | - | 3722 | 3954 | no | 173 B |
+| 5x8 | anonymous entry | full | yes | 4696 | 19 | 2 | none | 3873 | 4073 | no | 600 B |
+| 5x8 | anonymous entry | full+spl | yes | 5064 | 26 | 2 | - | 4005 | 4077 | no | 968 B |
+| 5x8 | anonymous entry | full+data | yes | 5490 | 19 | 2 | - | 4667 | 4851 | no | 1394 B |
+| 5x8 | anonymous entry | full+reply | yes | 5377 | 19 | 2 | - | 4554 | 4752 | no | 1281 B |
+| 5x8 | anonymous entry | full+2tree | yes | 4734 | 20 | 2 | - | 3878 | 4077 | no | 638 B |
 | 5x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 6x2 | confidential signer | min | yes | 1639 | 13 | 1 | - | 1089 | 1110 | yes |  |
-| 6x2 | confidential signer | full | yes | 2229 | 24 | 3 | 6 | 1178 | 1155 | yes |  |
-| 6x2 | confidential signer | full+spl | yes | 2597 | 31 | 3 | - | 1310 | 1159 | yes |  |
-| 6x2 | confidential signer | full+data | yes | 2429 | 24 | 3 | - | 1378 | 1351 | yes |  |
-| 6x2 | confidential signer | full+reply | yes | 2229 | 24 | 3 | - | 1178 | 1155 | yes |  |
-| 6x2 | confidential signer | full+2tree | yes | 2235 | 24 | 3 | - | 1183 | 1159 | yes |  |
-| 6x2 | confidential signer | full+4credential-shared | yes | 2305 | 26 | 3 | - | 1187 | 1159 | yes |  |
-| 6x2 | confidential signer | full+4credential-disjoint | yes | 2401 | 29 | 3 | - | 1187 | 1159 | yes |  |
-| 6x2 | confidential in-proof | min | yes | 1734 | 13 | 1 | - | 1185 | 1207 | yes |  |
-| 6x2 | confidential in-proof | full | yes | 2228 | 23 | 2 | 6 | 1274 | 1252 | yes |  |
-| 6x2 | confidential in-proof | full+spl | yes | 2596 | 30 | 2 | - | 1406 | 1256 | yes |  |
-| 6x2 | confidential in-proof | full+data | yes | 2428 | 23 | 2 | - | 1474 | 1448 | yes |  |
-| 6x2 | confidential in-proof | full+reply | yes | 2228 | 23 | 2 | - | 1274 | 1252 | yes |  |
-| 6x2 | confidential in-proof | full+2tree | yes | 2234 | 23 | 2 | - | 1279 | 1256 | yes |  |
-| 6x2 | confidential in-proof | full+4credential-shared | yes | 2304 | 25 | 2 | - | 1283 | 1256 | yes |  |
-| 6x2 | confidential in-proof | full+4credential-disjoint | yes | 2400 | 28 | 2 | - | 1283 | 1256 | yes |  |
-| 6x2 | anonymous hidden | min | yes | 1806 | 13 | 1 | - | 1257 | 1309 | yes |  |
-| 6x2 | anonymous hidden | full | yes | 2276 | 20 | 2 | 6 | 1418 | 1436 | yes |  |
-| 6x2 | anonymous hidden | full+spl | yes | 2644 | 27 | 2 | - | 1550 | 1440 | yes |  |
-| 6x2 | anonymous hidden | full+data | yes | 2476 | 20 | 2 | - | 1618 | 1632 | yes |  |
-| 6x2 | anonymous hidden | full+reply | yes | 2375 | 20 | 2 | - | 1517 | 1533 | yes |  |
-| 6x2 | anonymous hidden | full+2tree | yes | 2282 | 20 | 2 | - | 1423 | 1440 | yes |  |
-| 6x2 | anonymous hidden | full+4credential-shared | yes | 2352 | 22 | 2 | - | 1427 | 1440 | yes |  |
-| 6x2 | anonymous hidden | full+4credential-disjoint | yes | 2448 | 25 | 2 | - | 1427 | 1440 | yes |  |
-| 6x2 | anonymous public owners | min | yes | 1743 | 13 | 1 | - | 1193 | 1212 | yes |  |
-| 6x2 | anonymous public owners | full | yes | 2405 | 24 | 3 | 6 | 1354 | 1339 | yes |  |
-| 6x2 | anonymous public owners | full+spl | yes | 2773 | 31 | 3 | - | 1486 | 1343 | yes |  |
-| 6x2 | anonymous public owners | full+data | yes | 2605 | 24 | 3 | - | 1554 | 1535 | yes |  |
-| 6x2 | anonymous public owners | full+reply | yes | 2504 | 24 | 3 | - | 1453 | 1436 | yes |  |
-| 6x2 | anonymous public owners | full+2tree | yes | 2411 | 24 | 3 | - | 1359 | 1343 | yes |  |
-| 6x2 | anonymous public owners | full+4credential-shared | yes | 2481 | 26 | 3 | - | 1363 | 1343 | yes |  |
-| 6x2 | anonymous public owners | full+4credential-disjoint | yes | 2577 | 29 | 3 | - | 1363 | 1343 | yes |  |
-| 6x2 | confidential entry | min | yes | 2847 | 13 | 1 | - | 2297 | 2318 | yes |  |
-| 6x2 | confidential entry | full | yes | 3437 | 24 | 3 | 6 | 2386 | 2363 | yes |  |
-| 6x2 | confidential entry | full+spl | yes | 3805 | 31 | 3 | - | 2518 | 2367 | yes |  |
-| 6x2 | confidential entry | full+data | yes | 3637 | 24 | 3 | - | 2586 | 2559 | yes |  |
-| 6x2 | confidential entry | full+reply | yes | 3437 | 24 | 3 | - | 2386 | 2363 | yes |  |
-| 6x2 | confidential entry | full+2tree | yes | 3443 | 24 | 3 | - | 2391 | 2367 | yes |  |
-| 6x2 | confidential entry | full+4credential-shared | yes | 3513 | 26 | 3 | - | 2395 | 2367 | yes |  |
-| 6x2 | confidential entry | full+4credential-disjoint | yes | 3609 | 29 | 3 | - | 2395 | 2367 | yes |  |
-| 6x2 | anonymous entry | min | yes | 3046 | 13 | 1 | - | 2497 | 2517 | yes |  |
-| 6x2 | anonymous entry | full | yes | 3516 | 20 | 2 | 5 | 2658 | 2644 | yes |  |
-| 6x2 | anonymous entry | full+spl | yes | 3884 | 27 | 2 | - | 2790 | 2648 | yes |  |
-| 6x2 | anonymous entry | full+data | yes | 3716 | 20 | 2 | - | 2858 | 2840 | yes |  |
-| 6x2 | anonymous entry | full+reply | yes | 3615 | 20 | 2 | - | 2757 | 2741 | yes |  |
-| 6x2 | anonymous entry | full+2tree | yes | 3522 | 20 | 2 | - | 2663 | 2648 | yes |  |
-| 6x2 | anonymous entry | full+4credential-shared | yes | 3592 | 22 | 2 | - | 2667 | 2648 | yes |  |
-| 6x2 | anonymous entry | full+4credential-disjoint | yes | 3688 | 25 | 2 | - | 2667 | 2648 | yes |  |
+| 6x2 | confidential signer | min | yes | 1673 | 14 | 1 | - | 1092 | 1110 | yes |  |
+| 6x2 | confidential signer | full | yes | 2228 | 24 | 3 | 6 | 1179 | 1155 | yes |  |
+| 6x2 | confidential signer | full+spl | yes | 2596 | 31 | 3 | - | 1311 | 1159 | yes |  |
+| 6x2 | confidential signer | full+data | yes | 2428 | 24 | 3 | - | 1379 | 1351 | yes |  |
+| 6x2 | confidential signer | full+reply | yes | 2228 | 24 | 3 | - | 1179 | 1155 | yes |  |
+| 6x2 | confidential signer | full+2tree | yes | 2266 | 25 | 3 | - | 1184 | 1159 | yes |  |
+| 6x2 | confidential in-proof | min | yes | 1768 | 14 | 1 | - | 1188 | 1207 | yes |  |
+| 6x2 | confidential in-proof | full | yes | 2227 | 23 | 2 | 6 | 1275 | 1252 | yes |  |
+| 6x2 | confidential in-proof | full+spl | yes | 2595 | 30 | 2 | - | 1407 | 1256 | yes |  |
+| 6x2 | confidential in-proof | full+data | yes | 2427 | 23 | 2 | - | 1475 | 1448 | yes |  |
+| 6x2 | confidential in-proof | full+reply | yes | 2227 | 23 | 2 | - | 1275 | 1252 | yes |  |
+| 6x2 | confidential in-proof | full+2tree | yes | 2265 | 24 | 2 | - | 1280 | 1256 | yes |  |
+| 6x2 | anonymous hidden | min | yes | 1800 | 14 | 1 | - | 1220 | 1269 | yes |  |
+| 6x2 | anonymous hidden | full | yes | 2227 | 20 | 2 | 6 | 1371 | 1388 | yes |  |
+| 6x2 | anonymous hidden | full+spl | yes | 2595 | 27 | 2 | - | 1503 | 1392 | yes |  |
+| 6x2 | anonymous hidden | full+data | yes | 2427 | 20 | 2 | - | 1571 | 1584 | yes |  |
+| 6x2 | anonymous hidden | full+reply | yes | 2326 | 20 | 2 | - | 1470 | 1485 | yes |  |
+| 6x2 | anonymous hidden | full+2tree | yes | 2265 | 21 | 2 | - | 1376 | 1392 | yes |  |
+| 6x2 | anonymous public owners | min | yes | 1737 | 14 | 1 | - | 1156 | 1172 | yes |  |
+| 6x2 | anonymous public owners | full | yes | 2356 | 24 | 3 | 6 | 1307 | 1291 | yes |  |
+| 6x2 | anonymous public owners | full+spl | yes | 2724 | 31 | 3 | - | 1439 | 1295 | yes |  |
+| 6x2 | anonymous public owners | full+data | yes | 2556 | 24 | 3 | - | 1507 | 1487 | yes |  |
+| 6x2 | anonymous public owners | full+reply | yes | 2455 | 24 | 3 | - | 1406 | 1388 | yes |  |
+| 6x2 | anonymous public owners | full+2tree | yes | 2394 | 25 | 3 | - | 1312 | 1295 | yes |  |
+| 6x2 | confidential entry | min | yes | 2881 | 14 | 1 | - | 2300 | 2318 | yes |  |
+| 6x2 | confidential entry | full | yes | 3436 | 24 | 3 | 6 | 2387 | 2363 | yes |  |
+| 6x2 | confidential entry | full+spl | yes | 3804 | 31 | 3 | - | 2519 | 2367 | yes |  |
+| 6x2 | confidential entry | full+data | yes | 3636 | 24 | 3 | - | 2587 | 2559 | yes |  |
+| 6x2 | confidential entry | full+reply | yes | 3436 | 24 | 3 | - | 2387 | 2363 | yes |  |
+| 6x2 | confidential entry | full+2tree | yes | 3474 | 25 | 3 | - | 2392 | 2367 | yes |  |
+| 6x2 | anonymous entry | min | yes | 3040 | 14 | 1 | - | 2460 | 2477 | yes |  |
+| 6x2 | anonymous entry | full | yes | 3467 | 20 | 2 | 6 | 2611 | 2596 | yes |  |
+| 6x2 | anonymous entry | full+spl | yes | 3835 | 27 | 2 | - | 2743 | 2600 | yes |  |
+| 6x2 | anonymous entry | full+data | yes | 3667 | 20 | 2 | - | 2811 | 2792 | yes |  |
+| 6x2 | anonymous entry | full+reply | yes | 3566 | 20 | 2 | - | 2710 | 2693 | yes |  |
+| 6x2 | anonymous entry | full+2tree | yes | 3505 | 21 | 2 | - | 2616 | 2600 | yes |  |
 | 6x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 6x4 | confidential signer | min | yes | 2073 | 13 | 1 | - | 1523 | 1616 | yes |  |
-| 6x4 | confidential signer | full | yes | 2663 | 24 | 3 | 6 | 1612 | 1661 | yes |  |
-| 6x4 | confidential signer | full+spl | yes | 3031 | 31 | 3 | - | 1744 | 1665 | yes |  |
-| 6x4 | confidential signer | full+data | yes | 3061 | 24 | 3 | - | 2010 | 2051 | yes |  |
-| 6x4 | confidential signer | full+reply | yes | 2663 | 24 | 3 | - | 1612 | 1661 | yes |  |
-| 6x4 | confidential signer | full+2tree | yes | 2669 | 24 | 3 | - | 1617 | 1665 | yes |  |
-| 6x4 | confidential signer | full+4credential-shared | yes | 2739 | 26 | 3 | - | 1621 | 1665 | yes |  |
-| 6x4 | confidential signer | full+4credential-disjoint | yes | 2835 | 29 | 3 | - | 1621 | 1665 | yes |  |
-| 6x4 | confidential in-proof | min | yes | 2168 | 13 | 1 | - | 1619 | 1713 | yes |  |
-| 6x4 | confidential in-proof | full | yes | 2662 | 23 | 2 | 6 | 1708 | 1758 | yes |  |
-| 6x4 | confidential in-proof | full+spl | yes | 3030 | 30 | 2 | - | 1840 | 1762 | yes |  |
-| 6x4 | confidential in-proof | full+data | yes | 3060 | 23 | 2 | - | 2106 | 2148 | yes |  |
-| 6x4 | confidential in-proof | full+reply | yes | 2662 | 23 | 2 | - | 1708 | 1758 | yes |  |
-| 6x4 | confidential in-proof | full+2tree | yes | 2668 | 23 | 2 | - | 1713 | 1762 | yes |  |
-| 6x4 | confidential in-proof | full+4credential-shared | yes | 2738 | 25 | 2 | - | 1717 | 1762 | yes |  |
-| 6x4 | confidential in-proof | full+4credential-disjoint | yes | 2834 | 28 | 2 | - | 1717 | 1762 | yes |  |
-| 6x4 | anonymous hidden | min | yes | 2304 | 13 | 1 | - | 1755 | 1879 | yes |  |
-| 6x4 | anonymous hidden | full | yes | 2774 | 20 | 2 | 6 | 1916 | 2006 | yes |  |
-| 6x4 | anonymous hidden | full+spl | yes | 3142 | 27 | 2 | - | 2048 | 2010 | yes |  |
-| 6x4 | anonymous hidden | full+data | yes | 3172 | 20 | 2 | - | 2314 | 2396 | yes |  |
-| 6x4 | anonymous hidden | full+reply | yes | 3067 | 20 | 2 | - | 2209 | 2297 | yes |  |
-| 6x4 | anonymous hidden | full+2tree | yes | 2780 | 20 | 2 | - | 1921 | 2010 | yes |  |
-| 6x4 | anonymous hidden | full+4credential-shared | yes | 2850 | 22 | 2 | - | 1925 | 2010 | yes |  |
-| 6x4 | anonymous hidden | full+4credential-disjoint | yes | 2946 | 25 | 2 | - | 1925 | 2010 | yes |  |
-| 6x4 | anonymous public owners | min | yes | 2241 | 13 | 1 | - | 1691 | 1782 | yes |  |
-| 6x4 | anonymous public owners | full | yes | 2903 | 24 | 3 | 6 | 1852 | 1909 | yes |  |
-| 6x4 | anonymous public owners | full+spl | yes | 3271 | 31 | 3 | - | 1984 | 1913 | yes |  |
-| 6x4 | anonymous public owners | full+data | yes | 3301 | 24 | 3 | - | 2250 | 2299 | yes |  |
-| 6x4 | anonymous public owners | full+reply | yes | 3196 | 24 | 3 | - | 2145 | 2200 | yes |  |
-| 6x4 | anonymous public owners | full+2tree | yes | 2909 | 24 | 3 | - | 1857 | 1913 | yes |  |
-| 6x4 | anonymous public owners | full+4credential-shared | yes | 2979 | 26 | 3 | - | 1861 | 1913 | yes |  |
-| 6x4 | anonymous public owners | full+4credential-disjoint | yes | 3075 | 29 | 3 | - | 1861 | 1913 | yes |  |
-| 6x4 | confidential entry | min | yes | 3281 | 13 | 1 | - | 2731 | 2824 | yes |  |
-| 6x4 | confidential entry | full | yes | 3871 | 24 | 3 | 3 | 2820 | 2869 | yes |  |
-| 6x4 | confidential entry | full+spl | yes | 4239 | 31 | 3 | - | 2952 | 2873 | no | 143 B |
-| 6x4 | confidential entry | full+data | yes | 4269 | 24 | 3 | - | 3218 | 3259 | no | 173 B |
-| 6x4 | confidential entry | full+reply | yes | 3871 | 24 | 3 | - | 2820 | 2869 | yes |  |
-| 6x4 | confidential entry | full+2tree | yes | 3877 | 24 | 3 | - | 2825 | 2873 | yes |  |
-| 6x4 | confidential entry | full+4credential-shared | yes | 3947 | 26 | 3 | - | 2829 | 2873 | yes |  |
-| 6x4 | confidential entry | full+4credential-disjoint | yes | 4043 | 29 | 3 | - | 2829 | 2873 | yes |  |
-| 6x4 | anonymous entry | min | yes | 3544 | 13 | 1 | - | 2995 | 3087 | yes |  |
-| 6x4 | anonymous entry | full | yes | 4014 | 20 | 2 | 0 | 3156 | 3214 | yes |  |
-| 6x4 | anonymous entry | full+spl | yes | 4382 | 27 | 2 | - | 3288 | 3218 | no | 286 B |
-| 6x4 | anonymous entry | full+data | yes | 4412 | 20 | 2 | - | 3554 | 3604 | no | 316 B |
-| 6x4 | anonymous entry | full+reply | yes | 4307 | 20 | 2 | - | 3449 | 3505 | no | 211 B |
-| 6x4 | anonymous entry | full+2tree | yes | 4020 | 20 | 2 | - | 3161 | 3218 | yes |  |
-| 6x4 | anonymous entry | full+4credential-shared | yes | 4090 | 22 | 2 | - | 3165 | 3218 | yes |  |
-| 6x4 | anonymous entry | full+4credential-disjoint | yes | 4186 | 25 | 2 | - | 3165 | 3218 | no | 90 B |
+| 6x4 | confidential signer | min | yes | 2107 | 14 | 1 | - | 1526 | 1616 | yes |  |
+| 6x4 | confidential signer | full | yes | 2662 | 24 | 3 | 6 | 1613 | 1661 | yes |  |
+| 6x4 | confidential signer | full+spl | yes | 3030 | 31 | 3 | - | 1745 | 1665 | yes |  |
+| 6x4 | confidential signer | full+data | yes | 3060 | 24 | 3 | - | 2011 | 2051 | yes |  |
+| 6x4 | confidential signer | full+reply | yes | 2662 | 24 | 3 | - | 1613 | 1661 | yes |  |
+| 6x4 | confidential signer | full+2tree | yes | 2700 | 25 | 3 | - | 1618 | 1665 | yes |  |
+| 6x4 | confidential in-proof | min | yes | 2202 | 14 | 1 | - | 1622 | 1713 | yes |  |
+| 6x4 | confidential in-proof | full | yes | 2661 | 23 | 2 | 6 | 1709 | 1758 | yes |  |
+| 6x4 | confidential in-proof | full+spl | yes | 3029 | 30 | 2 | - | 1841 | 1762 | yes |  |
+| 6x4 | confidential in-proof | full+data | yes | 3059 | 23 | 2 | - | 2107 | 2148 | yes |  |
+| 6x4 | confidential in-proof | full+reply | yes | 2661 | 23 | 2 | - | 1709 | 1758 | yes |  |
+| 6x4 | confidential in-proof | full+2tree | yes | 2699 | 24 | 2 | - | 1714 | 1762 | yes |  |
+| 6x4 | anonymous hidden | min | yes | 2298 | 14 | 1 | - | 1718 | 1839 | yes |  |
+| 6x4 | anonymous hidden | full | yes | 2725 | 20 | 2 | 6 | 1869 | 1958 | yes |  |
+| 6x4 | anonymous hidden | full+spl | yes | 3093 | 27 | 2 | - | 2001 | 1962 | yes |  |
+| 6x4 | anonymous hidden | full+data | yes | 3123 | 20 | 2 | - | 2267 | 2348 | yes |  |
+| 6x4 | anonymous hidden | full+reply | yes | 3018 | 20 | 2 | - | 2162 | 2249 | yes |  |
+| 6x4 | anonymous hidden | full+2tree | yes | 2763 | 21 | 2 | - | 1874 | 1962 | yes |  |
+| 6x4 | anonymous public owners | min | yes | 2235 | 14 | 1 | - | 1654 | 1742 | yes |  |
+| 6x4 | anonymous public owners | full | yes | 2854 | 24 | 3 | 6 | 1805 | 1861 | yes |  |
+| 6x4 | anonymous public owners | full+spl | yes | 3222 | 31 | 3 | - | 1937 | 1865 | yes |  |
+| 6x4 | anonymous public owners | full+data | yes | 3252 | 24 | 3 | - | 2203 | 2251 | yes |  |
+| 6x4 | anonymous public owners | full+reply | yes | 3147 | 24 | 3 | - | 2098 | 2152 | yes |  |
+| 6x4 | anonymous public owners | full+2tree | yes | 2892 | 25 | 3 | - | 1810 | 1865 | yes |  |
+| 6x4 | confidential entry | min | yes | 3315 | 14 | 1 | - | 2734 | 2824 | yes |  |
+| 6x4 | confidential entry | full | yes | 3870 | 24 | 3 | 3 | 2821 | 2869 | yes |  |
+| 6x4 | confidential entry | full+spl | yes | 4238 | 31 | 3 | - | 2953 | 2873 | no | 142 B |
+| 6x4 | confidential entry | full+data | yes | 4268 | 24 | 3 | - | 3219 | 3259 | no | 172 B |
+| 6x4 | confidential entry | full+reply | yes | 3870 | 24 | 3 | - | 2821 | 2869 | yes |  |
+| 6x4 | confidential entry | full+2tree | yes | 3908 | 25 | 3 | - | 2826 | 2873 | yes |  |
+| 6x4 | anonymous entry | min | yes | 3538 | 14 | 1 | - | 2958 | 3047 | yes |  |
+| 6x4 | anonymous entry | full | yes | 3965 | 20 | 2 | 1 | 3109 | 3166 | yes |  |
+| 6x4 | anonymous entry | full+spl | yes | 4333 | 27 | 2 | - | 3241 | 3170 | no | 237 B |
+| 6x4 | anonymous entry | full+data | yes | 4363 | 20 | 2 | - | 3507 | 3556 | no | 267 B |
+| 6x4 | anonymous entry | full+reply | yes | 4258 | 20 | 2 | - | 3402 | 3457 | no | 162 B |
+| 6x4 | anonymous entry | full+2tree | yes | 4003 | 21 | 2 | - | 3114 | 3170 | yes |  |
 | 6x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 5x16 | confidential signer | min | yes | 4614 | 12 | 1 | - | 4097 | 4619 | no | 518 B |
-| 5x16 | confidential signer | full | yes | 5204 | 23 | 3 | none | 4186 | 4664 | no | 1108 B |
-| 5x16 | confidential signer | full+spl | yes | 5572 | 30 | 3 | - | 4318 | 4668 | no | 1476 B |
-| 5x16 | confidential signer | full+data | yes | 6790 | 23 | 3 | - | 5772 | 6218 | no | 2694 B |
-| 5x16 | confidential signer | full+reply | yes | 5204 | 23 | 3 | - | 4186 | 4664 | no | 1108 B |
-| 5x16 | confidential signer | full+2tree | yes | 5210 | 23 | 3 | - | 4191 | 4668 | no | 1114 B |
-| 5x16 | confidential signer | full+4credential-shared | yes | 5280 | 25 | 3 | - | 4195 | 4668 | no | 1184 B |
-| 5x16 | confidential signer | full+4credential-disjoint | yes | 5376 | 28 | 3 | - | 4195 | 4668 | no | 1280 B |
-| 5x16 | confidential in-proof | min | yes | 4709 | 12 | 1 | - | 4193 | 4716 | no | 613 B |
-| 5x16 | confidential in-proof | full | yes | 5203 | 22 | 2 | none | 4282 | 4761 | no | 1107 B |
-| 5x16 | confidential in-proof | full+spl | yes | 5571 | 29 | 2 | - | 4414 | 4765 | no | 1475 B |
-| 5x16 | confidential in-proof | full+data | yes | 6789 | 22 | 2 | - | 5868 | 6315 | no | 2693 B |
-| 5x16 | confidential in-proof | full+reply | yes | 5203 | 22 | 2 | - | 4282 | 4761 | no | 1107 B |
-| 5x16 | confidential in-proof | full+2tree | yes | 5209 | 22 | 2 | - | 4287 | 4765 | no | 1113 B |
-| 5x16 | confidential in-proof | full+4credential-shared | yes | 5279 | 24 | 2 | - | 4291 | 4765 | no | 1183 B |
-| 5x16 | confidential in-proof | full+4credential-disjoint | yes | 5375 | 27 | 2 | - | 4291 | 4765 | no | 1279 B |
-| 5x16 | anonymous hidden | min | yes | 5229 | 12 | 1 | - | 4713 | 5266 | no | 1133 B |
-| 5x16 | anonymous hidden | full | yes | 5699 | 19 | 2 | none | 4874 | 5393 | no | 1603 B |
-| 5x16 | anonymous hidden | full+spl | yes | 6067 | 26 | 2 | - | 5006 | 5397 | no | 1971 B |
-| 5x16 | anonymous hidden | full+data | yes | 7285 | 19 | 2 | - | 6460 | 6947 | no | 3189 B |
-| 5x16 | anonymous hidden | full+reply | yes | 7156 | 19 | 2 | - | 6331 | 6848 | no | 3060 B |
-| 5x16 | anonymous hidden | full+2tree | yes | 5705 | 19 | 2 | - | 4879 | 5397 | no | 1609 B |
-| 5x16 | anonymous hidden | full+4credential-shared | yes | 5775 | 21 | 2 | - | 4883 | 5397 | no | 1679 B |
-| 5x16 | anonymous hidden | full+4credential-disjoint | yes | 5871 | 24 | 2 | - | 4883 | 5397 | no | 1775 B |
-| 5x16 | anonymous public owners | min | yes | 5166 | 12 | 1 | - | 4649 | 5169 | no | 1070 B |
-| 5x16 | anonymous public owners | full | yes | 5828 | 23 | 3 | none | 4810 | 5296 | no | 1732 B |
-| 5x16 | anonymous public owners | full+spl | yes | 6196 | 30 | 3 | - | 4942 | 5300 | no | 2100 B |
-| 5x16 | anonymous public owners | full+data | yes | 7414 | 23 | 3 | - | 6396 | 6850 | no | 3318 B |
-| 5x16 | anonymous public owners | full+reply | yes | 7285 | 23 | 3 | - | 6267 | 6751 | no | 3189 B |
-| 5x16 | anonymous public owners | full+2tree | yes | 5834 | 23 | 3 | - | 4815 | 5300 | no | 1738 B |
-| 5x16 | anonymous public owners | full+4credential-shared | yes | 5904 | 25 | 3 | - | 4819 | 5300 | no | 1808 B |
-| 5x16 | anonymous public owners | full+4credential-disjoint | yes | 6000 | 28 | 3 | - | 4819 | 5300 | no | 1904 B |
+| 5x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 5x16 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 5x16 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 5x16 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 5x16 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 5x16 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 5x16 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 5x16 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 6x8 | confidential signer | min | yes | 2941 | 13 | 1 | - | 2391 | 2628 | yes |  |
-| 6x8 | confidential signer | full | yes | 3531 | 24 | 3 | 6 | 2480 | 2673 | yes |  |
-| 6x8 | confidential signer | full+spl | yes | 3899 | 31 | 3 | - | 2612 | 2677 | yes |  |
-| 6x8 | confidential signer | full+data | yes | 4325 | 24 | 3 | - | 3274 | 3451 | no | 229 B |
-| 6x8 | confidential signer | full+reply | yes | 3531 | 24 | 3 | - | 2480 | 2673 | yes |  |
-| 6x8 | confidential signer | full+2tree | yes | 3537 | 24 | 3 | - | 2485 | 2677 | yes |  |
-| 6x8 | confidential signer | full+4credential-shared | yes | 3607 | 26 | 3 | - | 2489 | 2677 | yes |  |
-| 6x8 | confidential signer | full+4credential-disjoint | yes | 3703 | 29 | 3 | - | 2489 | 2677 | yes |  |
-| 6x8 | confidential in-proof | min | yes | 3036 | 13 | 1 | - | 2487 | 2725 | yes |  |
-| 6x8 | confidential in-proof | full | yes | 3530 | 23 | 2 | 5 | 2576 | 2770 | yes |  |
-| 6x8 | confidential in-proof | full+spl | yes | 3898 | 30 | 2 | - | 2708 | 2774 | yes |  |
-| 6x8 | confidential in-proof | full+data | yes | 4324 | 23 | 2 | - | 3370 | 3548 | no | 228 B |
-| 6x8 | confidential in-proof | full+reply | yes | 3530 | 23 | 2 | - | 2576 | 2770 | yes |  |
-| 6x8 | confidential in-proof | full+2tree | yes | 3536 | 23 | 2 | - | 2581 | 2774 | yes |  |
-| 6x8 | confidential in-proof | full+4credential-shared | yes | 3606 | 25 | 2 | - | 2585 | 2774 | yes |  |
-| 6x8 | confidential in-proof | full+4credential-disjoint | yes | 3702 | 28 | 2 | - | 2585 | 2774 | yes |  |
-| 6x8 | anonymous hidden | min | yes | 3300 | 13 | 1 | - | 2751 | 3019 | yes |  |
-| 6x8 | anonymous hidden | full | yes | 3770 | 20 | 2 | 3 | 2912 | 3146 | yes |  |
-| 6x8 | anonymous hidden | full+spl | yes | 4138 | 27 | 2 | - | 3044 | 3150 | no | 42 B |
-| 6x8 | anonymous hidden | full+data | yes | 4564 | 20 | 2 | - | 3706 | 3924 | no | 468 B |
-| 6x8 | anonymous hidden | full+reply | yes | 4451 | 20 | 2 | - | 3593 | 3825 | no | 355 B |
-| 6x8 | anonymous hidden | full+2tree | yes | 3776 | 20 | 2 | - | 2917 | 3150 | yes |  |
-| 6x8 | anonymous hidden | full+4credential-shared | yes | 3846 | 22 | 2 | - | 2921 | 3150 | yes |  |
-| 6x8 | anonymous hidden | full+4credential-disjoint | yes | 3942 | 25 | 2 | - | 2921 | 3150 | yes |  |
-| 6x8 | anonymous public owners | min | yes | 3237 | 13 | 1 | - | 2687 | 2922 | yes |  |
-| 6x8 | anonymous public owners | full | yes | 3899 | 24 | 3 | 3 | 2848 | 3049 | yes |  |
-| 6x8 | anonymous public owners | full+spl | yes | 4267 | 31 | 3 | - | 2980 | 3053 | no | 171 B |
-| 6x8 | anonymous public owners | full+data | yes | 4693 | 24 | 3 | - | 3642 | 3827 | no | 597 B |
-| 6x8 | anonymous public owners | full+reply | yes | 4580 | 24 | 3 | - | 3529 | 3728 | no | 484 B |
-| 6x8 | anonymous public owners | full+2tree | yes | 3905 | 24 | 3 | - | 2853 | 3053 | yes |  |
-| 6x8 | anonymous public owners | full+4credential-shared | yes | 3975 | 26 | 3 | - | 2857 | 3053 | yes |  |
-| 6x8 | anonymous public owners | full+4credential-disjoint | yes | 4071 | 29 | 3 | - | 2857 | 3053 | yes |  |
-| 6x8 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 6x8 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
+| 6x8 | confidential signer | min | yes | 2975 | 14 | 1 | - | 2394 | 2628 | yes |  |
+| 6x8 | confidential signer | full | yes | 3530 | 24 | 3 | 6 | 2481 | 2673 | yes |  |
+| 6x8 | confidential signer | full+spl | yes | 3898 | 31 | 3 | - | 2613 | 2677 | yes |  |
+| 6x8 | confidential signer | full+data | yes | 4324 | 24 | 3 | - | 3275 | 3451 | no | 228 B |
+| 6x8 | confidential signer | full+reply | yes | 3530 | 24 | 3 | - | 2481 | 2673 | yes |  |
+| 6x8 | confidential signer | full+2tree | yes | 3568 | 25 | 3 | - | 2486 | 2677 | yes |  |
+| 6x8 | confidential in-proof | min | yes | 3070 | 14 | 1 | - | 2490 | 2725 | yes |  |
+| 6x8 | confidential in-proof | full | yes | 3529 | 23 | 2 | 5 | 2577 | 2770 | yes |  |
+| 6x8 | confidential in-proof | full+spl | yes | 3897 | 30 | 2 | - | 2709 | 2774 | yes |  |
+| 6x8 | confidential in-proof | full+data | yes | 4323 | 23 | 2 | - | 3371 | 3548 | no | 227 B |
+| 6x8 | confidential in-proof | full+reply | yes | 3529 | 23 | 2 | - | 2577 | 2770 | yes |  |
+| 6x8 | confidential in-proof | full+2tree | yes | 3567 | 24 | 2 | - | 2582 | 2774 | yes |  |
+| 6x8 | anonymous hidden | min | yes | 3294 | 14 | 1 | - | 2714 | 2979 | yes |  |
+| 6x8 | anonymous hidden | full | yes | 3721 | 20 | 2 | 3 | 2865 | 3098 | yes |  |
+| 6x8 | anonymous hidden | full+spl | yes | 4089 | 27 | 2 | - | 2997 | 3102 | yes |  |
+| 6x8 | anonymous hidden | full+data | yes | 4515 | 20 | 2 | - | 3659 | 3876 | no | 419 B |
+| 6x8 | anonymous hidden | full+reply | yes | 4402 | 20 | 2 | - | 3546 | 3777 | no | 306 B |
+| 6x8 | anonymous hidden | full+2tree | yes | 3759 | 21 | 2 | - | 2870 | 3102 | yes |  |
+| 6x8 | anonymous public owners | min | yes | 3231 | 14 | 1 | - | 2650 | 2882 | yes |  |
+| 6x8 | anonymous public owners | full | yes | 3850 | 24 | 3 | 3 | 2801 | 3001 | yes |  |
+| 6x8 | anonymous public owners | full+spl | yes | 4218 | 31 | 3 | - | 2933 | 3005 | no | 122 B |
+| 6x8 | anonymous public owners | full+data | yes | 4644 | 24 | 3 | - | 3595 | 3779 | no | 548 B |
+| 6x8 | anonymous public owners | full+reply | yes | 4531 | 24 | 3 | - | 3482 | 3680 | no | 435 B |
+| 6x8 | anonymous public owners | full+2tree | yes | 3888 | 25 | 3 | - | 2806 | 3005 | yes |  |
+| 6x8 | confidential entry | min | yes | 4183 | 14 | 1 | - | 3602 | 3836 | no | 87 B |
+| 6x8 | confidential entry | full | yes | 4738 | 24 | 3 | none | 3689 | 3881 | no | 642 B |
+| 6x8 | confidential entry | full+spl | yes | 5106 | 31 | 3 | - | 3821 | 3885 | no | 1010 B |
+| 6x8 | confidential entry | full+data | yes | 5532 | 24 | 3 | - | 4483 | 4659 | no | 1436 B |
+| 6x8 | confidential entry | full+reply | yes | 4738 | 24 | 3 | - | 3689 | 3881 | no | 642 B |
+| 6x8 | confidential entry | full+2tree | yes | 4776 | 25 | 3 | - | 3694 | 3885 | no | 680 B |
+| 6x8 | anonymous entry | min | yes | 4534 | 14 | 1 | - | 3954 | 4187 | no | 438 B |
+| 6x8 | anonymous entry | full | yes | 4961 | 20 | 2 | none | 4105 | 4306 | no | 865 B |
+| 6x8 | anonymous entry | full+spl | yes | 5329 | 27 | 2 | - | 4237 | 4310 | no | 1233 B |
+| 6x8 | anonymous entry | full+data | yes | 5755 | 20 | 2 | - | 4899 | 5084 | no | 1659 B |
+| 6x8 | anonymous entry | full+reply | yes | 5642 | 20 | 2 | - | 4786 | 4985 | no | 1546 B |
+| 6x8 | anonymous entry | full+2tree | yes | 4999 | 21 | 2 | - | 4110 | 4310 | no | 903 B |
 | 6x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 6x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 8x2 | confidential signer | min | yes | 1769 | 15 | 1 | - | 1153 | 1176 | yes |  |
-| 8x2 | confidential signer | full | yes | 2359 | 26 | 3 | 8 | 1242 | 1221 | yes |  |
-| 8x2 | confidential signer | full+spl | yes | 2727 | 33 | 3 | - | 1374 | 1225 | yes |  |
-| 8x2 | confidential signer | full+data | yes | 2559 | 26 | 3 | - | 1442 | 1417 | yes |  |
-| 8x2 | confidential signer | full+reply | yes | 2359 | 26 | 3 | - | 1242 | 1221 | yes |  |
-| 8x2 | confidential signer | full+2tree | yes | 2365 | 26 | 3 | - | 1247 | 1225 | yes |  |
-| 8x2 | confidential signer | full+4credential-shared | yes | 2435 | 28 | 3 | - | 1251 | 1225 | yes |  |
-| 8x2 | confidential signer | full+4credential-disjoint | yes | 2531 | 31 | 3 | - | 1251 | 1225 | yes |  |
-| 8x2 | confidential in-proof | min | yes | 1864 | 15 | 1 | - | 1249 | 1273 | yes |  |
-| 8x2 | confidential in-proof | full | yes | 2358 | 25 | 2 | 8 | 1338 | 1318 | yes |  |
-| 8x2 | confidential in-proof | full+spl | yes | 2726 | 32 | 2 | - | 1470 | 1322 | yes |  |
-| 8x2 | confidential in-proof | full+data | yes | 2558 | 25 | 2 | - | 1538 | 1514 | yes |  |
-| 8x2 | confidential in-proof | full+reply | yes | 2358 | 25 | 2 | - | 1338 | 1318 | yes |  |
-| 8x2 | confidential in-proof | full+2tree | yes | 2364 | 25 | 2 | - | 1343 | 1322 | yes |  |
-| 8x2 | confidential in-proof | full+4credential-shared | yes | 2434 | 27 | 2 | - | 1347 | 1322 | yes |  |
-| 8x2 | confidential in-proof | full+4credential-disjoint | yes | 2530 | 30 | 2 | - | 1347 | 1322 | yes |  |
-| 8x2 | anonymous hidden | min | yes | 1936 | 15 | 1 | - | 1321 | 1375 | yes |  |
-| 8x2 | anonymous hidden | full | yes | 2406 | 22 | 2 | 8 | 1482 | 1502 | yes |  |
-| 8x2 | anonymous hidden | full+spl | yes | 2774 | 29 | 2 | - | 1614 | 1506 | yes |  |
-| 8x2 | anonymous hidden | full+data | yes | 2606 | 22 | 2 | - | 1682 | 1698 | yes |  |
-| 8x2 | anonymous hidden | full+reply | yes | 2505 | 22 | 2 | - | 1581 | 1599 | yes |  |
-| 8x2 | anonymous hidden | full+2tree | yes | 2412 | 22 | 2 | - | 1487 | 1506 | yes |  |
-| 8x2 | anonymous hidden | full+4credential-shared | yes | 2482 | 24 | 2 | - | 1491 | 1506 | yes |  |
-| 8x2 | anonymous hidden | full+4credential-disjoint | yes | 2578 | 27 | 2 | - | 1491 | 1506 | yes |  |
-| 8x2 | anonymous public owners | min | yes | 1873 | 15 | 1 | - | 1257 | 1278 | yes |  |
-| 8x2 | anonymous public owners | full | yes | 2535 | 26 | 3 | 8 | 1418 | 1405 | yes |  |
-| 8x2 | anonymous public owners | full+spl | yes | 2903 | 33 | 3 | - | 1550 | 1409 | yes |  |
-| 8x2 | anonymous public owners | full+data | yes | 2735 | 26 | 3 | - | 1618 | 1601 | yes |  |
-| 8x2 | anonymous public owners | full+reply | yes | 2634 | 26 | 3 | - | 1517 | 1502 | yes |  |
-| 8x2 | anonymous public owners | full+2tree | yes | 2541 | 26 | 3 | - | 1423 | 1409 | yes |  |
-| 8x2 | anonymous public owners | full+4credential-shared | yes | 2611 | 28 | 3 | - | 1427 | 1409 | yes |  |
-| 8x2 | anonymous public owners | full+4credential-disjoint | yes | 2707 | 31 | 3 | - | 1427 | 1409 | yes |  |
-| 8x2 | confidential entry | min | yes | 3377 | 15 | 1 | - | 2761 | 2784 | yes |  |
-| 8x2 | confidential entry | full | yes | 3967 | 26 | 3 | 2 | 2850 | 2829 | yes |  |
-| 8x2 | confidential entry | full+spl | yes | 4335 | 33 | 3 | - | 2982 | 2833 | no | 239 B |
-| 8x2 | confidential entry | full+data | yes | 4167 | 26 | 3 | - | 3050 | 3025 | no | 71 B |
-| 8x2 | confidential entry | full+reply | yes | 3967 | 26 | 3 | - | 2850 | 2829 | yes |  |
-| 8x2 | confidential entry | full+2tree | yes | 3973 | 26 | 3 | - | 2855 | 2833 | yes |  |
-| 8x2 | confidential entry | full+4credential-shared | yes | 4043 | 28 | 3 | - | 2859 | 2833 | yes |  |
-| 8x2 | confidential entry | full+4credential-disjoint | yes | 4139 | 31 | 3 | - | 2859 | 2833 | no | 43 B |
-| 8x2 | anonymous entry | min | yes | 3576 | 15 | 1 | - | 2961 | 2983 | yes |  |
-| 8x2 | anonymous entry | full | yes | 4046 | 22 | 2 | 0 | 3122 | 3110 | yes |  |
-| 8x2 | anonymous entry | full+spl | yes | 4414 | 29 | 2 | - | 3254 | 3114 | no | 318 B |
-| 8x2 | anonymous entry | full+data | yes | 4246 | 22 | 2 | - | 3322 | 3306 | no | 150 B |
-| 8x2 | anonymous entry | full+reply | yes | 4145 | 22 | 2 | - | 3221 | 3207 | no | 49 B |
-| 8x2 | anonymous entry | full+2tree | yes | 4052 | 22 | 2 | - | 3127 | 3114 | yes |  |
-| 8x2 | anonymous entry | full+4credential-shared | yes | 4122 | 24 | 2 | - | 3131 | 3114 | no | 26 B |
-| 8x2 | anonymous entry | full+4credential-disjoint | yes | 4218 | 27 | 2 | - | 3131 | 3114 | no | 122 B |
+| 8x2 | confidential signer | min | yes | 1803 | 16 | 1 | - | 1156 | 1176 | yes |  |
+| 8x2 | confidential signer | full | yes | 2358 | 26 | 3 | 8 | 1243 | 1221 | yes |  |
+| 8x2 | confidential signer | full+spl | yes | 2726 | 33 | 3 | - | 1375 | 1225 | yes |  |
+| 8x2 | confidential signer | full+data | yes | 2558 | 26 | 3 | - | 1443 | 1417 | yes |  |
+| 8x2 | confidential signer | full+reply | yes | 2358 | 26 | 3 | - | 1243 | 1221 | yes |  |
+| 8x2 | confidential signer | full+2tree | yes | 2396 | 27 | 3 | - | 1248 | 1225 | yes |  |
+| 8x2 | confidential in-proof | min | yes | 1898 | 16 | 1 | - | 1252 | 1273 | yes |  |
+| 8x2 | confidential in-proof | full | yes | 2357 | 25 | 2 | 8 | 1339 | 1318 | yes |  |
+| 8x2 | confidential in-proof | full+spl | yes | 2725 | 32 | 2 | - | 1471 | 1322 | yes |  |
+| 8x2 | confidential in-proof | full+data | yes | 2557 | 25 | 2 | - | 1539 | 1514 | yes |  |
+| 8x2 | confidential in-proof | full+reply | yes | 2357 | 25 | 2 | - | 1339 | 1318 | yes |  |
+| 8x2 | confidential in-proof | full+2tree | yes | 2395 | 26 | 2 | - | 1344 | 1322 | yes |  |
+| 8x2 | anonymous hidden | min | yes | 1930 | 16 | 1 | - | 1284 | 1335 | yes |  |
+| 8x2 | anonymous hidden | full | yes | 2357 | 22 | 2 | 8 | 1435 | 1454 | yes |  |
+| 8x2 | anonymous hidden | full+spl | yes | 2725 | 29 | 2 | - | 1567 | 1458 | yes |  |
+| 8x2 | anonymous hidden | full+data | yes | 2557 | 22 | 2 | - | 1635 | 1650 | yes |  |
+| 8x2 | anonymous hidden | full+reply | yes | 2456 | 22 | 2 | - | 1534 | 1551 | yes |  |
+| 8x2 | anonymous hidden | full+2tree | yes | 2395 | 23 | 2 | - | 1440 | 1458 | yes |  |
+| 8x2 | anonymous public owners | min | yes | 1867 | 16 | 1 | - | 1220 | 1238 | yes |  |
+| 8x2 | anonymous public owners | full | yes | 2486 | 26 | 3 | 8 | 1371 | 1357 | yes |  |
+| 8x2 | anonymous public owners | full+spl | yes | 2854 | 33 | 3 | - | 1503 | 1361 | yes |  |
+| 8x2 | anonymous public owners | full+data | yes | 2686 | 26 | 3 | - | 1571 | 1553 | yes |  |
+| 8x2 | anonymous public owners | full+reply | yes | 2585 | 26 | 3 | - | 1470 | 1454 | yes |  |
+| 8x2 | anonymous public owners | full+2tree | yes | 2524 | 27 | 3 | - | 1376 | 1361 | yes |  |
+| 8x2 | confidential entry | min | yes | 3411 | 16 | 1 | - | 2764 | 2784 | yes |  |
+| 8x2 | confidential entry | full | yes | 3966 | 26 | 3 | 2 | 2851 | 2829 | yes |  |
+| 8x2 | confidential entry | full+spl | yes | 4334 | 33 | 3 | - | 2983 | 2833 | no | 238 B |
+| 8x2 | confidential entry | full+data | yes | 4166 | 26 | 3 | - | 3051 | 3025 | no | 70 B |
+| 8x2 | confidential entry | full+reply | yes | 3966 | 26 | 3 | - | 2851 | 2829 | yes |  |
+| 8x2 | confidential entry | full+2tree | yes | 4004 | 27 | 3 | - | 2856 | 2833 | yes |  |
+| 8x2 | anonymous entry | min | yes | 3570 | 16 | 1 | - | 2924 | 2943 | yes |  |
+| 8x2 | anonymous entry | full | yes | 3997 | 22 | 2 | 1 | 3075 | 3062 | yes |  |
+| 8x2 | anonymous entry | full+spl | yes | 4365 | 29 | 2 | - | 3207 | 3066 | no | 269 B |
+| 8x2 | anonymous entry | full+data | yes | 4197 | 22 | 2 | - | 3275 | 3258 | no | 101 B |
+| 8x2 | anonymous entry | full+reply | yes | 4096 | 22 | 2 | - | 3174 | 3159 | yes |  |
+| 8x2 | anonymous entry | full+2tree | yes | 4035 | 23 | 2 | - | 3080 | 3066 | yes |  |
 | 8x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 8x4 | confidential signer | min | yes | 2203 | 15 | 1 | - | 1587 | 1682 | yes |  |
-| 8x4 | confidential signer | full | yes | 2793 | 26 | 3 | 8 | 1676 | 1727 | yes |  |
-| 8x4 | confidential signer | full+spl | yes | 3161 | 33 | 3 | - | 1808 | 1731 | yes |  |
-| 8x4 | confidential signer | full+data | yes | 3191 | 26 | 3 | - | 2074 | 2117 | yes |  |
-| 8x4 | confidential signer | full+reply | yes | 2793 | 26 | 3 | - | 1676 | 1727 | yes |  |
-| 8x4 | confidential signer | full+2tree | yes | 2799 | 26 | 3 | - | 1681 | 1731 | yes |  |
-| 8x4 | confidential signer | full+4credential-shared | yes | 2869 | 28 | 3 | - | 1685 | 1731 | yes |  |
-| 8x4 | confidential signer | full+4credential-disjoint | yes | 2965 | 31 | 3 | - | 1685 | 1731 | yes |  |
-| 8x4 | confidential in-proof | min | yes | 2298 | 15 | 1 | - | 1683 | 1779 | yes |  |
-| 8x4 | confidential in-proof | full | yes | 2792 | 25 | 2 | 8 | 1772 | 1824 | yes |  |
-| 8x4 | confidential in-proof | full+spl | yes | 3160 | 32 | 2 | - | 1904 | 1828 | yes |  |
-| 8x4 | confidential in-proof | full+data | yes | 3190 | 25 | 2 | - | 2170 | 2214 | yes |  |
-| 8x4 | confidential in-proof | full+reply | yes | 2792 | 25 | 2 | - | 1772 | 1824 | yes |  |
-| 8x4 | confidential in-proof | full+2tree | yes | 2798 | 25 | 2 | - | 1777 | 1828 | yes |  |
-| 8x4 | confidential in-proof | full+4credential-shared | yes | 2868 | 27 | 2 | - | 1781 | 1828 | yes |  |
-| 8x4 | confidential in-proof | full+4credential-disjoint | yes | 2964 | 30 | 2 | - | 1781 | 1828 | yes |  |
-| 8x4 | anonymous hidden | min | yes | 2434 | 15 | 1 | - | 1819 | 1945 | yes |  |
-| 8x4 | anonymous hidden | full | yes | 2904 | 22 | 2 | 8 | 1980 | 2072 | yes |  |
-| 8x4 | anonymous hidden | full+spl | yes | 3272 | 29 | 2 | - | 2112 | 2076 | yes |  |
-| 8x4 | anonymous hidden | full+data | yes | 3302 | 22 | 2 | - | 2378 | 2462 | yes |  |
-| 8x4 | anonymous hidden | full+reply | yes | 3197 | 22 | 2 | - | 2273 | 2363 | yes |  |
-| 8x4 | anonymous hidden | full+2tree | yes | 2910 | 22 | 2 | - | 1985 | 2076 | yes |  |
-| 8x4 | anonymous hidden | full+4credential-shared | yes | 2980 | 24 | 2 | - | 1989 | 2076 | yes |  |
-| 8x4 | anonymous hidden | full+4credential-disjoint | yes | 3076 | 27 | 2 | - | 1989 | 2076 | yes |  |
-| 8x4 | anonymous public owners | min | yes | 2371 | 15 | 1 | - | 1755 | 1848 | yes |  |
-| 8x4 | anonymous public owners | full | yes | 3033 | 26 | 3 | 8 | 1916 | 1975 | yes |  |
-| 8x4 | anonymous public owners | full+spl | yes | 3401 | 33 | 3 | - | 2048 | 1979 | yes |  |
-| 8x4 | anonymous public owners | full+data | yes | 3431 | 26 | 3 | - | 2314 | 2365 | yes |  |
-| 8x4 | anonymous public owners | full+reply | yes | 3326 | 26 | 3 | - | 2209 | 2266 | yes |  |
-| 8x4 | anonymous public owners | full+2tree | yes | 3039 | 26 | 3 | - | 1921 | 1979 | yes |  |
-| 8x4 | anonymous public owners | full+4credential-shared | yes | 3109 | 28 | 3 | - | 1925 | 1979 | yes |  |
-| 8x4 | anonymous public owners | full+4credential-disjoint | yes | 3205 | 31 | 3 | - | 1925 | 1979 | yes |  |
-| 8x4 | confidential entry | min | yes | 3811 | 15 | 1 | - | 3195 | 3290 | yes |  |
-| 8x4 | confidential entry | full | yes | 4401 | 26 | 3 | none | 3284 | 3335 | no | 305 B |
-| 8x4 | confidential entry | full+spl | yes | 4769 | 33 | 3 | - | 3416 | 3339 | no | 673 B |
-| 8x4 | confidential entry | full+data | yes | 4799 | 26 | 3 | - | 3682 | 3725 | no | 703 B |
-| 8x4 | confidential entry | full+reply | yes | 4401 | 26 | 3 | - | 3284 | 3335 | no | 305 B |
-| 8x4 | confidential entry | full+2tree | yes | 4407 | 26 | 3 | - | 3289 | 3339 | no | 311 B |
-| 8x4 | confidential entry | full+4credential-shared | yes | 4477 | 28 | 3 | - | 3293 | 3339 | no | 381 B |
-| 8x4 | confidential entry | full+4credential-disjoint | yes | 4573 | 31 | 3 | - | 3293 | 3339 | no | 477 B |
-| 8x4 | anonymous entry | min | yes | 4074 | 15 | 1 | - | 3459 | 3553 | yes |  |
-| 8x4 | anonymous entry | full | yes | 4544 | 22 | 2 | none | 3620 | 3680 | no | 448 B |
-| 8x4 | anonymous entry | full+spl | yes | 4912 | 29 | 2 | - | 3752 | 3684 | no | 816 B |
-| 8x4 | anonymous entry | full+data | yes | 4942 | 22 | 2 | - | 4018 | 4070 | no | 846 B |
-| 8x4 | anonymous entry | full+reply | yes | 4837 | 22 | 2 | - | 3913 | 3971 | no | 741 B |
-| 8x4 | anonymous entry | full+2tree | yes | 4550 | 22 | 2 | - | 3625 | 3684 | no | 454 B |
-| 8x4 | anonymous entry | full+4credential-shared | yes | 4620 | 24 | 2 | - | 3629 | 3684 | no | 524 B |
-| 8x4 | anonymous entry | full+4credential-disjoint | yes | 4716 | 27 | 2 | - | 3629 | 3684 | no | 620 B |
+| 8x4 | confidential signer | min | yes | 2237 | 16 | 1 | - | 1590 | 1682 | yes |  |
+| 8x4 | confidential signer | full | yes | 2792 | 26 | 3 | 8 | 1677 | 1727 | yes |  |
+| 8x4 | confidential signer | full+spl | yes | 3160 | 33 | 3 | - | 1809 | 1731 | yes |  |
+| 8x4 | confidential signer | full+data | yes | 3190 | 26 | 3 | - | 2075 | 2117 | yes |  |
+| 8x4 | confidential signer | full+reply | yes | 2792 | 26 | 3 | - | 1677 | 1727 | yes |  |
+| 8x4 | confidential signer | full+2tree | yes | 2830 | 27 | 3 | - | 1682 | 1731 | yes |  |
+| 8x4 | confidential in-proof | min | yes | 2332 | 16 | 1 | - | 1686 | 1779 | yes |  |
+| 8x4 | confidential in-proof | full | yes | 2791 | 25 | 2 | 8 | 1773 | 1824 | yes |  |
+| 8x4 | confidential in-proof | full+spl | yes | 3159 | 32 | 2 | - | 1905 | 1828 | yes |  |
+| 8x4 | confidential in-proof | full+data | yes | 3189 | 25 | 2 | - | 2171 | 2214 | yes |  |
+| 8x4 | confidential in-proof | full+reply | yes | 2791 | 25 | 2 | - | 1773 | 1824 | yes |  |
+| 8x4 | confidential in-proof | full+2tree | yes | 2829 | 26 | 2 | - | 1778 | 1828 | yes |  |
+| 8x4 | anonymous hidden | min | yes | 2428 | 16 | 1 | - | 1782 | 1905 | yes |  |
+| 8x4 | anonymous hidden | full | yes | 2855 | 22 | 2 | 8 | 1933 | 2024 | yes |  |
+| 8x4 | anonymous hidden | full+spl | yes | 3223 | 29 | 2 | - | 2065 | 2028 | yes |  |
+| 8x4 | anonymous hidden | full+data | yes | 3253 | 22 | 2 | - | 2331 | 2414 | yes |  |
+| 8x4 | anonymous hidden | full+reply | yes | 3148 | 22 | 2 | - | 2226 | 2315 | yes |  |
+| 8x4 | anonymous hidden | full+2tree | yes | 2893 | 23 | 2 | - | 1938 | 2028 | yes |  |
+| 8x4 | anonymous public owners | min | yes | 2365 | 16 | 1 | - | 1718 | 1808 | yes |  |
+| 8x4 | anonymous public owners | full | yes | 2984 | 26 | 3 | 8 | 1869 | 1927 | yes |  |
+| 8x4 | anonymous public owners | full+spl | yes | 3352 | 33 | 3 | - | 2001 | 1931 | yes |  |
+| 8x4 | anonymous public owners | full+data | yes | 3382 | 26 | 3 | - | 2267 | 2317 | yes |  |
+| 8x4 | anonymous public owners | full+reply | yes | 3277 | 26 | 3 | - | 2162 | 2218 | yes |  |
+| 8x4 | anonymous public owners | full+2tree | yes | 3022 | 27 | 3 | - | 1874 | 1931 | yes |  |
+| 8x4 | confidential entry | min | yes | 3845 | 16 | 1 | - | 3198 | 3290 | yes |  |
+| 8x4 | confidential entry | full | yes | 4400 | 26 | 3 | none | 3285 | 3335 | no | 304 B |
+| 8x4 | confidential entry | full+spl | yes | 4768 | 33 | 3 | - | 3417 | 3339 | no | 672 B |
+| 8x4 | confidential entry | full+data | yes | 4798 | 26 | 3 | - | 3683 | 3725 | no | 702 B |
+| 8x4 | confidential entry | full+reply | yes | 4400 | 26 | 3 | - | 3285 | 3335 | no | 304 B |
+| 8x4 | confidential entry | full+2tree | yes | 4438 | 27 | 3 | - | 3290 | 3339 | no | 342 B |
+| 8x4 | anonymous entry | min | yes | 4068 | 16 | 1 | - | 3422 | 3513 | yes |  |
+| 8x4 | anonymous entry | full | yes | 4495 | 22 | 2 | none | 3573 | 3632 | no | 399 B |
+| 8x4 | anonymous entry | full+spl | yes | 4863 | 29 | 2 | - | 3705 | 3636 | no | 767 B |
+| 8x4 | anonymous entry | full+data | yes | 4893 | 22 | 2 | - | 3971 | 4022 | no | 797 B |
+| 8x4 | anonymous entry | full+reply | yes | 4788 | 22 | 2 | - | 3866 | 3923 | no | 692 B |
+| 8x4 | anonymous entry | full+2tree | yes | 4533 | 23 | 2 | - | 3578 | 3636 | no | 437 B |
 | 8x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 8x8 | confidential signer | min | yes | 3071 | 15 | 1 | - | 2455 | 2694 | yes |  |
-| 8x8 | confidential signer | full | yes | 3661 | 26 | 3 | 5 | 2544 | 2739 | yes |  |
-| 8x8 | confidential signer | full+spl | yes | 4029 | 33 | 3 | - | 2676 | 2743 | yes |  |
-| 8x8 | confidential signer | full+data | yes | 4455 | 26 | 3 | - | 3338 | 3517 | no | 359 B |
-| 8x8 | confidential signer | full+reply | yes | 3661 | 26 | 3 | - | 2544 | 2739 | yes |  |
-| 8x8 | confidential signer | full+2tree | yes | 3667 | 26 | 3 | - | 2549 | 2743 | yes |  |
-| 8x8 | confidential signer | full+4credential-shared | yes | 3737 | 28 | 3 | - | 2553 | 2743 | yes |  |
-| 8x8 | confidential signer | full+4credential-disjoint | yes | 3833 | 31 | 3 | - | 2553 | 2743 | yes |  |
-| 8x8 | confidential in-proof | min | yes | 3166 | 15 | 1 | - | 2551 | 2791 | yes |  |
-| 8x8 | confidential in-proof | full | yes | 3660 | 25 | 2 | 4 | 2640 | 2836 | yes |  |
-| 8x8 | confidential in-proof | full+spl | yes | 4028 | 32 | 2 | - | 2772 | 2840 | yes |  |
-| 8x8 | confidential in-proof | full+data | yes | 4454 | 25 | 2 | - | 3434 | 3614 | no | 358 B |
-| 8x8 | confidential in-proof | full+reply | yes | 3660 | 25 | 2 | - | 2640 | 2836 | yes |  |
-| 8x8 | confidential in-proof | full+2tree | yes | 3666 | 25 | 2 | - | 2645 | 2840 | yes |  |
-| 8x8 | confidential in-proof | full+4credential-shared | yes | 3736 | 27 | 2 | - | 2649 | 2840 | yes |  |
-| 8x8 | confidential in-proof | full+4credential-disjoint | yes | 3832 | 30 | 2 | - | 2649 | 2840 | yes |  |
-| 8x8 | anonymous hidden | min | yes | 3430 | 15 | 1 | - | 2815 | 3085 | yes |  |
-| 8x8 | anonymous hidden | full | yes | 3900 | 22 | 2 | 2 | 2976 | 3212 | yes |  |
-| 8x8 | anonymous hidden | full+spl | yes | 4268 | 29 | 2 | - | 3108 | 3216 | no | 172 B |
-| 8x8 | anonymous hidden | full+data | yes | 4694 | 22 | 2 | - | 3770 | 3990 | no | 598 B |
-| 8x8 | anonymous hidden | full+reply | yes | 4581 | 22 | 2 | - | 3657 | 3891 | no | 485 B |
-| 8x8 | anonymous hidden | full+2tree | yes | 3906 | 22 | 2 | - | 2981 | 3216 | yes |  |
-| 8x8 | anonymous hidden | full+4credential-shared | yes | 3976 | 24 | 2 | - | 2985 | 3216 | yes |  |
-| 8x8 | anonymous hidden | full+4credential-disjoint | yes | 4072 | 27 | 2 | - | 2985 | 3216 | yes |  |
-| 8x8 | anonymous public owners | min | yes | 3367 | 15 | 1 | - | 2751 | 2988 | yes |  |
-| 8x8 | anonymous public owners | full | yes | 4029 | 26 | 3 | 1 | 2912 | 3115 | yes |  |
-| 8x8 | anonymous public owners | full+spl | yes | 4397 | 33 | 3 | - | 3044 | 3119 | no | 301 B |
-| 8x8 | anonymous public owners | full+data | yes | 4823 | 26 | 3 | - | 3706 | 3893 | no | 727 B |
-| 8x8 | anonymous public owners | full+reply | yes | 4710 | 26 | 3 | - | 3593 | 3794 | no | 614 B |
-| 8x8 | anonymous public owners | full+2tree | yes | 4035 | 26 | 3 | - | 2917 | 3119 | yes |  |
-| 8x8 | anonymous public owners | full+4credential-shared | yes | 4105 | 28 | 3 | - | 2921 | 3119 | no | 9 B |
-| 8x8 | anonymous public owners | full+4credential-disjoint | yes | 4201 | 31 | 3 | - | 2921 | 3119 | no | 105 B |
-| 8x8 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 8x8 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
+| 8x8 | confidential signer | min | yes | 3105 | 16 | 1 | - | 2458 | 2694 | yes |  |
+| 8x8 | confidential signer | full | yes | 3660 | 26 | 3 | 5 | 2545 | 2739 | yes |  |
+| 8x8 | confidential signer | full+spl | yes | 4028 | 33 | 3 | - | 2677 | 2743 | yes |  |
+| 8x8 | confidential signer | full+data | yes | 4454 | 26 | 3 | - | 3339 | 3517 | no | 358 B |
+| 8x8 | confidential signer | full+reply | yes | 3660 | 26 | 3 | - | 2545 | 2739 | yes |  |
+| 8x8 | confidential signer | full+2tree | yes | 3698 | 27 | 3 | - | 2550 | 2743 | yes |  |
+| 8x8 | confidential in-proof | min | yes | 3200 | 16 | 1 | - | 2554 | 2791 | yes |  |
+| 8x8 | confidential in-proof | full | yes | 3659 | 25 | 2 | 4 | 2641 | 2836 | yes |  |
+| 8x8 | confidential in-proof | full+spl | yes | 4027 | 32 | 2 | - | 2773 | 2840 | yes |  |
+| 8x8 | confidential in-proof | full+data | yes | 4453 | 25 | 2 | - | 3435 | 3614 | no | 357 B |
+| 8x8 | confidential in-proof | full+reply | yes | 3659 | 25 | 2 | - | 2641 | 2836 | yes |  |
+| 8x8 | confidential in-proof | full+2tree | yes | 3697 | 26 | 2 | - | 2646 | 2840 | yes |  |
+| 8x8 | anonymous hidden | min | yes | 3424 | 16 | 1 | - | 2778 | 3045 | yes |  |
+| 8x8 | anonymous hidden | full | yes | 3851 | 22 | 2 | 2 | 2929 | 3164 | yes |  |
+| 8x8 | anonymous hidden | full+spl | yes | 4219 | 29 | 2 | - | 3061 | 3168 | no | 123 B |
+| 8x8 | anonymous hidden | full+data | yes | 4645 | 22 | 2 | - | 3723 | 3942 | no | 549 B |
+| 8x8 | anonymous hidden | full+reply | yes | 4532 | 22 | 2 | - | 3610 | 3843 | no | 436 B |
+| 8x8 | anonymous hidden | full+2tree | yes | 3889 | 23 | 2 | - | 2934 | 3168 | yes |  |
+| 8x8 | anonymous public owners | min | yes | 3361 | 16 | 1 | - | 2714 | 2948 | yes |  |
+| 8x8 | anonymous public owners | full | yes | 3980 | 26 | 3 | 2 | 2865 | 3067 | yes |  |
+| 8x8 | anonymous public owners | full+spl | yes | 4348 | 33 | 3 | - | 2997 | 3071 | no | 252 B |
+| 8x8 | anonymous public owners | full+data | yes | 4774 | 26 | 3 | - | 3659 | 3845 | no | 678 B |
+| 8x8 | anonymous public owners | full+reply | yes | 4661 | 26 | 3 | - | 3546 | 3746 | no | 565 B |
+| 8x8 | anonymous public owners | full+2tree | yes | 4018 | 27 | 3 | - | 2870 | 3071 | yes |  |
+| 8x8 | confidential entry | min | yes | 4713 | 16 | 1 | - | 4066 | 4302 | no | 617 B |
+| 8x8 | confidential entry | full | yes | 5268 | 26 | 3 | none | 4153 | 4347 | no | 1172 B |
+| 8x8 | confidential entry | full+spl | yes | 5636 | 33 | 3 | - | 4285 | 4351 | no | 1540 B |
+| 8x8 | confidential entry | full+data | yes | 6062 | 26 | 3 | - | 4947 | 5125 | no | 1966 B |
+| 8x8 | confidential entry | full+reply | yes | 5268 | 26 | 3 | - | 4153 | 4347 | no | 1172 B |
+| 8x8 | confidential entry | full+2tree | yes | 5306 | 27 | 3 | - | 4158 | 4351 | no | 1210 B |
+| 8x8 | anonymous entry | min | yes | 5064 | 16 | 1 | - | 4418 | 4653 | no | 968 B |
+| 8x8 | anonymous entry | full | yes | 5491 | 22 | 2 | none | 4569 | 4772 | no | 1395 B |
+| 8x8 | anonymous entry | full+spl | yes | 5859 | 29 | 2 | - | 4701 | 4776 | no | 1763 B |
+| 8x8 | anonymous entry | full+data | yes | 6285 | 22 | 2 | - | 5363 | 5550 | no | 2189 B |
+| 8x8 | anonymous entry | full+reply | yes | 6172 | 22 | 2 | - | 5250 | 5451 | no | 2076 B |
+| 8x8 | anonymous entry | full+2tree | yes | 5529 | 23 | 2 | - | 4574 | 4776 | no | 1433 B |
 | 8x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 8x16 | confidential signer | min | yes | 4809 | 15 | 1 | - | 4193 | 4718 | no | 713 B |
-| 8x16 | confidential signer | full | yes | 5399 | 26 | 3 | none | 4282 | 4763 | no | 1303 B |
-| 8x16 | confidential signer | full+spl | yes | 5767 | 33 | 3 | - | 4414 | 4767 | no | 1671 B |
-| 8x16 | confidential signer | full+data | yes | 6985 | 26 | 3 | - | 5868 | 6317 | no | 2889 B |
-| 8x16 | confidential signer | full+reply | yes | 5399 | 26 | 3 | - | 4282 | 4763 | no | 1303 B |
-| 8x16 | confidential signer | full+2tree | yes | 5405 | 26 | 3 | - | 4287 | 4767 | no | 1309 B |
-| 8x16 | confidential signer | full+4credential-shared | yes | 5475 | 28 | 3 | - | 4291 | 4767 | no | 1379 B |
-| 8x16 | confidential signer | full+4credential-disjoint | yes | 5571 | 31 | 3 | - | 4291 | 4767 | no | 1475 B |
-| 8x16 | confidential in-proof | min | yes | 4904 | 15 | 1 | - | 4289 | 4815 | no | 808 B |
-| 8x16 | confidential in-proof | full | yes | 5398 | 25 | 2 | none | 4378 | 4860 | no | 1302 B |
-| 8x16 | confidential in-proof | full+spl | yes | 5766 | 32 | 2 | - | 4510 | 4864 | no | 1670 B |
-| 8x16 | confidential in-proof | full+data | yes | 6984 | 25 | 2 | - | 5964 | 6414 | no | 2888 B |
-| 8x16 | confidential in-proof | full+reply | yes | 5398 | 25 | 2 | - | 4378 | 4860 | no | 1302 B |
-| 8x16 | confidential in-proof | full+2tree | yes | 5404 | 25 | 2 | - | 4383 | 4864 | no | 1308 B |
-| 8x16 | confidential in-proof | full+4credential-shared | yes | 5474 | 27 | 2 | - | 4387 | 4864 | no | 1378 B |
-| 8x16 | confidential in-proof | full+4credential-disjoint | yes | 5570 | 30 | 2 | - | 4387 | 4864 | no | 1474 B |
-| 8x16 | anonymous hidden | min | yes | 5424 | 15 | 1 | - | 4809 | 5365 | no | 1328 B |
-| 8x16 | anonymous hidden | full | yes | 5894 | 22 | 2 | none | 4970 | 5492 | no | 1798 B |
-| 8x16 | anonymous hidden | full+spl | yes | 6262 | 29 | 2 | - | 5102 | 5496 | no | 2166 B |
-| 8x16 | anonymous hidden | full+data | yes | 7480 | 22 | 2 | - | 6556 | 7046 | no | 3384 B |
-| 8x16 | anonymous hidden | full+reply | yes | 7351 | 22 | 2 | - | 6427 | 6947 | no | 3255 B |
-| 8x16 | anonymous hidden | full+2tree | yes | 5900 | 22 | 2 | - | 4975 | 5496 | no | 1804 B |
-| 8x16 | anonymous hidden | full+4credential-shared | yes | 5970 | 24 | 2 | - | 4979 | 5496 | no | 1874 B |
-| 8x16 | anonymous hidden | full+4credential-disjoint | yes | 6066 | 27 | 2 | - | 4979 | 5496 | no | 1970 B |
-| 8x16 | anonymous public owners | min | yes | 5361 | 15 | 1 | - | 4745 | 5268 | no | 1265 B |
-| 8x16 | anonymous public owners | full | yes | 6023 | 26 | 3 | none | 4906 | 5395 | no | 1927 B |
-| 8x16 | anonymous public owners | full+spl | yes | 6391 | 33 | 3 | - | 5038 | 5399 | no | 2295 B |
-| 8x16 | anonymous public owners | full+data | yes | 7609 | 26 | 3 | - | 6492 | 6949 | no | 3513 B |
-| 8x16 | anonymous public owners | full+reply | yes | 7480 | 26 | 3 | - | 6363 | 6850 | no | 3384 B |
-| 8x16 | anonymous public owners | full+2tree | yes | 6029 | 26 | 3 | - | 4911 | 5399 | no | 1933 B |
-| 8x16 | anonymous public owners | full+4credential-shared | yes | 6099 | 28 | 3 | - | 4915 | 5399 | no | 2003 B |
-| 8x16 | anonymous public owners | full+4credential-disjoint | yes | 6195 | 31 | 3 | - | 4915 | 5399 | no | 2099 B |
+| 8x16 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 8x16 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 8x16 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 8x16 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 8x16 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 8x16 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 8x16 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 8x16 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 12x2 | confidential signer | min | yes | 2029 | 19 | 1 | - | 1281 | 1308 | yes |  |
-| 12x2 | confidential signer | full | yes | 2619 | 30 | 3 | 10 | 1370 | 1353 | yes |  |
-| 12x2 | confidential signer | full+spl | yes | 2987 | 37 | 3 | - | 1502 | 1357 | yes |  |
-| 12x2 | confidential signer | full+data | yes | 2819 | 30 | 3 | - | 1570 | 1549 | yes |  |
-| 12x2 | confidential signer | full+reply | yes | 2619 | 30 | 3 | - | 1370 | 1353 | yes |  |
-| 12x2 | confidential signer | full+2tree | yes | 2626 | 30 | 3 | - | 1376 | 1357 | yes |  |
-| 12x2 | confidential signer | full+4credential-shared | yes | 2696 | 32 | 3 | - | 1380 | 1357 | yes |  |
-| 12x2 | confidential signer | full+4credential-disjoint | yes | 2792 | 35 | 3 | - | 1380 | 1357 | yes |  |
-| 12x2 | confidential in-proof | min | yes | 2124 | 19 | 1 | - | 1377 | 1405 | yes |  |
-| 12x2 | confidential in-proof | full | yes | 2618 | 29 | 2 | 10 | 1466 | 1450 | yes |  |
-| 12x2 | confidential in-proof | full+spl | yes | 2986 | 36 | 2 | - | 1598 | 1454 | yes |  |
-| 12x2 | confidential in-proof | full+data | yes | 2818 | 29 | 2 | - | 1666 | 1646 | yes |  |
-| 12x2 | confidential in-proof | full+reply | yes | 2618 | 29 | 2 | - | 1466 | 1450 | yes |  |
-| 12x2 | confidential in-proof | full+2tree | yes | 2625 | 29 | 2 | - | 1472 | 1454 | yes |  |
-| 12x2 | confidential in-proof | full+4credential-shared | yes | 2695 | 31 | 2 | - | 1476 | 1454 | yes |  |
-| 12x2 | confidential in-proof | full+4credential-disjoint | yes | 2791 | 34 | 2 | - | 1476 | 1454 | yes |  |
-| 12x2 | anonymous hidden | min | yes | 2196 | 19 | 1 | - | 1449 | 1507 | yes |  |
-| 12x2 | anonymous hidden | full | yes | 2666 | 26 | 2 | 10 | 1610 | 1634 | yes |  |
-| 12x2 | anonymous hidden | full+spl | yes | 3034 | 33 | 2 | - | 1742 | 1638 | yes |  |
-| 12x2 | anonymous hidden | full+data | yes | 2866 | 26 | 2 | - | 1810 | 1830 | yes |  |
-| 12x2 | anonymous hidden | full+reply | yes | 2765 | 26 | 2 | - | 1709 | 1731 | yes |  |
-| 12x2 | anonymous hidden | full+2tree | yes | 2673 | 26 | 2 | - | 1616 | 1638 | yes |  |
-| 12x2 | anonymous hidden | full+4credential-shared | yes | 2743 | 28 | 2 | - | 1620 | 1638 | yes |  |
-| 12x2 | anonymous hidden | full+4credential-disjoint | yes | 2839 | 31 | 2 | - | 1620 | 1638 | yes |  |
-| 12x2 | anonymous public owners | min | yes | 2133 | 19 | 1 | - | 1385 | 1410 | yes |  |
-| 12x2 | anonymous public owners | full | yes | 2795 | 30 | 3 | 10 | 1546 | 1537 | yes |  |
-| 12x2 | anonymous public owners | full+spl | yes | 3163 | 37 | 3 | - | 1678 | 1541 | yes |  |
-| 12x2 | anonymous public owners | full+data | yes | 2995 | 30 | 3 | - | 1746 | 1733 | yes |  |
-| 12x2 | anonymous public owners | full+reply | yes | 2894 | 30 | 3 | - | 1645 | 1634 | yes |  |
-| 12x2 | anonymous public owners | full+2tree | yes | 2802 | 30 | 3 | - | 1552 | 1541 | yes |  |
-| 12x2 | anonymous public owners | full+4credential-shared | yes | 2872 | 32 | 3 | - | 1556 | 1541 | yes |  |
-| 12x2 | anonymous public owners | full+4credential-disjoint | yes | 2968 | 35 | 3 | - | 1556 | 1541 | yes |  |
-| 12x2 | confidential entry | min | yes | 4437 | 19 | 1 | - | 3689 | 3716 | no | 341 B |
-| 12x2 | confidential entry | full | yes | 5027 | 30 | 3 | none | 3778 | 3761 | no | 931 B |
-| 12x2 | confidential entry | full+spl | yes | 5395 | 37 | 3 | - | 3910 | 3765 | no | 1299 B |
-| 12x2 | confidential entry | full+data | yes | 5227 | 30 | 3 | - | 3978 | 3957 | no | 1131 B |
-| 12x2 | confidential entry | full+reply | yes | 5027 | 30 | 3 | - | 3778 | 3761 | no | 931 B |
-| 12x2 | confidential entry | full+2tree | yes | 5034 | 30 | 3 | - | 3784 | 3765 | no | 938 B |
-| 12x2 | confidential entry | full+4credential-shared | yes | 5104 | 32 | 3 | - | 3788 | 3765 | no | 1008 B |
-| 12x2 | confidential entry | full+4credential-disjoint | yes | 5200 | 35 | 3 | - | 3788 | 3765 | no | 1104 B |
-| 12x2 | anonymous entry | min | yes | 4636 | 19 | 1 | - | 3889 | 3915 | no | 540 B |
-| 12x2 | anonymous entry | full | yes | 5106 | 26 | 2 | none | 4050 | 4042 | no | 1010 B |
-| 12x2 | anonymous entry | full+spl | yes | 5474 | 33 | 2 | - | 4182 | 4046 | no | 1378 B |
-| 12x2 | anonymous entry | full+data | yes | 5306 | 26 | 2 | - | 4250 | 4238 | no | 1210 B |
-| 12x2 | anonymous entry | full+reply | yes | 5205 | 26 | 2 | - | 4149 | 4139 | no | 1109 B |
-| 12x2 | anonymous entry | full+2tree | yes | 5113 | 26 | 2 | - | 4056 | 4046 | no | 1017 B |
-| 12x2 | anonymous entry | full+4credential-shared | yes | 5183 | 28 | 2 | - | 4060 | 4046 | no | 1087 B |
-| 12x2 | anonymous entry | full+4credential-disjoint | yes | 5279 | 31 | 2 | - | 4060 | 4046 | no | 1183 B |
+| 12x2 | confidential signer | min | yes | 2063 | 20 | 1 | - | 1284 | 1308 | yes |  |
+| 12x2 | confidential signer | full | yes | 2618 | 30 | 3 | 10 | 1371 | 1353 | yes |  |
+| 12x2 | confidential signer | full+spl | yes | 2986 | 37 | 3 | - | 1503 | 1357 | yes |  |
+| 12x2 | confidential signer | full+data | yes | 2818 | 30 | 3 | - | 1571 | 1549 | yes |  |
+| 12x2 | confidential signer | full+reply | yes | 2618 | 30 | 3 | - | 1371 | 1353 | yes |  |
+| 12x2 | confidential signer | full+2tree | yes | 2657 | 31 | 3 | - | 1377 | 1357 | yes |  |
+| 12x2 | confidential in-proof | min | yes | 2158 | 20 | 1 | - | 1380 | 1405 | yes |  |
+| 12x2 | confidential in-proof | full | yes | 2617 | 29 | 2 | 10 | 1467 | 1450 | yes |  |
+| 12x2 | confidential in-proof | full+spl | yes | 2985 | 36 | 2 | - | 1599 | 1454 | yes |  |
+| 12x2 | confidential in-proof | full+data | yes | 2817 | 29 | 2 | - | 1667 | 1646 | yes |  |
+| 12x2 | confidential in-proof | full+reply | yes | 2617 | 29 | 2 | - | 1467 | 1450 | yes |  |
+| 12x2 | confidential in-proof | full+2tree | yes | 2656 | 30 | 2 | - | 1473 | 1454 | yes |  |
+| 12x2 | anonymous hidden | min | yes | 2190 | 20 | 1 | - | 1412 | 1467 | yes |  |
+| 12x2 | anonymous hidden | full | yes | 2617 | 26 | 2 | 10 | 1563 | 1586 | yes |  |
+| 12x2 | anonymous hidden | full+spl | yes | 2985 | 33 | 2 | - | 1695 | 1590 | yes |  |
+| 12x2 | anonymous hidden | full+data | yes | 2817 | 26 | 2 | - | 1763 | 1782 | yes |  |
+| 12x2 | anonymous hidden | full+reply | yes | 2716 | 26 | 2 | - | 1662 | 1683 | yes |  |
+| 12x2 | anonymous hidden | full+2tree | yes | 2656 | 27 | 2 | - | 1569 | 1590 | yes |  |
+| 12x2 | anonymous public owners | min | yes | 2127 | 20 | 1 | - | 1348 | 1370 | yes |  |
+| 12x2 | anonymous public owners | full | yes | 2746 | 30 | 3 | 10 | 1499 | 1489 | yes |  |
+| 12x2 | anonymous public owners | full+spl | yes | 3114 | 37 | 3 | - | 1631 | 1493 | yes |  |
+| 12x2 | anonymous public owners | full+data | yes | 2946 | 30 | 3 | - | 1699 | 1685 | yes |  |
+| 12x2 | anonymous public owners | full+reply | yes | 2845 | 30 | 3 | - | 1598 | 1586 | yes |  |
+| 12x2 | anonymous public owners | full+2tree | yes | 2785 | 31 | 3 | - | 1505 | 1493 | yes |  |
+| 12x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 12x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 12x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 12x4 | confidential signer | min | yes | 2463 | 19 | 1 | - | 1715 | 1814 | yes |  |
-| 12x4 | confidential signer | full | yes | 3053 | 30 | 3 | 10 | 1804 | 1859 | yes |  |
-| 12x4 | confidential signer | full+spl | yes | 3421 | 37 | 3 | - | 1936 | 1863 | yes |  |
-| 12x4 | confidential signer | full+data | yes | 3451 | 30 | 3 | - | 2202 | 2249 | yes |  |
-| 12x4 | confidential signer | full+reply | yes | 3053 | 30 | 3 | - | 1804 | 1859 | yes |  |
-| 12x4 | confidential signer | full+2tree | yes | 3060 | 30 | 3 | - | 1810 | 1863 | yes |  |
-| 12x4 | confidential signer | full+4credential-shared | yes | 3130 | 32 | 3 | - | 1814 | 1863 | yes |  |
-| 12x4 | confidential signer | full+4credential-disjoint | yes | 3226 | 35 | 3 | - | 1814 | 1863 | yes |  |
-| 12x4 | confidential in-proof | min | yes | 2558 | 19 | 1 | - | 1811 | 1911 | yes |  |
-| 12x4 | confidential in-proof | full | yes | 3052 | 29 | 2 | 10 | 1900 | 1956 | yes |  |
-| 12x4 | confidential in-proof | full+spl | yes | 3420 | 36 | 2 | - | 2032 | 1960 | yes |  |
-| 12x4 | confidential in-proof | full+data | yes | 3450 | 29 | 2 | - | 2298 | 2346 | yes |  |
-| 12x4 | confidential in-proof | full+reply | yes | 3052 | 29 | 2 | - | 1900 | 1956 | yes |  |
-| 12x4 | confidential in-proof | full+2tree | yes | 3059 | 29 | 2 | - | 1906 | 1960 | yes |  |
-| 12x4 | confidential in-proof | full+4credential-shared | yes | 3129 | 31 | 2 | - | 1910 | 1960 | yes |  |
-| 12x4 | confidential in-proof | full+4credential-disjoint | yes | 3225 | 34 | 2 | - | 1910 | 1960 | yes |  |
-| 12x4 | anonymous hidden | min | yes | 2694 | 19 | 1 | - | 1947 | 2077 | yes |  |
-| 12x4 | anonymous hidden | full | yes | 3164 | 26 | 2 | 9 | 2108 | 2204 | yes |  |
-| 12x4 | anonymous hidden | full+spl | yes | 3532 | 33 | 2 | - | 2240 | 2208 | yes |  |
-| 12x4 | anonymous hidden | full+data | yes | 3562 | 26 | 2 | - | 2506 | 2594 | yes |  |
-| 12x4 | anonymous hidden | full+reply | yes | 3457 | 26 | 2 | - | 2401 | 2495 | yes |  |
-| 12x4 | anonymous hidden | full+2tree | yes | 3171 | 26 | 2 | - | 2114 | 2208 | yes |  |
-| 12x4 | anonymous hidden | full+4credential-shared | yes | 3241 | 28 | 2 | - | 2118 | 2208 | yes |  |
-| 12x4 | anonymous hidden | full+4credential-disjoint | yes | 3337 | 31 | 2 | - | 2118 | 2208 | yes |  |
-| 12x4 | anonymous public owners | min | yes | 2631 | 19 | 1 | - | 1883 | 1980 | yes |  |
-| 12x4 | anonymous public owners | full | yes | 3293 | 30 | 3 | 9 | 2044 | 2107 | yes |  |
-| 12x4 | anonymous public owners | full+spl | yes | 3661 | 37 | 3 | - | 2176 | 2111 | yes |  |
-| 12x4 | anonymous public owners | full+data | yes | 3691 | 30 | 3 | - | 2442 | 2497 | yes |  |
-| 12x4 | anonymous public owners | full+reply | yes | 3586 | 30 | 3 | - | 2337 | 2398 | yes |  |
-| 12x4 | anonymous public owners | full+2tree | yes | 3300 | 30 | 3 | - | 2050 | 2111 | yes |  |
-| 12x4 | anonymous public owners | full+4credential-shared | yes | 3370 | 32 | 3 | - | 2054 | 2111 | yes |  |
-| 12x4 | anonymous public owners | full+4credential-disjoint | yes | 3466 | 35 | 3 | - | 2054 | 2111 | yes |  |
+| 12x4 | confidential signer | min | yes | 2497 | 20 | 1 | - | 1718 | 1814 | yes |  |
+| 12x4 | confidential signer | full | yes | 3052 | 30 | 3 | 10 | 1805 | 1859 | yes |  |
+| 12x4 | confidential signer | full+spl | yes | 3420 | 37 | 3 | - | 1937 | 1863 | yes |  |
+| 12x4 | confidential signer | full+data | yes | 3450 | 30 | 3 | - | 2203 | 2249 | yes |  |
+| 12x4 | confidential signer | full+reply | yes | 3052 | 30 | 3 | - | 1805 | 1859 | yes |  |
+| 12x4 | confidential signer | full+2tree | yes | 3091 | 31 | 3 | - | 1811 | 1863 | yes |  |
+| 12x4 | confidential in-proof | min | yes | 2592 | 20 | 1 | - | 1814 | 1911 | yes |  |
+| 12x4 | confidential in-proof | full | yes | 3051 | 29 | 2 | 10 | 1901 | 1956 | yes |  |
+| 12x4 | confidential in-proof | full+spl | yes | 3419 | 36 | 2 | - | 2033 | 1960 | yes |  |
+| 12x4 | confidential in-proof | full+data | yes | 3449 | 29 | 2 | - | 2299 | 2346 | yes |  |
+| 12x4 | confidential in-proof | full+reply | yes | 3051 | 29 | 2 | - | 1901 | 1956 | yes |  |
+| 12x4 | confidential in-proof | full+2tree | yes | 3090 | 30 | 2 | - | 1907 | 1960 | yes |  |
+| 12x4 | anonymous hidden | min | yes | 2688 | 20 | 1 | - | 1910 | 2037 | yes |  |
+| 12x4 | anonymous hidden | full | yes | 3115 | 26 | 2 | 10 | 2061 | 2156 | yes |  |
+| 12x4 | anonymous hidden | full+spl | yes | 3483 | 33 | 2 | - | 2193 | 2160 | yes |  |
+| 12x4 | anonymous hidden | full+data | yes | 3513 | 26 | 2 | - | 2459 | 2546 | yes |  |
+| 12x4 | anonymous hidden | full+reply | yes | 3408 | 26 | 2 | - | 2354 | 2447 | yes |  |
+| 12x4 | anonymous hidden | full+2tree | yes | 3154 | 27 | 2 | - | 2067 | 2160 | yes |  |
+| 12x4 | anonymous public owners | min | yes | 2625 | 20 | 1 | - | 1846 | 1940 | yes |  |
+| 12x4 | anonymous public owners | full | yes | 3244 | 30 | 3 | 9 | 1997 | 2059 | yes |  |
+| 12x4 | anonymous public owners | full+spl | yes | 3612 | 37 | 3 | - | 2129 | 2063 | yes |  |
+| 12x4 | anonymous public owners | full+data | yes | 3642 | 30 | 3 | - | 2395 | 2449 | yes |  |
+| 12x4 | anonymous public owners | full+reply | yes | 3537 | 30 | 3 | - | 2290 | 2350 | yes |  |
+| 12x4 | anonymous public owners | full+2tree | yes | 3283 | 31 | 3 | - | 2003 | 2063 | yes |  |
 | 12x4 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 12x4 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 12x4 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 12x4 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 12x4 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 12x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 12x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 12x8 | confidential signer | min | yes | 3331 | 19 | 1 | - | 2583 | 2826 | yes |  |
-| 12x8 | confidential signer | full | yes | 3921 | 30 | 3 | 2 | 2672 | 2871 | yes |  |
-| 12x8 | confidential signer | full+spl | yes | 4289 | 37 | 3 | - | 2804 | 2875 | no | 193 B |
-| 12x8 | confidential signer | full+data | yes | 4715 | 30 | 3 | - | 3466 | 3649 | no | 619 B |
-| 12x8 | confidential signer | full+reply | yes | 3921 | 30 | 3 | - | 2672 | 2871 | yes |  |
-| 12x8 | confidential signer | full+2tree | yes | 3928 | 30 | 3 | - | 2678 | 2875 | yes |  |
-| 12x8 | confidential signer | full+4credential-shared | yes | 3998 | 32 | 3 | - | 2682 | 2875 | yes |  |
-| 12x8 | confidential signer | full+4credential-disjoint | yes | 4094 | 35 | 3 | - | 2682 | 2875 | yes |  |
-| 12x8 | confidential in-proof | min | yes | 3426 | 19 | 1 | - | 2679 | 2923 | yes |  |
-| 12x8 | confidential in-proof | full | yes | 3920 | 29 | 2 | 1 | 2768 | 2968 | yes |  |
-| 12x8 | confidential in-proof | full+spl | yes | 4288 | 36 | 2 | - | 2900 | 2972 | no | 192 B |
-| 12x8 | confidential in-proof | full+data | yes | 4714 | 29 | 2 | - | 3562 | 3746 | no | 618 B |
-| 12x8 | confidential in-proof | full+reply | yes | 3920 | 29 | 2 | - | 2768 | 2968 | yes |  |
-| 12x8 | confidential in-proof | full+2tree | yes | 3927 | 29 | 2 | - | 2774 | 2972 | yes |  |
-| 12x8 | confidential in-proof | full+4credential-shared | yes | 3997 | 31 | 2 | - | 2778 | 2972 | yes |  |
-| 12x8 | confidential in-proof | full+4credential-disjoint | yes | 4093 | 34 | 2 | - | 2778 | 2972 | yes |  |
-| 12x8 | anonymous hidden | min | yes | 3690 | 19 | 1 | - | 2943 | 3217 | yes |  |
-| 12x8 | anonymous hidden | full | yes | 4160 | 26 | 2 | none | 3104 | 3344 | no | 64 B |
-| 12x8 | anonymous hidden | full+spl | yes | 4528 | 33 | 2 | - | 3236 | 3348 | no | 432 B |
-| 12x8 | anonymous hidden | full+data | yes | 4954 | 26 | 2 | - | 3898 | 4122 | no | 858 B |
-| 12x8 | anonymous hidden | full+reply | yes | 4841 | 26 | 2 | - | 3785 | 4023 | no | 745 B |
-| 12x8 | anonymous hidden | full+2tree | yes | 4167 | 26 | 2 | - | 3110 | 3348 | no | 71 B |
-| 12x8 | anonymous hidden | full+4credential-shared | yes | 4237 | 28 | 2 | - | 3114 | 3348 | no | 141 B |
-| 12x8 | anonymous hidden | full+4credential-disjoint | yes | 4333 | 31 | 2 | - | 3114 | 3348 | no | 237 B |
-| 12x8 | anonymous public owners | min | yes | 3627 | 19 | 1 | - | 2879 | 3120 | yes |  |
-| 12x8 | anonymous public owners | full | yes | 4289 | 30 | 3 | none | 3040 | 3247 | no | 193 B |
-| 12x8 | anonymous public owners | full+spl | yes | 4657 | 37 | 3 | - | 3172 | 3251 | no | 561 B |
-| 12x8 | anonymous public owners | full+data | yes | 5083 | 30 | 3 | - | 3834 | 4025 | no | 987 B |
-| 12x8 | anonymous public owners | full+reply | yes | 4970 | 30 | 3 | - | 3721 | 3926 | no | 874 B |
-| 12x8 | anonymous public owners | full+2tree | yes | 4296 | 30 | 3 | - | 3046 | 3251 | no | 200 B |
-| 12x8 | anonymous public owners | full+4credential-shared | yes | 4366 | 32 | 3 | - | 3050 | 3251 | no | 270 B |
-| 12x8 | anonymous public owners | full+4credential-disjoint | yes | 4462 | 35 | 3 | - | 3050 | 3251 | no | 366 B |
+| 12x8 | confidential signer | min | yes | 3365 | 20 | 1 | - | 2586 | 2826 | yes |  |
+| 12x8 | confidential signer | full | yes | 3920 | 30 | 3 | 2 | 2673 | 2871 | yes |  |
+| 12x8 | confidential signer | full+spl | yes | 4288 | 37 | 3 | - | 2805 | 2875 | no | 192 B |
+| 12x8 | confidential signer | full+data | yes | 4714 | 30 | 3 | - | 3467 | 3649 | no | 618 B |
+| 12x8 | confidential signer | full+reply | yes | 3920 | 30 | 3 | - | 2673 | 2871 | yes |  |
+| 12x8 | confidential signer | full+2tree | yes | 3959 | 31 | 3 | - | 2679 | 2875 | yes |  |
+| 12x8 | confidential in-proof | min | yes | 3460 | 20 | 1 | - | 2682 | 2923 | yes |  |
+| 12x8 | confidential in-proof | full | yes | 3919 | 29 | 2 | 1 | 2769 | 2968 | yes |  |
+| 12x8 | confidential in-proof | full+spl | yes | 4287 | 36 | 2 | - | 2901 | 2972 | no | 191 B |
+| 12x8 | confidential in-proof | full+data | yes | 4713 | 29 | 2 | - | 3563 | 3746 | no | 617 B |
+| 12x8 | confidential in-proof | full+reply | yes | 3919 | 29 | 2 | - | 2769 | 2968 | yes |  |
+| 12x8 | confidential in-proof | full+2tree | yes | 3958 | 30 | 2 | - | 2775 | 2972 | yes |  |
+| 12x8 | anonymous hidden | min | yes | 3684 | 20 | 1 | - | 2906 | 3177 | yes |  |
+| 12x8 | anonymous hidden | full | yes | 4111 | 26 | 2 | none | 3057 | 3296 | no | 15 B |
+| 12x8 | anonymous hidden | full+spl | yes | 4479 | 33 | 2 | - | 3189 | 3300 | no | 383 B |
+| 12x8 | anonymous hidden | full+data | yes | 4905 | 26 | 2 | - | 3851 | 4074 | no | 809 B |
+| 12x8 | anonymous hidden | full+reply | yes | 4792 | 26 | 2 | - | 3738 | 3975 | no | 696 B |
+| 12x8 | anonymous hidden | full+2tree | yes | 4150 | 27 | 2 | - | 3063 | 3300 | no | 54 B |
+| 12x8 | anonymous public owners | min | yes | 3621 | 20 | 1 | - | 2842 | 3080 | yes |  |
+| 12x8 | anonymous public owners | full | yes | 4240 | 30 | 3 | none | 2993 | 3199 | no | 144 B |
+| 12x8 | anonymous public owners | full+spl | yes | 4608 | 37 | 3 | - | 3125 | 3203 | no | 512 B |
+| 12x8 | anonymous public owners | full+data | yes | 5034 | 30 | 3 | - | 3787 | 3977 | no | 938 B |
+| 12x8 | anonymous public owners | full+reply | yes | 4921 | 30 | 3 | - | 3674 | 3878 | no | 825 B |
+| 12x8 | anonymous public owners | full+2tree | yes | 4279 | 31 | 3 | - | 2999 | 3203 | no | 183 B |
 | 12x8 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 12x8 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 12x8 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 12x8 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 12x8 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 12x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 12x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 16x2 | confidential signer | min | yes | 2289 | 23 | 1 | - | 1409 | 1440 | yes |  |
-| 16x2 | confidential signer | full | yes | 2879 | 34 | 3 | 10 | 1498 | 1485 | yes |  |
-| 16x2 | confidential signer | full+spl | yes | 3247 | 41 | 3 | - | 1630 | 1489 | yes |  |
-| 16x2 | confidential signer | full+data | yes | 3079 | 34 | 3 | - | 1698 | 1681 | yes |  |
-| 16x2 | confidential signer | full+reply | yes | 2879 | 34 | 3 | - | 1498 | 1485 | yes |  |
-| 16x2 | confidential signer | full+2tree | yes | 2886 | 34 | 3 | - | 1504 | 1489 | yes |  |
-| 16x2 | confidential signer | full+4credential-shared | yes | 2956 | 36 | 3 | - | 1508 | 1489 | yes |  |
-| 16x2 | confidential signer | full+4credential-disjoint | yes | 3052 | 39 | 3 | - | 1508 | 1489 | yes |  |
-| 16x2 | confidential in-proof | min | yes | 2384 | 23 | 1 | - | 1505 | 1537 | yes |  |
-| 16x2 | confidential in-proof | full | yes | 2878 | 33 | 2 | 10 | 1594 | 1582 | yes |  |
-| 16x2 | confidential in-proof | full+spl | yes | 3246 | 40 | 2 | - | 1726 | 1586 | yes |  |
-| 16x2 | confidential in-proof | full+data | yes | 3078 | 33 | 2 | - | 1794 | 1778 | yes |  |
-| 16x2 | confidential in-proof | full+reply | yes | 2878 | 33 | 2 | - | 1594 | 1582 | yes |  |
-| 16x2 | confidential in-proof | full+2tree | yes | 2885 | 33 | 2 | - | 1600 | 1586 | yes |  |
-| 16x2 | confidential in-proof | full+4credential-shared | yes | 2955 | 35 | 2 | - | 1604 | 1586 | yes |  |
-| 16x2 | confidential in-proof | full+4credential-disjoint | yes | 3051 | 38 | 2 | - | 1604 | 1586 | yes |  |
-| 16x2 | anonymous hidden | min | yes | 2456 | 23 | 1 | - | 1577 | 1639 | yes |  |
-| 16x2 | anonymous hidden | full | yes | 2926 | 30 | 2 | 10 | 1738 | 1766 | yes |  |
-| 16x2 | anonymous hidden | full+spl | yes | 3294 | 37 | 2 | - | 1870 | 1770 | yes |  |
-| 16x2 | anonymous hidden | full+data | yes | 3126 | 30 | 2 | - | 1938 | 1962 | yes |  |
-| 16x2 | anonymous hidden | full+reply | yes | 3025 | 30 | 2 | - | 1837 | 1863 | yes |  |
-| 16x2 | anonymous hidden | full+2tree | yes | 2933 | 30 | 2 | - | 1744 | 1770 | yes |  |
-| 16x2 | anonymous hidden | full+4credential-shared | yes | 3003 | 32 | 2 | - | 1748 | 1770 | yes |  |
-| 16x2 | anonymous hidden | full+4credential-disjoint | yes | 3099 | 35 | 2 | - | 1748 | 1770 | yes |  |
-| 16x2 | anonymous public owners | min | yes | 2393 | 23 | 1 | - | 1513 | 1542 | yes |  |
-| 16x2 | anonymous public owners | full | yes | 3055 | 34 | 3 | 10 | 1674 | 1669 | yes |  |
-| 16x2 | anonymous public owners | full+spl | yes | 3423 | 41 | 3 | - | 1806 | 1673 | yes |  |
-| 16x2 | anonymous public owners | full+data | yes | 3255 | 34 | 3 | - | 1874 | 1865 | yes |  |
-| 16x2 | anonymous public owners | full+reply | yes | 3154 | 34 | 3 | - | 1773 | 1766 | yes |  |
-| 16x2 | anonymous public owners | full+2tree | yes | 3062 | 34 | 3 | - | 1680 | 1673 | yes |  |
-| 16x2 | anonymous public owners | full+4credential-shared | yes | 3132 | 36 | 3 | - | 1684 | 1673 | yes |  |
-| 16x2 | anonymous public owners | full+4credential-disjoint | yes | 3228 | 39 | 3 | - | 1684 | 1673 | yes |  |
-| 16x2 | confidential entry | min | yes | 5497 | 23 | 1 | - | 4617 | 4648 | no | 1401 B |
-| 16x2 | confidential entry | full | yes | 6087 | 34 | 3 | none | 4706 | 4693 | no | 1991 B |
-| 16x2 | confidential entry | full+spl | yes | 6455 | 41 | 3 | - | 4838 | 4697 | no | 2359 B |
-| 16x2 | confidential entry | full+data | yes | 6287 | 34 | 3 | - | 4906 | 4889 | no | 2191 B |
-| 16x2 | confidential entry | full+reply | yes | 6087 | 34 | 3 | - | 4706 | 4693 | no | 1991 B |
-| 16x2 | confidential entry | full+2tree | yes | 6094 | 34 | 3 | - | 4712 | 4697 | no | 1998 B |
-| 16x2 | confidential entry | full+4credential-shared | yes | 6164 | 36 | 3 | - | 4716 | 4697 | no | 2068 B |
-| 16x2 | confidential entry | full+4credential-disjoint | yes | 6260 | 39 | 3 | - | 4716 | 4697 | no | 2164 B |
-| 16x2 | anonymous entry | min | yes | 5696 | 23 | 1 | - | 4817 | 4847 | no | 1600 B |
-| 16x2 | anonymous entry | full | yes | 6166 | 30 | 2 | none | 4978 | 4974 | no | 2070 B |
-| 16x2 | anonymous entry | full+spl | yes | 6534 | 37 | 2 | - | 5110 | 4978 | no | 2438 B |
-| 16x2 | anonymous entry | full+data | yes | 6366 | 30 | 2 | - | 5178 | 5170 | no | 2270 B |
-| 16x2 | anonymous entry | full+reply | yes | 6265 | 30 | 2 | - | 5077 | 5071 | no | 2169 B |
-| 16x2 | anonymous entry | full+2tree | yes | 6173 | 30 | 2 | - | 4984 | 4978 | no | 2077 B |
-| 16x2 | anonymous entry | full+4credential-shared | yes | 6243 | 32 | 2 | - | 4988 | 4978 | no | 2147 B |
-| 16x2 | anonymous entry | full+4credential-disjoint | yes | 6339 | 35 | 2 | - | 4988 | 4978 | no | 2243 B |
+| 16x2 | confidential signer | min | yes | 2323 | 24 | 1 | - | 1412 | 1440 | yes |  |
+| 16x2 | confidential signer | full | yes | 2878 | 34 | 3 | 10 | 1499 | 1485 | yes |  |
+| 16x2 | confidential signer | full+spl | yes | 3246 | 41 | 3 | - | 1631 | 1489 | yes |  |
+| 16x2 | confidential signer | full+data | yes | 3078 | 34 | 3 | - | 1699 | 1681 | yes |  |
+| 16x2 | confidential signer | full+reply | yes | 2878 | 34 | 3 | - | 1499 | 1485 | yes |  |
+| 16x2 | confidential signer | full+2tree | yes | 2917 | 35 | 3 | - | 1505 | 1489 | yes |  |
+| 16x2 | confidential in-proof | min | yes | 2418 | 24 | 1 | - | 1508 | 1537 | yes |  |
+| 16x2 | confidential in-proof | full | yes | 2877 | 33 | 2 | 10 | 1595 | 1582 | yes |  |
+| 16x2 | confidential in-proof | full+spl | yes | 3245 | 40 | 2 | - | 1727 | 1586 | yes |  |
+| 16x2 | confidential in-proof | full+data | yes | 3077 | 33 | 2 | - | 1795 | 1778 | yes |  |
+| 16x2 | confidential in-proof | full+reply | yes | 2877 | 33 | 2 | - | 1595 | 1582 | yes |  |
+| 16x2 | confidential in-proof | full+2tree | yes | 2916 | 34 | 2 | - | 1601 | 1586 | yes |  |
+| 16x2 | anonymous hidden | min | yes | 2450 | 24 | 1 | - | 1540 | 1599 | yes |  |
+| 16x2 | anonymous hidden | full | yes | 2877 | 30 | 2 | 10 | 1691 | 1718 | yes |  |
+| 16x2 | anonymous hidden | full+spl | yes | 3245 | 37 | 2 | - | 1823 | 1722 | yes |  |
+| 16x2 | anonymous hidden | full+data | yes | 3077 | 30 | 2 | - | 1891 | 1914 | yes |  |
+| 16x2 | anonymous hidden | full+reply | yes | 2976 | 30 | 2 | - | 1790 | 1815 | yes |  |
+| 16x2 | anonymous hidden | full+2tree | yes | 2916 | 31 | 2 | - | 1697 | 1722 | yes |  |
+| 16x2 | anonymous public owners | min | yes | 2387 | 24 | 1 | - | 1476 | 1502 | yes |  |
+| 16x2 | anonymous public owners | full | yes | 3006 | 34 | 3 | 10 | 1627 | 1621 | yes |  |
+| 16x2 | anonymous public owners | full+spl | yes | 3374 | 41 | 3 | - | 1759 | 1625 | yes |  |
+| 16x2 | anonymous public owners | full+data | yes | 3206 | 34 | 3 | - | 1827 | 1817 | yes |  |
+| 16x2 | anonymous public owners | full+reply | yes | 3105 | 34 | 3 | - | 1726 | 1718 | yes |  |
+| 16x2 | anonymous public owners | full+2tree | yes | 3045 | 35 | 3 | - | 1633 | 1625 | yes |  |
+| 16x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 16x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 16x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 16x4 | confidential signer | min | yes | 2723 | 23 | 1 | - | 1843 | 1946 | yes |  |
-| 16x4 | confidential signer | full | yes | 3313 | 34 | 3 | 9 | 1932 | 1991 | yes |  |
-| 16x4 | confidential signer | full+spl | yes | 3681 | 41 | 3 | - | 2064 | 1995 | yes |  |
-| 16x4 | confidential signer | full+data | yes | 3711 | 34 | 3 | - | 2330 | 2381 | yes |  |
-| 16x4 | confidential signer | full+reply | yes | 3313 | 34 | 3 | - | 1932 | 1991 | yes |  |
-| 16x4 | confidential signer | full+2tree | yes | 3320 | 34 | 3 | - | 1938 | 1995 | yes |  |
-| 16x4 | confidential signer | full+4credential-shared | yes | 3390 | 36 | 3 | - | 1942 | 1995 | yes |  |
-| 16x4 | confidential signer | full+4credential-disjoint | yes | 3486 | 39 | 3 | - | 1942 | 1995 | yes |  |
-| 16x4 | confidential in-proof | min | yes | 2818 | 23 | 1 | - | 1939 | 2043 | yes |  |
-| 16x4 | confidential in-proof | full | yes | 3312 | 33 | 2 | 8 | 2028 | 2088 | yes |  |
-| 16x4 | confidential in-proof | full+spl | yes | 3680 | 40 | 2 | - | 2160 | 2092 | yes |  |
-| 16x4 | confidential in-proof | full+data | yes | 3710 | 33 | 2 | - | 2426 | 2478 | yes |  |
-| 16x4 | confidential in-proof | full+reply | yes | 3312 | 33 | 2 | - | 2028 | 2088 | yes |  |
-| 16x4 | confidential in-proof | full+2tree | yes | 3319 | 33 | 2 | - | 2034 | 2092 | yes |  |
-| 16x4 | confidential in-proof | full+4credential-shared | yes | 3389 | 35 | 2 | - | 2038 | 2092 | yes |  |
-| 16x4 | confidential in-proof | full+4credential-disjoint | yes | 3485 | 38 | 2 | - | 2038 | 2092 | yes |  |
-| 16x4 | anonymous hidden | min | yes | 2954 | 23 | 1 | - | 2075 | 2209 | yes |  |
-| 16x4 | anonymous hidden | full | yes | 3424 | 30 | 2 | 6 | 2236 | 2336 | yes |  |
-| 16x4 | anonymous hidden | full+spl | yes | 3792 | 37 | 2 | - | 2368 | 2340 | yes |  |
-| 16x4 | anonymous hidden | full+data | yes | 3822 | 30 | 2 | - | 2634 | 2726 | yes |  |
-| 16x4 | anonymous hidden | full+reply | yes | 3717 | 30 | 2 | - | 2529 | 2627 | yes |  |
-| 16x4 | anonymous hidden | full+2tree | yes | 3431 | 30 | 2 | - | 2242 | 2340 | yes |  |
-| 16x4 | anonymous hidden | full+4credential-shared | yes | 3501 | 32 | 2 | - | 2246 | 2340 | yes |  |
-| 16x4 | anonymous hidden | full+4credential-disjoint | yes | 3597 | 35 | 2 | - | 2246 | 2340 | yes |  |
-| 16x4 | anonymous public owners | min | yes | 2891 | 23 | 1 | - | 2011 | 2112 | yes |  |
-| 16x4 | anonymous public owners | full | yes | 3553 | 34 | 3 | 6 | 2172 | 2239 | yes |  |
-| 16x4 | anonymous public owners | full+spl | yes | 3921 | 41 | 3 | - | 2304 | 2243 | yes |  |
-| 16x4 | anonymous public owners | full+data | yes | 3951 | 34 | 3 | - | 2570 | 2629 | yes |  |
-| 16x4 | anonymous public owners | full+reply | yes | 3846 | 34 | 3 | - | 2465 | 2530 | yes |  |
-| 16x4 | anonymous public owners | full+2tree | yes | 3560 | 34 | 3 | - | 2178 | 2243 | yes |  |
-| 16x4 | anonymous public owners | full+4credential-shared | yes | 3630 | 36 | 3 | - | 2182 | 2243 | yes |  |
-| 16x4 | anonymous public owners | full+4credential-disjoint | yes | 3726 | 39 | 3 | - | 2182 | 2243 | yes |  |
+| 16x4 | confidential signer | min | yes | 2757 | 24 | 1 | - | 1846 | 1946 | yes |  |
+| 16x4 | confidential signer | full | yes | 3312 | 34 | 3 | 9 | 1933 | 1991 | yes |  |
+| 16x4 | confidential signer | full+spl | yes | 3680 | 41 | 3 | - | 2065 | 1995 | yes |  |
+| 16x4 | confidential signer | full+data | yes | 3710 | 34 | 3 | - | 2331 | 2381 | yes |  |
+| 16x4 | confidential signer | full+reply | yes | 3312 | 34 | 3 | - | 1933 | 1991 | yes |  |
+| 16x4 | confidential signer | full+2tree | yes | 3351 | 35 | 3 | - | 1939 | 1995 | yes |  |
+| 16x4 | confidential in-proof | min | yes | 2852 | 24 | 1 | - | 1942 | 2043 | yes |  |
+| 16x4 | confidential in-proof | full | yes | 3311 | 33 | 2 | 8 | 2029 | 2088 | yes |  |
+| 16x4 | confidential in-proof | full+spl | yes | 3679 | 40 | 2 | - | 2161 | 2092 | yes |  |
+| 16x4 | confidential in-proof | full+data | yes | 3709 | 33 | 2 | - | 2427 | 2478 | yes |  |
+| 16x4 | confidential in-proof | full+reply | yes | 3311 | 33 | 2 | - | 2029 | 2088 | yes |  |
+| 16x4 | confidential in-proof | full+2tree | yes | 3350 | 34 | 2 | - | 2035 | 2092 | yes |  |
+| 16x4 | anonymous hidden | min | yes | 2948 | 24 | 1 | - | 2038 | 2169 | yes |  |
+| 16x4 | anonymous hidden | full | yes | 3375 | 30 | 2 | 7 | 2189 | 2288 | yes |  |
+| 16x4 | anonymous hidden | full+spl | yes | 3743 | 37 | 2 | - | 2321 | 2292 | yes |  |
+| 16x4 | anonymous hidden | full+data | yes | 3773 | 30 | 2 | - | 2587 | 2678 | yes |  |
+| 16x4 | anonymous hidden | full+reply | yes | 3668 | 30 | 2 | - | 2482 | 2579 | yes |  |
+| 16x4 | anonymous hidden | full+2tree | yes | 3414 | 31 | 2 | - | 2195 | 2292 | yes |  |
+| 16x4 | anonymous public owners | min | yes | 2885 | 24 | 1 | - | 1974 | 2072 | yes |  |
+| 16x4 | anonymous public owners | full | yes | 3504 | 34 | 3 | 7 | 2125 | 2191 | yes |  |
+| 16x4 | anonymous public owners | full+spl | yes | 3872 | 41 | 3 | - | 2257 | 2195 | yes |  |
+| 16x4 | anonymous public owners | full+data | yes | 3902 | 34 | 3 | - | 2523 | 2581 | yes |  |
+| 16x4 | anonymous public owners | full+reply | yes | 3797 | 34 | 3 | - | 2418 | 2482 | yes |  |
+| 16x4 | anonymous public owners | full+2tree | yes | 3543 | 35 | 3 | - | 2131 | 2195 | yes |  |
 | 16x4 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 16x4 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 16x4 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 16x4 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 16x4 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 16x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 16x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 16x8 | confidential signer | min | yes | 3591 | 23 | 1 | - | 2711 | 2958 | yes |  |
-| 16x8 | confidential signer | full | yes | 4181 | 34 | 3 | none | 2800 | 3003 | no | 85 B |
-| 16x8 | confidential signer | full+spl | yes | 4549 | 41 | 3 | - | 2932 | 3007 | no | 453 B |
-| 16x8 | confidential signer | full+data | yes | 4975 | 34 | 3 | - | 3594 | 3781 | no | 879 B |
-| 16x8 | confidential signer | full+reply | yes | 4181 | 34 | 3 | - | 2800 | 3003 | no | 85 B |
-| 16x8 | confidential signer | full+2tree | yes | 4188 | 34 | 3 | - | 2806 | 3007 | no | 92 B |
-| 16x8 | confidential signer | full+4credential-shared | yes | 4258 | 36 | 3 | - | 2810 | 3007 | no | 162 B |
-| 16x8 | confidential signer | full+4credential-disjoint | yes | 4354 | 39 | 3 | - | 2810 | 3007 | no | 258 B |
-| 16x8 | confidential in-proof | min | yes | 3686 | 23 | 1 | - | 2807 | 3055 | yes |  |
-| 16x8 | confidential in-proof | full | yes | 4180 | 33 | 2 | none | 2896 | 3100 | no | 84 B |
-| 16x8 | confidential in-proof | full+spl | yes | 4548 | 40 | 2 | - | 3028 | 3104 | no | 452 B |
-| 16x8 | confidential in-proof | full+data | yes | 4974 | 33 | 2 | - | 3690 | 3878 | no | 878 B |
-| 16x8 | confidential in-proof | full+reply | yes | 4180 | 33 | 2 | - | 2896 | 3100 | no | 84 B |
-| 16x8 | confidential in-proof | full+2tree | yes | 4187 | 33 | 2 | - | 2902 | 3104 | no | 91 B |
-| 16x8 | confidential in-proof | full+4credential-shared | yes | 4257 | 35 | 2 | - | 2906 | 3104 | no | 161 B |
-| 16x8 | confidential in-proof | full+4credential-disjoint | yes | 4353 | 38 | 2 | - | 2906 | 3104 | no | 257 B |
-| 16x8 | anonymous hidden | min | yes | 3950 | 23 | 1 | - | 3071 | 3349 | yes |  |
-| 16x8 | anonymous hidden | full | yes | 4420 | 30 | 2 | none | 3232 | 3476 | no | 324 B |
-| 16x8 | anonymous hidden | full+spl | yes | 4788 | 37 | 2 | - | 3364 | 3480 | no | 692 B |
-| 16x8 | anonymous hidden | full+data | yes | 5214 | 30 | 2 | - | 4026 | 4254 | no | 1118 B |
-| 16x8 | anonymous hidden | full+reply | yes | 5101 | 30 | 2 | - | 3913 | 4155 | no | 1005 B |
-| 16x8 | anonymous hidden | full+2tree | yes | 4427 | 30 | 2 | - | 3238 | 3480 | no | 331 B |
-| 16x8 | anonymous hidden | full+4credential-shared | yes | 4497 | 32 | 2 | - | 3242 | 3480 | no | 401 B |
-| 16x8 | anonymous hidden | full+4credential-disjoint | yes | 4593 | 35 | 2 | - | 3242 | 3480 | no | 497 B |
-| 16x8 | anonymous public owners | min | yes | 3887 | 23 | 1 | - | 3007 | 3252 | yes |  |
-| 16x8 | anonymous public owners | full | yes | 4549 | 34 | 3 | none | 3168 | 3379 | no | 453 B |
-| 16x8 | anonymous public owners | full+spl | yes | 4917 | 41 | 3 | - | 3300 | 3383 | no | 821 B |
-| 16x8 | anonymous public owners | full+data | yes | 5343 | 34 | 3 | - | 3962 | 4157 | no | 1247 B |
-| 16x8 | anonymous public owners | full+reply | yes | 5230 | 34 | 3 | - | 3849 | 4058 | no | 1134 B |
-| 16x8 | anonymous public owners | full+2tree | yes | 4556 | 34 | 3 | - | 3174 | 3383 | no | 460 B |
-| 16x8 | anonymous public owners | full+4credential-shared | yes | 4626 | 36 | 3 | - | 3178 | 3383 | no | 530 B |
-| 16x8 | anonymous public owners | full+4credential-disjoint | yes | 4722 | 39 | 3 | - | 3178 | 3383 | no | 626 B |
+| 16x8 | confidential signer | min | yes | 3625 | 24 | 1 | - | 2714 | 2958 | yes |  |
+| 16x8 | confidential signer | full | yes | 4180 | 34 | 3 | none | 2801 | 3003 | no | 84 B |
+| 16x8 | confidential signer | full+spl | yes | 4548 | 41 | 3 | - | 2933 | 3007 | no | 452 B |
+| 16x8 | confidential signer | full+data | yes | 4974 | 34 | 3 | - | 3595 | 3781 | no | 878 B |
+| 16x8 | confidential signer | full+reply | yes | 4180 | 34 | 3 | - | 2801 | 3003 | no | 84 B |
+| 16x8 | confidential signer | full+2tree | yes | 4219 | 35 | 3 | - | 2807 | 3007 | no | 123 B |
+| 16x8 | confidential in-proof | min | yes | 3720 | 24 | 1 | - | 2810 | 3055 | yes |  |
+| 16x8 | confidential in-proof | full | yes | 4179 | 33 | 2 | none | 2897 | 3100 | no | 83 B |
+| 16x8 | confidential in-proof | full+spl | yes | 4547 | 40 | 2 | - | 3029 | 3104 | no | 451 B |
+| 16x8 | confidential in-proof | full+data | yes | 4973 | 33 | 2 | - | 3691 | 3878 | no | 877 B |
+| 16x8 | confidential in-proof | full+reply | yes | 4179 | 33 | 2 | - | 2897 | 3100 | no | 83 B |
+| 16x8 | confidential in-proof | full+2tree | yes | 4218 | 34 | 2 | - | 2903 | 3104 | no | 122 B |
+| 16x8 | anonymous hidden | min | yes | 3944 | 24 | 1 | - | 3034 | 3309 | yes |  |
+| 16x8 | anonymous hidden | full | yes | 4371 | 30 | 2 | none | 3185 | 3428 | no | 275 B |
+| 16x8 | anonymous hidden | full+spl | yes | 4739 | 37 | 2 | - | 3317 | 3432 | no | 643 B |
+| 16x8 | anonymous hidden | full+data | yes | 5165 | 30 | 2 | - | 3979 | 4206 | no | 1069 B |
+| 16x8 | anonymous hidden | full+reply | yes | 5052 | 30 | 2 | - | 3866 | 4107 | no | 956 B |
+| 16x8 | anonymous hidden | full+2tree | yes | 4410 | 31 | 2 | - | 3191 | 3432 | no | 314 B |
+| 16x8 | anonymous public owners | min | yes | 3881 | 24 | 1 | - | 2970 | 3212 | yes |  |
+| 16x8 | anonymous public owners | full | yes | 4500 | 34 | 3 | none | 3121 | 3331 | no | 404 B |
+| 16x8 | anonymous public owners | full+spl | yes | 4868 | 41 | 3 | - | 3253 | 3335 | no | 772 B |
+| 16x8 | anonymous public owners | full+data | yes | 5294 | 34 | 3 | - | 3915 | 4109 | no | 1198 B |
+| 16x8 | anonymous public owners | full+reply | yes | 5181 | 34 | 3 | - | 3802 | 4010 | no | 1085 B |
+| 16x8 | anonymous public owners | full+2tree | yes | 4539 | 35 | 3 | - | 3127 | 3335 | no | 443 B |
 | 16x8 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 16x8 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 16x8 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 16x8 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 16x8 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 16x8 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 16x8 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 24x2 | confidential signer | min | yes | 2809 | 31 | 1 | - | 1665 | 1704 | yes |  |
-| 24x2 | confidential signer | full | yes | 3399 | 42 | 3 | 8 | 1754 | 1749 | yes |  |
-| 24x2 | confidential signer | full+spl | yes | 3767 | 49 | 3 | - | 1886 | 1753 | yes |  |
-| 24x2 | confidential signer | full+data | yes | 3599 | 42 | 3 | - | 1954 | 1945 | yes |  |
-| 24x2 | confidential signer | full+reply | yes | 3399 | 42 | 3 | - | 1754 | 1749 | yes |  |
-| 24x2 | confidential signer | full+2tree | yes | 3407 | 42 | 3 | - | 1761 | 1753 | yes |  |
-| 24x2 | confidential signer | full+4credential-shared | yes | 3477 | 44 | 3 | - | 1765 | 1753 | yes |  |
-| 24x2 | confidential signer | full+4credential-disjoint | yes | 3573 | 47 | 3 | - | 1765 | 1753 | yes |  |
-| 24x2 | confidential in-proof | min | yes | 2904 | 31 | 1 | - | 1761 | 1801 | yes |  |
-| 24x2 | confidential in-proof | full | yes | 3398 | 41 | 2 | 7 | 1850 | 1846 | yes |  |
-| 24x2 | confidential in-proof | full+spl | yes | 3766 | 48 | 2 | - | 1982 | 1850 | yes |  |
-| 24x2 | confidential in-proof | full+data | yes | 3598 | 41 | 2 | - | 2050 | 2042 | yes |  |
-| 24x2 | confidential in-proof | full+reply | yes | 3398 | 41 | 2 | - | 1850 | 1846 | yes |  |
-| 24x2 | confidential in-proof | full+2tree | yes | 3406 | 41 | 2 | - | 1857 | 1850 | yes |  |
-| 24x2 | confidential in-proof | full+4credential-shared | yes | 3476 | 43 | 2 | - | 1861 | 1850 | yes |  |
-| 24x2 | confidential in-proof | full+4credential-disjoint | yes | 3572 | 46 | 2 | - | 1861 | 1850 | yes |  |
-| 24x2 | anonymous hidden | min | yes | 2976 | 31 | 1 | - | 1833 | 1903 | yes |  |
-| 24x2 | anonymous hidden | full | yes | 3446 | 38 | 2 | 6 | 1994 | 2030 | yes |  |
-| 24x2 | anonymous hidden | full+spl | yes | 3814 | 45 | 2 | - | 2126 | 2034 | yes |  |
-| 24x2 | anonymous hidden | full+data | yes | 3646 | 38 | 2 | - | 2194 | 2226 | yes |  |
-| 24x2 | anonymous hidden | full+reply | yes | 3545 | 38 | 2 | - | 2093 | 2127 | yes |  |
-| 24x2 | anonymous hidden | full+2tree | yes | 3454 | 38 | 2 | - | 2001 | 2034 | yes |  |
-| 24x2 | anonymous hidden | full+4credential-shared | yes | 3524 | 40 | 2 | - | 2005 | 2034 | yes |  |
-| 24x2 | anonymous hidden | full+4credential-disjoint | yes | 3620 | 43 | 2 | - | 2005 | 2034 | yes |  |
-| 24x2 | anonymous public owners | min | yes | 2913 | 31 | 1 | - | 1769 | 1806 | yes |  |
-| 24x2 | anonymous public owners | full | yes | 3575 | 42 | 3 | 6 | 1930 | 1933 | yes |  |
-| 24x2 | anonymous public owners | full+spl | yes | 3943 | 49 | 3 | - | 2062 | 1937 | yes |  |
-| 24x2 | anonymous public owners | full+data | yes | 3775 | 42 | 3 | - | 2130 | 2129 | yes |  |
-| 24x2 | anonymous public owners | full+reply | yes | 3674 | 42 | 3 | - | 2029 | 2030 | yes |  |
-| 24x2 | anonymous public owners | full+2tree | yes | 3583 | 42 | 3 | - | 1937 | 1937 | yes |  |
-| 24x2 | anonymous public owners | full+4credential-shared | yes | 3653 | 44 | 3 | - | 1941 | 1937 | yes |  |
-| 24x2 | anonymous public owners | full+4credential-disjoint | yes | 3749 | 47 | 3 | - | 1941 | 1937 | yes |  |
-| 24x2 | confidential entry | min | yes | 7617 | 31 | 1 | - | 6473 | 6512 | no | 3521 B |
-| 24x2 | confidential entry | full | yes | 8207 | 42 | 3 | none | 6562 | 6557 | no | 4111 B |
-| 24x2 | confidential entry | full+spl | yes | 8575 | 49 | 3 | - | 6694 | 6561 | no | 4479 B |
-| 24x2 | confidential entry | full+data | yes | 8407 | 42 | 3 | - | 6762 | 6753 | no | 4311 B |
-| 24x2 | confidential entry | full+reply | yes | 8207 | 42 | 3 | - | 6562 | 6557 | no | 4111 B |
-| 24x2 | confidential entry | full+2tree | yes | 8215 | 42 | 3 | - | 6569 | 6561 | no | 4119 B |
-| 24x2 | confidential entry | full+4credential-shared | yes | 8285 | 44 | 3 | - | 6573 | 6561 | no | 4189 B |
-| 24x2 | confidential entry | full+4credential-disjoint | yes | 8381 | 47 | 3 | - | 6573 | 6561 | no | 4285 B |
-| 24x2 | anonymous entry | min | yes | 7816 | 31 | 1 | - | 6673 | 6711 | no | 3720 B |
-| 24x2 | anonymous entry | full | yes | 8286 | 38 | 2 | none | 6834 | 6838 | no | 4190 B |
-| 24x2 | anonymous entry | full+spl | yes | 8654 | 45 | 2 | - | 6966 | 6842 | no | 4558 B |
-| 24x2 | anonymous entry | full+data | yes | 8486 | 38 | 2 | - | 7034 | 7034 | no | 4390 B |
-| 24x2 | anonymous entry | full+reply | yes | 8385 | 38 | 2 | - | 6933 | 6935 | no | 4289 B |
-| 24x2 | anonymous entry | full+2tree | yes | 8294 | 38 | 2 | - | 6841 | 6842 | no | 4198 B |
-| 24x2 | anonymous entry | full+4credential-shared | yes | 8364 | 40 | 2 | - | 6845 | 6842 | no | 4268 B |
-| 24x2 | anonymous entry | full+4credential-disjoint | yes | 8460 | 43 | 2 | - | 6845 | 6842 | no | 4364 B |
+| 24x2 | confidential signer | min | yes | 2843 | 32 | 1 | - | 1668 | 1704 | yes |  |
+| 24x2 | confidential signer | full | yes | 3398 | 42 | 3 | 8 | 1755 | 1749 | yes |  |
+| 24x2 | confidential signer | full+spl | yes | 3766 | 49 | 3 | - | 1887 | 1753 | yes |  |
+| 24x2 | confidential signer | full+data | yes | 3598 | 42 | 3 | - | 1955 | 1945 | yes |  |
+| 24x2 | confidential signer | full+reply | yes | 3398 | 42 | 3 | - | 1755 | 1749 | yes |  |
+| 24x2 | confidential signer | full+2tree | yes | 3438 | 43 | 3 | - | 1762 | 1753 | yes |  |
+| 24x2 | confidential in-proof | min | yes | 2938 | 32 | 1 | - | 1764 | 1801 | yes |  |
+| 24x2 | confidential in-proof | full | yes | 3397 | 41 | 2 | 7 | 1851 | 1846 | yes |  |
+| 24x2 | confidential in-proof | full+spl | yes | 3765 | 48 | 2 | - | 1983 | 1850 | yes |  |
+| 24x2 | confidential in-proof | full+data | yes | 3597 | 41 | 2 | - | 2051 | 2042 | yes |  |
+| 24x2 | confidential in-proof | full+reply | yes | 3397 | 41 | 2 | - | 1851 | 1846 | yes |  |
+| 24x2 | confidential in-proof | full+2tree | yes | 3437 | 42 | 2 | - | 1858 | 1850 | yes |  |
+| 24x2 | anonymous hidden | min | yes | 2970 | 32 | 1 | - | 1796 | 1863 | yes |  |
+| 24x2 | anonymous hidden | full | yes | 3397 | 38 | 2 | 7 | 1947 | 1982 | yes |  |
+| 24x2 | anonymous hidden | full+spl | yes | 3765 | 45 | 2 | - | 2079 | 1986 | yes |  |
+| 24x2 | anonymous hidden | full+data | yes | 3597 | 38 | 2 | - | 2147 | 2178 | yes |  |
+| 24x2 | anonymous hidden | full+reply | yes | 3496 | 38 | 2 | - | 2046 | 2079 | yes |  |
+| 24x2 | anonymous hidden | full+2tree | yes | 3437 | 39 | 2 | - | 1954 | 1986 | yes |  |
+| 24x2 | anonymous public owners | min | yes | 2907 | 32 | 1 | - | 1732 | 1766 | yes |  |
+| 24x2 | anonymous public owners | full | yes | 3526 | 42 | 3 | 6 | 1883 | 1885 | yes |  |
+| 24x2 | anonymous public owners | full+spl | yes | 3894 | 49 | 3 | - | 2015 | 1889 | yes |  |
+| 24x2 | anonymous public owners | full+data | yes | 3726 | 42 | 3 | - | 2083 | 2081 | yes |  |
+| 24x2 | anonymous public owners | full+reply | yes | 3625 | 42 | 3 | - | 1982 | 1982 | yes |  |
+| 24x2 | anonymous public owners | full+2tree | yes | 3566 | 43 | 3 | - | 1890 | 1889 | yes |  |
+| 24x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 24x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 24x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 24x4 | confidential signer | min | yes | 3243 | 31 | 1 | - | 2099 | 2210 | yes |  |
-| 24x4 | confidential signer | full | yes | 3833 | 42 | 3 | 3 | 2188 | 2255 | yes |  |
-| 24x4 | confidential signer | full+spl | yes | 4201 | 49 | 3 | - | 2320 | 2259 | no | 105 B |
-| 24x4 | confidential signer | full+data | yes | 4231 | 42 | 3 | - | 2586 | 2645 | no | 135 B |
-| 24x4 | confidential signer | full+reply | yes | 3833 | 42 | 3 | - | 2188 | 2255 | yes |  |
-| 24x4 | confidential signer | full+2tree | yes | 3841 | 42 | 3 | - | 2195 | 2259 | yes |  |
-| 24x4 | confidential signer | full+4credential-shared | yes | 3911 | 44 | 3 | - | 2199 | 2259 | yes |  |
-| 24x4 | confidential signer | full+4credential-disjoint | yes | 4007 | 47 | 3 | - | 2199 | 2259 | yes |  |
-| 24x4 | confidential in-proof | min | yes | 3338 | 31 | 1 | - | 2195 | 2307 | yes |  |
-| 24x4 | confidential in-proof | full | yes | 3832 | 41 | 2 | 2 | 2284 | 2352 | yes |  |
-| 24x4 | confidential in-proof | full+spl | yes | 4200 | 48 | 2 | - | 2416 | 2356 | no | 104 B |
-| 24x4 | confidential in-proof | full+data | yes | 4230 | 41 | 2 | - | 2682 | 2742 | no | 134 B |
-| 24x4 | confidential in-proof | full+reply | yes | 3832 | 41 | 2 | - | 2284 | 2352 | yes |  |
-| 24x4 | confidential in-proof | full+2tree | yes | 3840 | 41 | 2 | - | 2291 | 2356 | yes |  |
-| 24x4 | confidential in-proof | full+4credential-shared | yes | 3910 | 43 | 2 | - | 2295 | 2356 | yes |  |
-| 24x4 | confidential in-proof | full+4credential-disjoint | yes | 4006 | 46 | 2 | - | 2295 | 2356 | yes |  |
-| 24x4 | anonymous hidden | min | yes | 3474 | 31 | 1 | - | 2331 | 2473 | yes |  |
-| 24x4 | anonymous hidden | full | yes | 3944 | 38 | 2 | 1 | 2492 | 2600 | yes |  |
-| 24x4 | anonymous hidden | full+spl | yes | 4312 | 45 | 2 | - | 2624 | 2604 | no | 216 B |
-| 24x4 | anonymous hidden | full+data | yes | 4342 | 38 | 2 | - | 2890 | 2990 | no | 246 B |
-| 24x4 | anonymous hidden | full+reply | yes | 4237 | 38 | 2 | - | 2785 | 2891 | no | 141 B |
-| 24x4 | anonymous hidden | full+2tree | yes | 3952 | 38 | 2 | - | 2499 | 2604 | yes |  |
-| 24x4 | anonymous hidden | full+4credential-shared | yes | 4022 | 40 | 2 | - | 2503 | 2604 | yes |  |
-| 24x4 | anonymous hidden | full+4credential-disjoint | yes | 4118 | 43 | 2 | - | 2503 | 2604 | no | 22 B |
-| 24x4 | anonymous public owners | min | yes | 3411 | 31 | 1 | - | 2267 | 2376 | yes |  |
-| 24x4 | anonymous public owners | full | yes | 4073 | 42 | 3 | 1 | 2428 | 2503 | yes |  |
-| 24x4 | anonymous public owners | full+spl | yes | 4441 | 49 | 3 | - | 2560 | 2507 | no | 345 B |
-| 24x4 | anonymous public owners | full+data | yes | 4471 | 42 | 3 | - | 2826 | 2893 | no | 375 B |
-| 24x4 | anonymous public owners | full+reply | yes | 4366 | 42 | 3 | - | 2721 | 2794 | no | 270 B |
-| 24x4 | anonymous public owners | full+2tree | yes | 4081 | 42 | 3 | - | 2435 | 2507 | yes |  |
-| 24x4 | anonymous public owners | full+4credential-shared | yes | 4151 | 44 | 3 | - | 2439 | 2507 | no | 55 B |
-| 24x4 | anonymous public owners | full+4credential-disjoint | yes | 4247 | 47 | 3 | - | 2439 | 2507 | no | 151 B |
+| 24x4 | confidential signer | min | yes | 3277 | 32 | 1 | - | 2102 | 2210 | yes |  |
+| 24x4 | confidential signer | full | yes | 3832 | 42 | 3 | 3 | 2189 | 2255 | yes |  |
+| 24x4 | confidential signer | full+spl | yes | 4200 | 49 | 3 | - | 2321 | 2259 | no | 104 B |
+| 24x4 | confidential signer | full+data | yes | 4230 | 42 | 3 | - | 2587 | 2645 | no | 134 B |
+| 24x4 | confidential signer | full+reply | yes | 3832 | 42 | 3 | - | 2189 | 2255 | yes |  |
+| 24x4 | confidential signer | full+2tree | yes | 3872 | 43 | 3 | - | 2196 | 2259 | yes |  |
+| 24x4 | confidential in-proof | min | yes | 3372 | 32 | 1 | - | 2198 | 2307 | yes |  |
+| 24x4 | confidential in-proof | full | yes | 3831 | 41 | 2 | 2 | 2285 | 2352 | yes |  |
+| 24x4 | confidential in-proof | full+spl | yes | 4199 | 48 | 2 | - | 2417 | 2356 | no | 103 B |
+| 24x4 | confidential in-proof | full+data | yes | 4229 | 41 | 2 | - | 2683 | 2742 | no | 133 B |
+| 24x4 | confidential in-proof | full+reply | yes | 3831 | 41 | 2 | - | 2285 | 2352 | yes |  |
+| 24x4 | confidential in-proof | full+2tree | yes | 3871 | 42 | 2 | - | 2292 | 2356 | yes |  |
+| 24x4 | anonymous hidden | min | yes | 3468 | 32 | 1 | - | 2294 | 2433 | yes |  |
+| 24x4 | anonymous hidden | full | yes | 3895 | 38 | 2 | 2 | 2445 | 2552 | yes |  |
+| 24x4 | anonymous hidden | full+spl | yes | 4263 | 45 | 2 | - | 2577 | 2556 | no | 167 B |
+| 24x4 | anonymous hidden | full+data | yes | 4293 | 38 | 2 | - | 2843 | 2942 | no | 197 B |
+| 24x4 | anonymous hidden | full+reply | yes | 4188 | 38 | 2 | - | 2738 | 2843 | no | 92 B |
+| 24x4 | anonymous hidden | full+2tree | yes | 3935 | 39 | 2 | - | 2452 | 2556 | yes |  |
+| 24x4 | anonymous public owners | min | yes | 3405 | 32 | 1 | - | 2230 | 2336 | yes |  |
+| 24x4 | anonymous public owners | full | yes | 4024 | 42 | 3 | 1 | 2381 | 2455 | yes |  |
+| 24x4 | anonymous public owners | full+spl | yes | 4392 | 49 | 3 | - | 2513 | 2459 | no | 296 B |
+| 24x4 | anonymous public owners | full+data | yes | 4422 | 42 | 3 | - | 2779 | 2845 | no | 326 B |
+| 24x4 | anonymous public owners | full+reply | yes | 4317 | 42 | 3 | - | 2674 | 2746 | no | 221 B |
+| 24x4 | anonymous public owners | full+2tree | yes | 4064 | 43 | 3 | - | 2388 | 2459 | yes |  |
 | 24x4 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 24x4 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 24x4 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 24x4 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 24x4 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 24x4 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 24x4 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 32x2 | confidential signer | min | yes | 3329 | 39 | 1 | - | 1921 | 1968 | yes |  |
-| 32x2 | confidential signer | full | yes | 3919 | 50 | 3 | 2 | 2010 | 2013 | yes |  |
-| 32x2 | confidential signer | full+spl | yes | 4287 | 57 | 3 | - | 2142 | 2017 | no | 191 B |
-| 32x2 | confidential signer | full+data | yes | 4119 | 50 | 3 | - | 2210 | 2209 | no | 23 B |
-| 32x2 | confidential signer | full+reply | yes | 3919 | 50 | 3 | - | 2010 | 2013 | yes |  |
-| 32x2 | confidential signer | full+2tree | yes | 3928 | 50 | 3 | - | 2018 | 2017 | yes |  |
-| 32x2 | confidential signer | full+4credential-shared | yes | 3998 | 52 | 3 | - | 2022 | 2017 | yes |  |
-| 32x2 | confidential signer | full+4credential-disjoint | yes | 4094 | 55 | 3 | - | 2022 | 2017 | yes |  |
-| 32x2 | confidential in-proof | min | yes | 3424 | 39 | 1 | - | 2017 | 2065 | yes |  |
-| 32x2 | confidential in-proof | full | yes | 3918 | 49 | 2 | 1 | 2106 | 2110 | yes |  |
-| 32x2 | confidential in-proof | full+spl | yes | 4286 | 56 | 2 | - | 2238 | 2114 | no | 190 B |
-| 32x2 | confidential in-proof | full+data | yes | 4118 | 49 | 2 | - | 2306 | 2306 | no | 22 B |
-| 32x2 | confidential in-proof | full+reply | yes | 3918 | 49 | 2 | - | 2106 | 2110 | yes |  |
-| 32x2 | confidential in-proof | full+2tree | yes | 3927 | 49 | 2 | - | 2114 | 2114 | yes |  |
-| 32x2 | confidential in-proof | full+4credential-shared | yes | 3997 | 51 | 2 | - | 2118 | 2114 | yes |  |
-| 32x2 | confidential in-proof | full+4credential-disjoint | yes | 4093 | 54 | 2 | - | 2118 | 2114 | yes |  |
-| 32x2 | anonymous hidden | min | yes | 3496 | 39 | 1 | - | 2089 | 2167 | yes |  |
-| 32x2 | anonymous hidden | full | yes | 3966 | 46 | 2 | 1 | 2250 | 2294 | yes |  |
-| 32x2 | anonymous hidden | full+spl | yes | 4334 | 53 | 2 | - | 2382 | 2298 | no | 238 B |
-| 32x2 | anonymous hidden | full+data | yes | 4166 | 46 | 2 | - | 2450 | 2490 | no | 70 B |
-| 32x2 | anonymous hidden | full+reply | yes | 4065 | 46 | 2 | - | 2349 | 2391 | yes |  |
-| 32x2 | anonymous hidden | full+2tree | yes | 3975 | 46 | 2 | - | 2258 | 2298 | yes |  |
-| 32x2 | anonymous hidden | full+4credential-shared | yes | 4045 | 48 | 2 | - | 2262 | 2298 | yes |  |
-| 32x2 | anonymous hidden | full+4credential-disjoint | yes | 4141 | 51 | 2 | - | 2262 | 2298 | no | 45 B |
-| 32x2 | anonymous public owners | min | yes | 3433 | 39 | 1 | - | 2025 | 2070 | yes |  |
-| 32x2 | anonymous public owners | full | yes | 4095 | 50 | 3 | 1 | 2186 | 2197 | yes |  |
-| 32x2 | anonymous public owners | full+spl | yes | 4463 | 57 | 3 | - | 2318 | 2201 | no | 367 B |
-| 32x2 | anonymous public owners | full+data | yes | 4295 | 50 | 3 | - | 2386 | 2393 | no | 199 B |
-| 32x2 | anonymous public owners | full+reply | yes | 4194 | 50 | 3 | - | 2285 | 2294 | no | 98 B |
-| 32x2 | anonymous public owners | full+2tree | yes | 4104 | 50 | 3 | - | 2194 | 2201 | no | 8 B |
-| 32x2 | anonymous public owners | full+4credential-shared | yes | 4174 | 52 | 3 | - | 2198 | 2201 | no | 78 B |
-| 32x2 | anonymous public owners | full+4credential-disjoint | yes | 4270 | 55 | 3 | - | 2198 | 2201 | no | 174 B |
+| 32x2 | confidential signer | min | yes | 3363 | 40 | 1 | - | 1924 | 1968 | yes |  |
+| 32x2 | confidential signer | full | yes | 3918 | 50 | 3 | 2 | 2011 | 2013 | yes |  |
+| 32x2 | confidential signer | full+spl | yes | 4286 | 57 | 3 | - | 2143 | 2017 | no | 190 B |
+| 32x2 | confidential signer | full+data | yes | 4118 | 50 | 3 | - | 2211 | 2209 | no | 22 B |
+| 32x2 | confidential signer | full+reply | yes | 3918 | 50 | 3 | - | 2011 | 2013 | yes |  |
+| 32x2 | confidential signer | full+2tree | yes | 3959 | 51 | 3 | - | 2019 | 2017 | yes |  |
+| 32x2 | confidential in-proof | min | yes | 3458 | 40 | 1 | - | 2020 | 2065 | yes |  |
+| 32x2 | confidential in-proof | full | yes | 3917 | 49 | 2 | 1 | 2107 | 2110 | yes |  |
+| 32x2 | confidential in-proof | full+spl | yes | 4285 | 56 | 2 | - | 2239 | 2114 | no | 189 B |
+| 32x2 | confidential in-proof | full+data | yes | 4117 | 49 | 2 | - | 2307 | 2306 | no | 21 B |
+| 32x2 | confidential in-proof | full+reply | yes | 3917 | 49 | 2 | - | 2107 | 2110 | yes |  |
+| 32x2 | confidential in-proof | full+2tree | yes | 3958 | 50 | 2 | - | 2115 | 2114 | yes |  |
+| 32x2 | anonymous hidden | min | yes | 3490 | 40 | 1 | - | 2052 | 2127 | yes |  |
+| 32x2 | anonymous hidden | full | yes | 3917 | 46 | 2 | 1 | 2203 | 2246 | yes |  |
+| 32x2 | anonymous hidden | full+spl | yes | 4285 | 53 | 2 | - | 2335 | 2250 | no | 189 B |
+| 32x2 | anonymous hidden | full+data | yes | 4117 | 46 | 2 | - | 2403 | 2442 | no | 21 B |
+| 32x2 | anonymous hidden | full+reply | yes | 4016 | 46 | 2 | - | 2302 | 2343 | yes |  |
+| 32x2 | anonymous hidden | full+2tree | yes | 3958 | 47 | 2 | - | 2211 | 2250 | yes |  |
+| 32x2 | anonymous public owners | min | yes | 3427 | 40 | 1 | - | 1988 | 2030 | yes |  |
+| 32x2 | anonymous public owners | full | yes | 4046 | 50 | 3 | 1 | 2139 | 2149 | yes |  |
+| 32x2 | anonymous public owners | full+spl | yes | 4414 | 57 | 3 | - | 2271 | 2153 | no | 318 B |
+| 32x2 | anonymous public owners | full+data | yes | 4246 | 50 | 3 | - | 2339 | 2345 | no | 150 B |
+| 32x2 | anonymous public owners | full+reply | yes | 4145 | 50 | 3 | - | 2238 | 2246 | no | 49 B |
+| 32x2 | anonymous public owners | full+2tree | yes | 4087 | 51 | 3 | - | 2147 | 2153 | yes |  |
 | 32x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 32x2 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 32x2 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 32x2 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 32x2 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 32x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 32x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 40x2 | confidential signer | min | yes | 3849 | 47 | 1 | - | 2177 | 2232 | yes |  |
-| 40x2 | confidential signer | full | yes | 4439 | 58 | 3 | none | 2266 | 2277 | no | 343 B |
-| 40x2 | confidential signer | full+spl | yes | 4807 | 65 | 3 | - | 2398 | 2281 | no | 711 B, 1 accounts |
-| 40x2 | confidential signer | full+data | yes | 4639 | 58 | 3 | - | 2466 | 2473 | no | 543 B |
-| 40x2 | confidential signer | full+reply | yes | 4439 | 58 | 3 | - | 2266 | 2277 | no | 343 B |
-| 40x2 | confidential signer | full+2tree | yes | 4449 | 58 | 3 | - | 2275 | 2281 | no | 353 B |
-| 40x2 | confidential signer | full+4credential-shared | yes | 4519 | 60 | 3 | - | 2279 | 2281 | no | 423 B |
-| 40x2 | confidential signer | full+4credential-disjoint | yes | 4615 | 63 | 3 | - | 2279 | 2281 | no | 519 B |
-| 40x2 | confidential in-proof | min | yes | 3944 | 47 | 1 | - | 2273 | 2329 | yes |  |
-| 40x2 | confidential in-proof | full | yes | 4438 | 57 | 2 | none | 2362 | 2374 | no | 342 B |
-| 40x2 | confidential in-proof | full+spl | yes | 4806 | 64 | 2 | - | 2494 | 2378 | no | 710 B |
-| 40x2 | confidential in-proof | full+data | yes | 4638 | 57 | 2 | - | 2562 | 2570 | no | 542 B |
-| 40x2 | confidential in-proof | full+reply | yes | 4438 | 57 | 2 | - | 2362 | 2374 | no | 342 B |
-| 40x2 | confidential in-proof | full+2tree | yes | 4448 | 57 | 2 | - | 2371 | 2378 | no | 352 B |
-| 40x2 | confidential in-proof | full+4credential-shared | yes | 4518 | 59 | 2 | - | 2375 | 2378 | no | 422 B |
-| 40x2 | confidential in-proof | full+4credential-disjoint | yes | 4614 | 62 | 2 | - | 2375 | 2378 | no | 518 B |
-| 40x2 | anonymous hidden | min | yes | 4016 | 47 | 1 | - | 2345 | 2431 | yes |  |
-| 40x2 | anonymous hidden | full | yes | 4486 | 54 | 2 | none | 2506 | 2558 | no | 390 B |
-| 40x2 | anonymous hidden | full+spl | yes | 4854 | 61 | 2 | - | 2638 | 2562 | no | 758 B |
-| 40x2 | anonymous hidden | full+data | yes | 4686 | 54 | 2 | - | 2706 | 2754 | no | 590 B |
-| 40x2 | anonymous hidden | full+reply | yes | 4585 | 54 | 2 | - | 2605 | 2655 | no | 489 B |
-| 40x2 | anonymous hidden | full+2tree | yes | 4496 | 54 | 2 | - | 2515 | 2562 | no | 400 B |
-| 40x2 | anonymous hidden | full+4credential-shared | yes | 4566 | 56 | 2 | - | 2519 | 2562 | no | 470 B |
-| 40x2 | anonymous hidden | full+4credential-disjoint | yes | 4662 | 59 | 2 | - | 2519 | 2562 | no | 566 B |
-| 40x2 | anonymous public owners | min | yes | 3953 | 47 | 1 | - | 2281 | 2334 | yes |  |
-| 40x2 | anonymous public owners | full | yes | 4615 | 58 | 3 | none | 2442 | 2461 | no | 519 B |
-| 40x2 | anonymous public owners | full+spl | yes | 4983 | 65 | 3 | - | 2574 | 2465 | no | 887 B, 1 accounts |
-| 40x2 | anonymous public owners | full+data | yes | 4815 | 58 | 3 | - | 2642 | 2657 | no | 719 B |
-| 40x2 | anonymous public owners | full+reply | yes | 4714 | 58 | 3 | - | 2541 | 2558 | no | 618 B |
-| 40x2 | anonymous public owners | full+2tree | yes | 4625 | 58 | 3 | - | 2451 | 2465 | no | 529 B |
-| 40x2 | anonymous public owners | full+4credential-shared | yes | 4695 | 60 | 3 | - | 2455 | 2465 | no | 599 B |
-| 40x2 | anonymous public owners | full+4credential-disjoint | yes | 4791 | 63 | 3 | - | 2455 | 2465 | no | 695 B |
+| 40x2 | confidential signer | min | yes | 3883 | 48 | 1 | - | 2180 | 2232 | yes |  |
+| 40x2 | confidential signer | full | yes | 4438 | 58 | 3 | none | 2267 | 2277 | no | 342 B |
+| 40x2 | confidential signer | full+spl | yes | 4806 | 65 | 3 | - | 2399 | 2281 | no | 710 B, 1 accounts |
+| 40x2 | confidential signer | full+data | yes | 4638 | 58 | 3 | - | 2467 | 2473 | no | 542 B |
+| 40x2 | confidential signer | full+reply | yes | 4438 | 58 | 3 | - | 2267 | 2277 | no | 342 B |
+| 40x2 | confidential signer | full+2tree | yes | 4480 | 59 | 3 | - | 2276 | 2281 | no | 384 B |
+| 40x2 | confidential in-proof | min | yes | 3978 | 48 | 1 | - | 2276 | 2329 | yes |  |
+| 40x2 | confidential in-proof | full | yes | 4437 | 57 | 2 | none | 2363 | 2374 | no | 341 B |
+| 40x2 | confidential in-proof | full+spl | yes | 4805 | 64 | 2 | - | 2495 | 2378 | no | 709 B |
+| 40x2 | confidential in-proof | full+data | yes | 4637 | 57 | 2 | - | 2563 | 2570 | no | 541 B |
+| 40x2 | confidential in-proof | full+reply | yes | 4437 | 57 | 2 | - | 2363 | 2374 | no | 341 B |
+| 40x2 | confidential in-proof | full+2tree | yes | 4479 | 58 | 2 | - | 2372 | 2378 | no | 383 B |
+| 40x2 | anonymous hidden | min | yes | 4010 | 48 | 1 | - | 2308 | 2391 | yes |  |
+| 40x2 | anonymous hidden | full | yes | 4437 | 54 | 2 | none | 2459 | 2510 | no | 341 B |
+| 40x2 | anonymous hidden | full+spl | yes | 4805 | 61 | 2 | - | 2591 | 2514 | no | 709 B |
+| 40x2 | anonymous hidden | full+data | yes | 4637 | 54 | 2 | - | 2659 | 2706 | no | 541 B |
+| 40x2 | anonymous hidden | full+reply | yes | 4536 | 54 | 2 | - | 2558 | 2607 | no | 440 B |
+| 40x2 | anonymous hidden | full+2tree | yes | 4479 | 55 | 2 | - | 2468 | 2514 | no | 383 B |
+| 40x2 | anonymous public owners | min | yes | 3947 | 48 | 1 | - | 2244 | 2294 | yes |  |
+| 40x2 | anonymous public owners | full | yes | 4566 | 58 | 3 | none | 2395 | 2413 | no | 470 B |
+| 40x2 | anonymous public owners | full+spl | yes | 4934 | 65 | 3 | - | 2527 | 2417 | no | 838 B, 1 accounts |
+| 40x2 | anonymous public owners | full+data | yes | 4766 | 58 | 3 | - | 2595 | 2609 | no | 670 B |
+| 40x2 | anonymous public owners | full+reply | yes | 4665 | 58 | 3 | - | 2494 | 2510 | no | 569 B |
+| 40x2 | anonymous public owners | full+2tree | yes | 4608 | 59 | 3 | - | 2404 | 2417 | no | 512 B |
 | 40x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 40x2 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 40x2 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 40x2 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 40x2 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 40x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 40x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 48x2 | confidential signer | min | yes | 4369 | 55 | 1 | - | 2433 | 2496 | no | 273 B |
-| 48x2 | confidential signer | full | yes | 4959 | 66 | 3 | none | 2522 | 2541 | no | 863 B, 2 accounts |
-| 48x2 | confidential signer | full+spl | yes | 5327 | 73 | 3 | - | 2654 | 2545 | no | 1231 B, 9 accounts |
-| 48x2 | confidential signer | full+data | yes | 5159 | 66 | 3 | - | 2722 | 2737 | no | 1063 B, 2 accounts |
-| 48x2 | confidential signer | full+reply | yes | 4959 | 66 | 3 | - | 2522 | 2541 | no | 863 B, 2 accounts |
-| 48x2 | confidential signer | full+2tree | yes | 4970 | 66 | 3 | - | 2532 | 2545 | no | 874 B, 2 accounts |
-| 48x2 | confidential signer | full+4credential-shared | yes | 5040 | 68 | 3 | - | 2536 | 2545 | no | 944 B, 4 accounts |
-| 48x2 | confidential signer | full+4credential-disjoint | yes | 5136 | 71 | 3 | - | 2536 | 2545 | no | 1040 B, 7 accounts |
-| 48x2 | confidential in-proof | min | yes | 4464 | 55 | 1 | - | 2529 | 2593 | no | 368 B |
-| 48x2 | confidential in-proof | full | yes | 4958 | 65 | 2 | none | 2618 | 2638 | no | 862 B, 1 accounts |
-| 48x2 | confidential in-proof | full+spl | yes | 5326 | 72 | 2 | - | 2750 | 2642 | no | 1230 B, 8 accounts |
-| 48x2 | confidential in-proof | full+data | yes | 5158 | 65 | 2 | - | 2818 | 2834 | no | 1062 B, 1 accounts |
-| 48x2 | confidential in-proof | full+reply | yes | 4958 | 65 | 2 | - | 2618 | 2638 | no | 862 B, 1 accounts |
-| 48x2 | confidential in-proof | full+2tree | yes | 4969 | 65 | 2 | - | 2628 | 2642 | no | 873 B, 1 accounts |
-| 48x2 | confidential in-proof | full+4credential-shared | yes | 5039 | 67 | 2 | - | 2632 | 2642 | no | 943 B, 3 accounts |
-| 48x2 | confidential in-proof | full+4credential-disjoint | yes | 5135 | 70 | 2 | - | 2632 | 2642 | no | 1039 B, 6 accounts |
-| 48x2 | anonymous hidden | min | yes | 4536 | 55 | 1 | - | 2601 | 2695 | no | 440 B |
-| 48x2 | anonymous hidden | full | yes | 5006 | 62 | 2 | none | 2762 | 2822 | no | 910 B |
-| 48x2 | anonymous hidden | full+spl | yes | 5374 | 69 | 2 | - | 2894 | 2826 | no | 1278 B, 5 accounts |
-| 48x2 | anonymous hidden | full+data | yes | 5206 | 62 | 2 | - | 2962 | 3018 | no | 1110 B |
-| 48x2 | anonymous hidden | full+reply | yes | 5105 | 62 | 2 | - | 2861 | 2919 | no | 1009 B |
-| 48x2 | anonymous hidden | full+2tree | yes | 5017 | 62 | 2 | - | 2772 | 2826 | no | 921 B |
-| 48x2 | anonymous hidden | full+4credential-shared | yes | 5087 | 64 | 2 | - | 2776 | 2826 | no | 991 B |
-| 48x2 | anonymous hidden | full+4credential-disjoint | yes | 5183 | 67 | 2 | - | 2776 | 2826 | no | 1087 B, 3 accounts |
-| 48x2 | anonymous public owners | min | yes | 4473 | 55 | 1 | - | 2537 | 2598 | no | 377 B |
-| 48x2 | anonymous public owners | full | yes | 5135 | 66 | 3 | none | 2698 | 2725 | no | 1039 B, 2 accounts |
-| 48x2 | anonymous public owners | full+spl | yes | 5503 | 73 | 3 | - | 2830 | 2729 | no | 1407 B, 9 accounts |
-| 48x2 | anonymous public owners | full+data | yes | 5335 | 66 | 3 | - | 2898 | 2921 | no | 1239 B, 2 accounts |
-| 48x2 | anonymous public owners | full+reply | yes | 5234 | 66 | 3 | - | 2797 | 2822 | no | 1138 B, 2 accounts |
-| 48x2 | anonymous public owners | full+2tree | yes | 5146 | 66 | 3 | - | 2708 | 2729 | no | 1050 B, 2 accounts |
-| 48x2 | anonymous public owners | full+4credential-shared | yes | 5216 | 68 | 3 | - | 2712 | 2729 | no | 1120 B, 4 accounts |
-| 48x2 | anonymous public owners | full+4credential-disjoint | yes | 5312 | 71 | 3 | - | 2712 | 2729 | no | 1216 B, 7 accounts |
+| 48x2 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 48x2 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 48x2 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 48x2 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 48x2 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 48x2 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 48x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 48x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 49x2 | confidential signer | min | yes | 4434 | 56 | 1 | - | 2465 | 2529 | no | 338 B |
-| 49x2 | confidential signer | full | yes | 5024 | 67 | 3 | none | 2554 | 2574 | no | 928 B, 3 accounts |
-| 49x2 | confidential signer | full+spl | yes | 5392 | 74 | 3 | - | 2686 | 2578 | no | 1296 B, 10 accounts |
-| 49x2 | confidential signer | full+data | yes | 5224 | 67 | 3 | - | 2754 | 2770 | no | 1128 B, 3 accounts |
-| 49x2 | confidential signer | full+reply | yes | 5024 | 67 | 3 | - | 2554 | 2574 | no | 928 B, 3 accounts |
-| 49x2 | confidential signer | full+2tree | yes | 5036 | 67 | 3 | - | 2565 | 2578 | no | 940 B, 3 accounts |
-| 49x2 | confidential signer | full+4credential-shared | yes | 5106 | 69 | 3 | - | 2569 | 2578 | no | 1010 B, 5 accounts |
-| 49x2 | confidential signer | full+4credential-disjoint | yes | 5202 | 72 | 3 | - | 2569 | 2578 | no | 1106 B, 8 accounts |
-| 49x2 | confidential in-proof | min | yes | 4529 | 56 | 1 | - | 2561 | 2626 | no | 433 B |
-| 49x2 | confidential in-proof | full | yes | 5023 | 66 | 2 | none | 2650 | 2671 | no | 927 B, 2 accounts |
-| 49x2 | confidential in-proof | full+spl | yes | 5391 | 73 | 2 | - | 2782 | 2675 | no | 1295 B, 9 accounts |
-| 49x2 | confidential in-proof | full+data | yes | 5223 | 66 | 2 | - | 2850 | 2867 | no | 1127 B, 2 accounts |
-| 49x2 | confidential in-proof | full+reply | yes | 5023 | 66 | 2 | - | 2650 | 2671 | no | 927 B, 2 accounts |
-| 49x2 | confidential in-proof | full+2tree | yes | 5035 | 66 | 2 | - | 2661 | 2675 | no | 939 B, 2 accounts |
-| 49x2 | confidential in-proof | full+4credential-shared | yes | 5105 | 68 | 2 | - | 2665 | 2675 | no | 1009 B, 4 accounts |
-| 49x2 | confidential in-proof | full+4credential-disjoint | yes | 5201 | 71 | 2 | - | 2665 | 2675 | no | 1105 B, 7 accounts |
-| 49x2 | anonymous hidden | min | yes | 4601 | 56 | 1 | - | 2633 | 2728 | no | 505 B |
-| 49x2 | anonymous hidden | full | yes | 5071 | 63 | 2 | none | 2794 | 2855 | no | 975 B |
-| 49x2 | anonymous hidden | full+spl | yes | 5439 | 70 | 2 | - | 2926 | 2859 | no | 1343 B, 6 accounts |
-| 49x2 | anonymous hidden | full+data | yes | 5271 | 63 | 2 | - | 2994 | 3051 | no | 1175 B |
-| 49x2 | anonymous hidden | full+reply | yes | 5170 | 63 | 2 | - | 2893 | 2952 | no | 1074 B |
-| 49x2 | anonymous hidden | full+2tree | yes | 5083 | 63 | 2 | - | 2805 | 2859 | no | 987 B |
-| 49x2 | anonymous hidden | full+4credential-shared | yes | 5153 | 65 | 2 | - | 2809 | 2859 | no | 1057 B, 1 accounts |
-| 49x2 | anonymous hidden | full+4credential-disjoint | yes | 5249 | 68 | 2 | - | 2809 | 2859 | no | 1153 B, 4 accounts |
-| 49x2 | anonymous public owners | min | yes | 4538 | 56 | 1 | - | 2569 | 2631 | no | 442 B |
-| 49x2 | anonymous public owners | full | yes | 5200 | 67 | 3 | none | 2730 | 2758 | no | 1104 B, 3 accounts |
-| 49x2 | anonymous public owners | full+spl | yes | 5568 | 74 | 3 | - | 2862 | 2762 | no | 1472 B, 10 accounts |
-| 49x2 | anonymous public owners | full+data | yes | 5400 | 67 | 3 | - | 2930 | 2954 | no | 1304 B, 3 accounts |
-| 49x2 | anonymous public owners | full+reply | yes | 5299 | 67 | 3 | - | 2829 | 2855 | no | 1203 B, 3 accounts |
-| 49x2 | anonymous public owners | full+2tree | yes | 5212 | 67 | 3 | - | 2741 | 2762 | no | 1116 B, 3 accounts |
-| 49x2 | anonymous public owners | full+4credential-shared | yes | 5282 | 69 | 3 | - | 2745 | 2762 | no | 1186 B, 5 accounts |
-| 49x2 | anonymous public owners | full+4credential-disjoint | yes | 5378 | 72 | 3 | - | 2745 | 2762 | no | 1282 B, 8 accounts |
+| 49x2 | confidential signer | min | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential signer | full | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential signer | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential signer | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential signer | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential signer | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential in-proof | min | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential in-proof | full | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential in-proof | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential in-proof | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential in-proof | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | confidential in-proof | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous hidden | min | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous hidden | full | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous hidden | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous hidden | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous hidden | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous hidden | full+2tree | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous public owners | min | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous public owners | full | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous public owners | full+spl | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous public owners | full+data | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous public owners | full+reply | none | - | - | - | - | - | - | no | catalog key |
+| 49x2 | anonymous public owners | full+2tree | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | confidential entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | confidential entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | confidential entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | confidential entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | confidential entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | confidential entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 49x2 | confidential entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 49x2 | confidential entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | anonymous entry | min | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | anonymous entry | full | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | anonymous entry | full+spl | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | anonymous entry | full+data | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | anonymous entry | full+reply | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | anonymous entry | full+2tree | none | - | - | - | - | - | - | no | catalog key |
-| 49x2 | anonymous entry | full+4credential-shared | none | - | - | - | - | - | - | no | catalog key |
-| 49x2 | anonymous entry | full+4credential-disjoint | none | - | - | - | - | - | - | no | catalog key |
 | 49x2 | delegate | - | - | - | - | - | - | - | - | no | rail |
 | 49x2 | anonymous delegate | - | - | - | - | - | - | - | - | no | rail |
-| 8x1 | merge | ring | yes | 1603 | 15 | 1 | - | - | - | yes |  |
-| 8x1 | merge | owner signed | yes | 1697 | 16 | 2 | - | - | - | yes |  |
-| 24x1 | merge | ring | yes | 2643 | 31 | 1 | - | - | - | yes |  |
-| 24x1 | merge | owner signed | yes | 2737 | 32 | 2 | - | - | - | yes |  |
-| 52x1 | merge | ring | yes | 4463 | 59 | 1 | - | - | - | no | 367 B |
-| 52x1 | merge | owner signed | yes | 4557 | 60 | 2 | - | - | - | no | 461 B |
-| 0x1 | deposit | min | yes | 980 | 8 | 1 | - | - | - | yes |  |
-| 0x1 | deposit | full | yes | 1251 | 14 | 2 | - | - | - | yes |  |
-| 0x2 | deposit | min | yes | 1358 | 8 | 1 | - | - | - | yes |  |
-| 0x2 | deposit | full | yes | 1664 | 15 | 2 | - | - | - | yes |  |
-| 0x4 | deposit | min | yes | 2114 | 8 | 1 | - | - | - | yes |  |
-| 0x4 | deposit | full | yes | 2490 | 17 | 2 | - | - | - | yes |  |
-| 0x8 | deposit | min | yes | 3626 | 8 | 1 | - | - | - | yes |  |
-| 0x8 | deposit | full | yes | 4142 | 21 | 2 | - | - | - | no | 46 B |
+| 8x1 | merge | ring | yes | 1640 | 16 | 1 | - | - | - | yes |  |
+| 8x1 | merge | owner signed | yes | 1737 | 17 | 2 | - | - | - | yes |  |
+| 24x1 | merge | ring | yes | 2680 | 32 | 1 | - | - | - | yes |  |
+| 24x1 | merge | owner signed | yes | 2777 | 33 | 2 | - | - | - | yes |  |
+| 52x1 | merge | ring | yes | 4500 | 60 | 1 | - | - | - | no | 404 B |
+| 52x1 | merge | owner signed | yes | 4597 | 61 | 2 | - | - | - | no | 501 B |
+| 0x1 | deposit | min | yes | 1014 | 9 | 1 | - | - | - | yes |  |
+| 0x1 | deposit | full | yes | 1285 | 15 | 2 | - | - | - | yes |  |
+| 0x2 | deposit | min | yes | 1392 | 9 | 1 | - | - | - | yes |  |
+| 0x2 | deposit | full | yes | 1663 | 15 | 2 | - | - | - | yes |  |
+| 0x4 | deposit | min | yes | 2148 | 9 | 1 | - | - | - | yes |  |
+| 0x4 | deposit | full | yes | 2419 | 15 | 2 | - | - | - | yes |  |
+| 0x8 | deposit | min | yes | 3660 | 9 | 1 | - | - | - | yes |  |
+| 0x8 | deposit | full | yes | 3931 | 15 | 2 | - | - | - | yes |  |
 
 Entry capacities at two outputs. Each row is the widest owner run one transaction clears at that leg count, rows = run + a hidden sender. A confidential leg names its own destination, a hidden sender's legs name one. over: what stops the next owner.
 | shape | rail | load | legs | leg kind | owner run | rows | accounts | signatures | frame | SPP CPI | fits | over |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 12x2 | confidential entry | min | 0 | sol | none | - | - | - | - | - | no | 341 B |
-| 12x2 | confidential entry | full | 0 | sol | none | - | - | - | - | - | no | 727 B |
-| 12x2 | confidential entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | 927 B |
-| 12x2 | confidential entry | min | 0 | spl | none | - | - | - | - | - | no | 341 B |
-| 12x2 | confidential entry | full | 0 | spl | none | - | - | - | - | - | no | 727 B |
-| 12x2 | confidential entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | 927 B |
-| 12x2 | anonymous entry | min | 0 | sol | none | - | - | - | - | - | no | 540 B |
-| 12x2 | anonymous entry | full | 0 | sol | none | - | - | - | - | - | no | 902 B |
-| 12x2 | anonymous entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | 1201 B |
-| 12x2 | anonymous entry | min | 0 | spl | none | - | - | - | - | - | no | 540 B |
-| 12x2 | anonymous entry | full | 0 | spl | none | - | - | - | - | - | no | 902 B |
-| 12x2 | anonymous entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | 1201 B |
-| 16x2 | confidential entry | min | 0 | sol | none | - | - | - | - | - | no | 1401 B |
-| 16x2 | confidential entry | full | 0 | sol | none | - | - | - | - | - | no | 1787 B |
-| 16x2 | confidential entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | 1987 B |
-| 16x2 | confidential entry | min | 0 | spl | none | - | - | - | - | - | no | 1401 B |
-| 16x2 | confidential entry | full | 0 | spl | none | - | - | - | - | - | no | 1787 B |
-| 16x2 | confidential entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | 1987 B |
-| 16x2 | anonymous entry | min | 0 | sol | none | - | - | - | - | - | no | 1600 B |
-| 16x2 | anonymous entry | full | 0 | sol | none | - | - | - | - | - | no | 1962 B |
-| 16x2 | anonymous entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | 2261 B |
-| 16x2 | anonymous entry | min | 0 | spl | none | - | - | - | - | - | no | 1600 B |
-| 16x2 | anonymous entry | full | 0 | spl | none | - | - | - | - | - | no | 1962 B |
-| 16x2 | anonymous entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | 2261 B |
-| 24x2 | confidential entry | min | 0 | sol | none | - | - | - | - | - | no | 3521 B |
-| 24x2 | confidential entry | full | 0 | sol | none | - | - | - | - | - | no | 3907 B |
-| 24x2 | confidential entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | 4107 B |
-| 24x2 | confidential entry | min | 0 | spl | none | - | - | - | - | - | no | 3521 B |
-| 24x2 | confidential entry | full | 0 | spl | none | - | - | - | - | - | no | 3907 B |
-| 24x2 | confidential entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | 4107 B |
-| 24x2 | anonymous entry | min | 0 | sol | none | - | - | - | - | - | no | 3720 B |
-| 24x2 | anonymous entry | full | 0 | sol | none | - | - | - | - | - | no | 4082 B |
-| 24x2 | anonymous entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | 4381 B |
-| 24x2 | anonymous entry | min | 0 | spl | none | - | - | - | - | - | no | 3720 B |
-| 24x2 | anonymous entry | full | 0 | spl | none | - | - | - | - | - | no | 4082 B |
-| 24x2 | anonymous entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | 4381 B |
+| 12x2 | confidential entry | min | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | min | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 12x2 | confidential entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | min | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | min | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 12x2 | anonymous entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | min | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | min | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 16x2 | confidential entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | min | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | min | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 16x2 | anonymous entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | min | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | min | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 24x2 | confidential entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | min | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full+data+reply | 0 | sol | none | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | min | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full | 0 | spl | none | - | - | - | - | - | no | catalog key |
+| 24x2 | anonymous entry | full+data+reply | 0 | spl | none | - | - | - | - | - | no | catalog key |
 
-Maxima. Load max is full with data tails, every extension but the cache, two SPP input trees and four disjoint credential state trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.
+Maxima. Load max is full with data tails, every extension but the cache, two SPP input trees, replies on anonymous frames. Each row widens one axis from that load to the largest value one transaction clears. reply: the reply length. messages: empty application messages. message bytes: one application message. over: what refuses one more step. Heap is not measured here.
 | shape | rail | axis | widest | frame | SPP CPI | bytes | accounts | signatures | over |
 |---|---|---|---|---|---|---|---|---|---|
-| 1x2 | confidential signer | messages | 50 | 3033 | 2954 | 4082 | 24 | 3 | 20 B |
-| 1x2 | confidential signer | message bytes | 1680 | 3047 | 2968 | 4096 | 24 | 3 | 1 B |
-| 1x2 | confidential in-proof | messages | 50 | 3129 | 3051 | 4081 | 23 | 2 | 19 B |
-| 1x2 | confidential in-proof | message bytes | 1681 | 3144 | 3066 | 4096 | 23 | 2 | 1 B |
-| 1x2 | anonymous hidden | reply | 1666 | 3240 | 3201 | 4096 | 20 | 2 | 1 B |
-| 1x2 | anonymous hidden | messages | 46 | 3236 | 3196 | 4092 | 20 | 2 | 30 B |
-| 1x2 | anonymous hidden | message bytes | 1534 | 3240 | 3200 | 4096 | 20 | 2 | 1 B |
-| 1x2 | anonymous public owners | reply | 1537 | 3047 | 2975 | 4096 | 24 | 3 | 1 B |
-| 1x2 | anonymous public owners | messages | 42 | 3036 | 2963 | 4085 | 24 | 3 | 23 B |
-| 1x2 | anonymous public owners | message bytes | 1405 | 3047 | 2974 | 4096 | 24 | 3 | 1 B |
-| 1x2 | confidential entry | messages | 44 | 3037 | 2958 | 4086 | 24 | 3 | 24 B |
-| 1x2 | confidential entry | message bytes | 1472 | 3047 | 2968 | 4096 | 24 | 3 | 1 B |
-| 1x2 | anonymous entry | reply | 1426 | 3240 | 3169 | 4096 | 20 | 2 | 1 B |
-| 1x2 | anonymous entry | messages | 39 | 3238 | 3166 | 4094 | 20 | 2 | 32 B |
-| 1x2 | anonymous entry | message bytes | 1294 | 3240 | 3168 | 4096 | 20 | 2 | 1 B |
-| 1x4 | confidential signer | messages | 31 | 3019 | 3008 | 4068 | 24 | 3 | 6 B |
-| 1x4 | confidential signer | message bytes | 1048 | 3047 | 3036 | 4096 | 24 | 3 | 1 B |
-| 1x4 | confidential in-proof | messages | 31 | 3115 | 3105 | 4067 | 23 | 2 | 5 B |
-| 1x4 | confidential in-proof | message bytes | 1049 | 3144 | 3134 | 4096 | 23 | 2 | 1 B |
-| 1x4 | anonymous hidden | reply | 323 | 3239 | 3268 | 4095 | 20 | 2 | 2 B |
-| 1x4 | anonymous hidden | messages | 19 | 3208 | 3236 | 4064 | 20 | 2 | 2 B |
-| 1x4 | anonymous hidden | message bytes | 644 | 3240 | 3268 | 4096 | 20 | 2 | 1 B |
-| 1x4 | anonymous public owners | reply | 280 | 3046 | 3042 | 4095 | 24 | 3 | 2 B |
-| 1x4 | anonymous public owners | messages | 16 | 3042 | 3037 | 4091 | 24 | 3 | 29 B |
-| 1x4 | anonymous public owners | message bytes | 515 | 3047 | 3042 | 4096 | 24 | 3 | 1 B |
-| 1x4 | confidential entry | messages | 25 | 3023 | 3012 | 4072 | 24 | 3 | 10 B |
-| 1x4 | confidential entry | message bytes | 840 | 3047 | 3036 | 4096 | 24 | 3 | 1 B |
-| 1x4 | anonymous entry | reply | 243 | 3239 | 3236 | 4095 | 20 | 2 | 2 B |
-| 1x4 | anonymous entry | messages | 12 | 3210 | 3206 | 4066 | 20 | 2 | 4 B |
-| 1x4 | anonymous entry | message bytes | 404 | 3240 | 3236 | 4096 | 20 | 2 | 1 B |
-| 1x8 | confidential signer | messages | none | - | - | - | - | - | 181 B |
-| 1x8 | confidential signer | message bytes | none | - | - | - | - | - | 216 B |
-| 1x8 | confidential in-proof | messages | none | - | - | - | - | - | 180 B |
-| 1x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 215 B |
-| 1x8 | anonymous hidden | reply | none | - | - | - | - | - | 1101 B |
-| 1x8 | anonymous hidden | messages | none | - | - | - | - | - | 1101 B |
-| 1x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1136 B |
-| 1x8 | anonymous public owners | reply | none | - | - | - | - | - | 1230 B |
-| 1x8 | anonymous public owners | messages | none | - | - | - | - | - | 1230 B |
-| 1x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1265 B |
-| 1x8 | confidential entry | messages | none | - | - | - | - | - | 389 B |
-| 1x8 | confidential entry | message bytes | none | - | - | - | - | - | 424 B |
-| 1x8 | anonymous entry | reply | none | - | - | - | - | - | 1341 B |
-| 1x8 | anonymous entry | messages | none | - | - | - | - | - | 1341 B |
-| 1x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1376 B |
-| 2x2 | confidential signer | messages | 48 | 2997 | 2919 | 4079 | 25 | 3 | 17 B |
-| 2x2 | confidential signer | message bytes | 1615 | 3014 | 2936 | 4096 | 25 | 3 | 1 B |
-| 2x2 | confidential in-proof | messages | 48 | 3093 | 3016 | 4078 | 24 | 2 | 16 B |
-| 2x2 | confidential in-proof | message bytes | 1616 | 3111 | 3034 | 4096 | 24 | 2 | 1 B |
-| 2x2 | anonymous hidden | reply | 1601 | 3207 | 3169 | 4096 | 21 | 2 | 1 B |
-| 2x2 | anonymous hidden | messages | 44 | 3200 | 3161 | 4089 | 21 | 2 | 27 B |
-| 2x2 | anonymous hidden | message bytes | 1469 | 3207 | 3168 | 4096 | 21 | 2 | 1 B |
-| 2x2 | anonymous public owners | reply | 1472 | 3014 | 2943 | 4096 | 25 | 3 | 1 B |
-| 2x2 | anonymous public owners | messages | 40 | 3000 | 2928 | 4082 | 25 | 3 | 20 B |
-| 2x2 | anonymous public owners | message bytes | 1340 | 3014 | 2942 | 4096 | 25 | 3 | 1 B |
-| 2x2 | confidential entry | messages | 36 | 2997 | 2919 | 4079 | 25 | 3 | 17 B |
-| 2x2 | confidential entry | message bytes | 1207 | 3014 | 2936 | 4096 | 25 | 3 | 1 B |
-| 2x2 | anonymous entry | reply | 1161 | 3207 | 3137 | 4096 | 21 | 2 | 1 B |
-| 2x2 | anonymous entry | messages | 31 | 3198 | 3127 | 4087 | 21 | 2 | 25 B |
-| 2x2 | anonymous entry | message bytes | 1029 | 3207 | 3136 | 4096 | 21 | 2 | 1 B |
-| 2x2 | delegate | messages | 55 | 3179 | 3157 | 4065 | 21 | 2 | 3 B |
-| 2x2 | delegate | message bytes | 1867 | 3210 | 3188 | 4096 | 21 | 2 | 1 B |
-| 2x2 | anonymous delegate | reply | 1724 | 3210 | 3195 | 4096 | 21 | 2 | 1 B |
-| 2x2 | anonymous delegate | messages | 47 | 3182 | 3166 | 4068 | 21 | 2 | 6 B |
-| 2x2 | anonymous delegate | message bytes | 1592 | 3210 | 3194 | 4096 | 21 | 2 | 1 B |
-| 2x4 | confidential signer | messages | 29 | 2983 | 2973 | 4065 | 25 | 3 | 3 B |
-| 2x4 | confidential signer | message bytes | 983 | 3014 | 3004 | 4096 | 25 | 3 | 1 B |
-| 2x4 | confidential in-proof | messages | 29 | 3079 | 3070 | 4064 | 24 | 2 | 2 B |
-| 2x4 | confidential in-proof | message bytes | 984 | 3111 | 3102 | 4096 | 24 | 2 | 1 B |
-| 2x4 | anonymous hidden | reply | 301 | 3205 | 3235 | 4094 | 21 | 2 | 1 B |
-| 2x4 | anonymous hidden | messages | 18 | 3206 | 3235 | 4095 | 21 | 2 | 33 B |
-| 2x4 | anonymous hidden | message bytes | 579 | 3207 | 3236 | 4096 | 21 | 2 | 1 B |
-| 2x4 | anonymous public owners | reply | 258 | 3012 | 3009 | 4094 | 25 | 3 | 1 B |
-| 2x4 | anonymous public owners | messages | 14 | 3006 | 3002 | 4088 | 25 | 3 | 26 B |
-| 2x4 | anonymous public owners | message bytes | 450 | 3014 | 3010 | 4096 | 25 | 3 | 1 B |
-| 2x4 | confidential entry | messages | 17 | 2983 | 2973 | 4065 | 25 | 3 | 3 B |
-| 2x4 | confidential entry | message bytes | 575 | 3014 | 3004 | 4096 | 25 | 3 | 1 B |
-| 2x4 | anonymous entry | reply | 155 | 3207 | 3205 | 4096 | 21 | 2 | 3 B |
-| 2x4 | anonymous entry | messages | 5 | 3204 | 3201 | 4093 | 21 | 2 | 31 B |
-| 2x4 | anonymous entry | message bytes | 139 | 3207 | 3204 | 4096 | 21 | 2 | 1 B |
-| 1x16 | confidential signer | messages | none | - | - | - | - | - | 2711 B |
-| 1x16 | confidential signer | message bytes | none | - | - | - | - | - | 2746 B |
-| 1x16 | confidential in-proof | messages | none | - | - | - | - | - | 2710 B |
-| 1x16 | confidential in-proof | message bytes | none | - | - | - | - | - | 2745 B |
-| 1x16 | anonymous hidden | reply | none | - | - | - | - | - | 4663 B |
-| 1x16 | anonymous hidden | messages | none | - | - | - | - | - | 4663 B |
-| 1x16 | anonymous hidden | message bytes | none | - | - | - | - | - | 4698 B |
-| 1x16 | anonymous public owners | reply | none | - | - | - | - | - | 4792 B |
-| 1x16 | anonymous public owners | messages | none | - | - | - | - | - | 4792 B |
-| 1x16 | anonymous public owners | message bytes | none | - | - | - | - | - | 4827 B |
-| 2x8 | confidential signer | messages | none | - | - | - | - | - | 246 B |
-| 2x8 | confidential signer | message bytes | none | - | - | - | - | - | 281 B |
-| 2x8 | confidential in-proof | messages | none | - | - | - | - | - | 245 B |
-| 2x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 280 B |
-| 2x8 | anonymous hidden | reply | none | - | - | - | - | - | 1166 B |
-| 2x8 | anonymous hidden | messages | none | - | - | - | - | - | 1166 B |
-| 2x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1201 B |
-| 2x8 | anonymous public owners | reply | none | - | - | - | - | - | 1295 B |
-| 2x8 | anonymous public owners | messages | none | - | - | - | - | - | 1295 B |
-| 2x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1330 B |
-| 2x8 | confidential entry | messages | none | - | - | - | - | - | 654 B |
-| 2x8 | confidential entry | message bytes | none | - | - | - | - | - | 689 B |
-| 2x8 | anonymous entry | reply | none | - | - | - | - | - | 1606 B |
-| 2x8 | anonymous entry | messages | none | - | - | - | - | - | 1606 B |
-| 2x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1641 B |
-| 3x2 | confidential signer | messages | 46 | 2961 | 2884 | 4076 | 26 | 3 | 14 B |
-| 3x2 | confidential signer | message bytes | 1550 | 2981 | 2904 | 4096 | 26 | 3 | 1 B |
-| 3x2 | confidential in-proof | messages | 46 | 3057 | 2981 | 4075 | 25 | 2 | 13 B |
-| 3x2 | confidential in-proof | message bytes | 1551 | 3078 | 3002 | 4096 | 25 | 2 | 1 B |
-| 3x2 | anonymous hidden | reply | 1536 | 3174 | 3137 | 4096 | 22 | 2 | 1 B |
-| 3x2 | anonymous hidden | messages | 42 | 3164 | 3126 | 4086 | 22 | 2 | 24 B |
-| 3x2 | anonymous hidden | message bytes | 1404 | 3174 | 3136 | 4096 | 22 | 2 | 1 B |
-| 3x2 | anonymous public owners | reply | 1407 | 2981 | 2911 | 4096 | 26 | 3 | 1 B |
-| 3x2 | anonymous public owners | messages | 38 | 2964 | 2893 | 4079 | 26 | 3 | 17 B |
-| 3x2 | anonymous public owners | message bytes | 1275 | 2981 | 2910 | 4096 | 26 | 3 | 1 B |
-| 3x2 | confidential entry | messages | 28 | 2957 | 2880 | 4072 | 26 | 3 | 10 B |
-| 3x2 | confidential entry | message bytes | 942 | 2981 | 2904 | 4096 | 26 | 3 | 1 B |
-| 3x2 | anonymous entry | reply | 896 | 3174 | 3105 | 4096 | 22 | 2 | 1 B |
-| 3x2 | anonymous entry | messages | 23 | 3158 | 3088 | 4080 | 22 | 2 | 18 B |
-| 3x2 | anonymous entry | message bytes | 764 | 3174 | 3104 | 4096 | 22 | 2 | 1 B |
-| 3x4 | confidential signer | messages | 28 | 2981 | 2972 | 4096 | 26 | 3 | 34 B |
-| 3x4 | confidential signer | message bytes | 918 | 2981 | 2972 | 4096 | 26 | 3 | 1 B |
-| 3x4 | confidential in-proof | messages | 28 | 3077 | 3069 | 4095 | 25 | 2 | 33 B |
-| 3x4 | confidential in-proof | message bytes | 919 | 3078 | 3070 | 4096 | 25 | 2 | 1 B |
-| 3x4 | anonymous hidden | reply | 280 | 3174 | 3205 | 4096 | 22 | 2 | 3 B |
-| 3x4 | anonymous hidden | messages | 16 | 3170 | 3200 | 4092 | 22 | 2 | 30 B |
-| 3x4 | anonymous hidden | message bytes | 514 | 3174 | 3204 | 4096 | 22 | 2 | 1 B |
-| 3x4 | anonymous public owners | reply | 237 | 2981 | 2979 | 4096 | 26 | 3 | 3 B |
-| 3x4 | anonymous public owners | messages | 12 | 2970 | 2967 | 4085 | 26 | 3 | 23 B |
-| 3x4 | anonymous public owners | message bytes | 385 | 2981 | 2978 | 4096 | 26 | 3 | 1 B |
-| 3x4 | confidential entry | messages | 10 | 2977 | 2968 | 4092 | 26 | 3 | 30 B |
-| 3x4 | confidential entry | message bytes | 310 | 2981 | 2972 | 4096 | 26 | 3 | 1 B |
-| 3x4 | anonymous entry | reply | none | - | - | - | - | - | 91 B |
-| 3x4 | anonymous entry | messages | none | - | - | - | - | - | 91 B |
-| 3x4 | anonymous entry | message bytes | none | - | - | - | - | - | 126 B |
-| 2x16 | confidential signer | messages | none | - | - | - | - | - | 2776 B |
-| 2x16 | confidential signer | message bytes | none | - | - | - | - | - | 2811 B |
-| 2x16 | confidential in-proof | messages | none | - | - | - | - | - | 2775 B |
-| 2x16 | confidential in-proof | message bytes | none | - | - | - | - | - | 2810 B |
-| 2x16 | anonymous hidden | reply | none | - | - | - | - | - | 4728 B |
-| 2x16 | anonymous hidden | messages | none | - | - | - | - | - | 4728 B |
-| 2x16 | anonymous hidden | message bytes | none | - | - | - | - | - | 4763 B |
-| 2x16 | anonymous public owners | reply | none | - | - | - | - | - | 4857 B |
-| 2x16 | anonymous public owners | messages | none | - | - | - | - | - | 4857 B |
-| 2x16 | anonymous public owners | message bytes | none | - | - | - | - | - | 4892 B |
-| 3x8 | confidential signer | messages | none | - | - | - | - | - | 311 B |
-| 3x8 | confidential signer | message bytes | none | - | - | - | - | - | 346 B |
-| 3x8 | confidential in-proof | messages | none | - | - | - | - | - | 310 B |
-| 3x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 345 B |
-| 3x8 | anonymous hidden | reply | none | - | - | - | - | - | 1231 B |
-| 3x8 | anonymous hidden | messages | none | - | - | - | - | - | 1231 B |
-| 3x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1266 B |
-| 3x8 | anonymous public owners | reply | none | - | - | - | - | - | 1360 B |
-| 3x8 | anonymous public owners | messages | none | - | - | - | - | - | 1360 B |
-| 3x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1395 B |
-| 3x8 | confidential entry | messages | none | - | - | - | - | - | 919 B |
-| 3x8 | confidential entry | message bytes | none | - | - | - | - | - | 954 B |
-| 3x8 | anonymous entry | reply | none | - | - | - | - | - | 1871 B |
-| 3x8 | anonymous entry | messages | none | - | - | - | - | - | 1871 B |
-| 3x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1906 B |
-| 4x2 | confidential signer | messages | 44 | 2925 | 2849 | 4073 | 27 | 3 | 11 B |
-| 4x2 | confidential signer | message bytes | 1485 | 2948 | 2872 | 4096 | 27 | 3 | 1 B |
-| 4x2 | confidential in-proof | messages | 44 | 3021 | 2946 | 4072 | 26 | 2 | 10 B |
-| 4x2 | confidential in-proof | message bytes | 1486 | 3045 | 2970 | 4096 | 26 | 2 | 1 B |
-| 4x2 | anonymous hidden | reply | 1471 | 3141 | 3105 | 4096 | 23 | 2 | 1 B |
-| 4x2 | anonymous hidden | messages | 40 | 3128 | 3091 | 4083 | 23 | 2 | 21 B |
-| 4x2 | anonymous hidden | message bytes | 1339 | 3141 | 3104 | 4096 | 23 | 2 | 1 B |
-| 4x2 | anonymous public owners | reply | 1342 | 2948 | 2879 | 4096 | 27 | 3 | 1 B |
-| 4x2 | anonymous public owners | messages | 36 | 2928 | 2858 | 4076 | 27 | 3 | 14 B |
-| 4x2 | anonymous public owners | message bytes | 1210 | 2948 | 2878 | 4096 | 27 | 3 | 1 B |
-| 4x2 | confidential entry | messages | 20 | 2917 | 2841 | 4065 | 27 | 3 | 3 B |
-| 4x2 | confidential entry | message bytes | 677 | 2948 | 2872 | 4096 | 27 | 3 | 1 B |
-| 4x2 | anonymous entry | reply | 631 | 3141 | 3073 | 4096 | 23 | 2 | 1 B |
-| 4x2 | anonymous entry | messages | 15 | 3118 | 3049 | 4073 | 23 | 2 | 11 B |
-| 4x2 | anonymous entry | message bytes | 499 | 3141 | 3072 | 4096 | 23 | 2 | 1 B |
-| 4x4 | confidential signer | messages | 26 | 2945 | 2937 | 4093 | 27 | 3 | 31 B |
-| 4x4 | confidential signer | message bytes | 853 | 2948 | 2940 | 4096 | 27 | 3 | 1 B |
-| 4x4 | confidential in-proof | messages | 26 | 3041 | 3034 | 4092 | 26 | 2 | 30 B |
-| 4x4 | confidential in-proof | message bytes | 854 | 3045 | 3038 | 4096 | 26 | 2 | 1 B |
-| 4x4 | anonymous hidden | reply | 258 | 3140 | 3172 | 4095 | 23 | 2 | 2 B |
-| 4x4 | anonymous hidden | messages | 14 | 3134 | 3165 | 4089 | 23 | 2 | 27 B |
-| 4x4 | anonymous hidden | message bytes | 449 | 3141 | 3172 | 4096 | 23 | 2 | 1 B |
-| 4x4 | anonymous public owners | reply | 215 | 2947 | 2946 | 4095 | 27 | 3 | 2 B |
-| 4x4 | anonymous public owners | messages | 10 | 2934 | 2932 | 4082 | 27 | 3 | 20 B |
-| 4x4 | anonymous public owners | message bytes | 320 | 2948 | 2946 | 4096 | 27 | 3 | 1 B |
-| 4x4 | confidential entry | messages | 2 | 2937 | 2929 | 4085 | 27 | 3 | 23 B |
-| 4x4 | confidential entry | message bytes | 45 | 2948 | 2940 | 4096 | 27 | 3 | 1 B |
-| 4x4 | anonymous entry | reply | none | - | - | - | - | - | 356 B |
-| 4x4 | anonymous entry | messages | none | - | - | - | - | - | 356 B |
-| 4x4 | anonymous entry | message bytes | none | - | - | - | - | - | 391 B |
-| 4x4 | delegate | messages | 33 | 3127 | 3175 | 4079 | 23 | 2 | 17 B |
-| 4x4 | delegate | message bytes | 1105 | 3144 | 3192 | 4096 | 23 | 2 | 1 B |
-| 4x4 | anonymous delegate | reply | 299 | 3143 | 3198 | 4095 | 23 | 2 | 2 B |
-| 4x4 | anonymous delegate | messages | 17 | 3116 | 3170 | 4068 | 23 | 2 | 6 B |
-| 4x4 | anonymous delegate | message bytes | 572 | 3144 | 3198 | 4096 | 23 | 2 | 1 B |
-| 4x8 | confidential signer | messages | none | - | - | - | - | - | 376 B |
-| 4x8 | confidential signer | message bytes | none | - | - | - | - | - | 411 B |
-| 4x8 | confidential in-proof | messages | none | - | - | - | - | - | 375 B |
-| 4x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 410 B |
-| 4x8 | anonymous hidden | reply | none | - | - | - | - | - | 1296 B |
-| 4x8 | anonymous hidden | messages | none | - | - | - | - | - | 1296 B |
-| 4x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1331 B |
-| 4x8 | anonymous public owners | reply | none | - | - | - | - | - | 1425 B |
-| 4x8 | anonymous public owners | messages | none | - | - | - | - | - | 1425 B |
-| 4x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1460 B |
-| 4x8 | confidential entry | messages | none | - | - | - | - | - | 1184 B |
-| 4x8 | confidential entry | message bytes | none | - | - | - | - | - | 1219 B |
-| 4x8 | anonymous entry | reply | none | - | - | - | - | - | 2136 B |
-| 4x8 | anonymous entry | messages | none | - | - | - | - | - | 2136 B |
-| 4x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2171 B |
-| 5x2 | confidential signer | messages | 42 | 2889 | 2814 | 4070 | 28 | 3 | 8 B |
-| 5x2 | confidential signer | message bytes | 1420 | 2915 | 2840 | 4096 | 28 | 3 | 1 B |
-| 5x2 | confidential in-proof | messages | 42 | 2985 | 2911 | 4069 | 27 | 2 | 7 B |
-| 5x2 | confidential in-proof | message bytes | 1421 | 3012 | 2938 | 4096 | 27 | 2 | 1 B |
-| 5x2 | anonymous hidden | reply | 1406 | 3108 | 3073 | 4096 | 24 | 2 | 1 B |
-| 5x2 | anonymous hidden | messages | 38 | 3092 | 3056 | 4080 | 24 | 2 | 18 B |
-| 5x2 | anonymous hidden | message bytes | 1274 | 3108 | 3072 | 4096 | 24 | 2 | 1 B |
-| 5x2 | anonymous public owners | reply | 1277 | 2915 | 2847 | 4096 | 28 | 3 | 1 B |
-| 5x2 | anonymous public owners | messages | 34 | 2892 | 2823 | 4073 | 28 | 3 | 11 B |
-| 5x2 | anonymous public owners | message bytes | 1145 | 2915 | 2846 | 4096 | 28 | 3 | 1 B |
-| 5x2 | confidential entry | messages | 13 | 2911 | 2836 | 4092 | 28 | 3 | 30 B |
-| 5x2 | confidential entry | message bytes | 412 | 2915 | 2840 | 4096 | 28 | 3 | 1 B |
-| 5x2 | anonymous entry | reply | 366 | 3108 | 3041 | 4096 | 24 | 2 | 1 B |
-| 5x2 | anonymous entry | messages | 7 | 3078 | 3010 | 4066 | 24 | 2 | 4 B |
-| 5x2 | anonymous entry | message bytes | 234 | 3108 | 3040 | 4096 | 24 | 2 | 1 B |
-| 5x4 | confidential signer | messages | 24 | 2909 | 2902 | 4090 | 28 | 3 | 28 B |
-| 5x4 | confidential signer | message bytes | 788 | 2915 | 2908 | 4096 | 28 | 3 | 1 B |
-| 5x4 | confidential in-proof | messages | 24 | 3005 | 2999 | 4089 | 27 | 2 | 27 B |
-| 5x4 | confidential in-proof | message bytes | 789 | 3012 | 3006 | 4096 | 27 | 2 | 1 B |
-| 5x4 | anonymous hidden | reply | 236 | 3106 | 3139 | 4094 | 24 | 2 | 1 B |
-| 5x4 | anonymous hidden | messages | 12 | 3098 | 3130 | 4086 | 24 | 2 | 24 B |
-| 5x4 | anonymous hidden | message bytes | 384 | 3108 | 3140 | 4096 | 24 | 2 | 1 B |
-| 5x4 | anonymous public owners | reply | 193 | 2913 | 2913 | 4094 | 28 | 3 | 1 B |
-| 5x4 | anonymous public owners | messages | 8 | 2898 | 2897 | 4079 | 28 | 3 | 17 B |
-| 5x4 | anonymous public owners | message bytes | 255 | 2915 | 2914 | 4096 | 28 | 3 | 1 B |
-| 5x4 | confidential entry | messages | none | - | - | - | - | - | 185 B |
-| 5x4 | confidential entry | message bytes | none | - | - | - | - | - | 220 B |
-| 5x4 | anonymous entry | reply | none | - | - | - | - | - | 621 B |
-| 5x4 | anonymous entry | messages | none | - | - | - | - | - | 621 B |
-| 5x4 | anonymous entry | message bytes | none | - | - | - | - | - | 656 B |
-| 4x16 | confidential signer | messages | none | - | - | - | - | - | 2906 B |
-| 4x16 | confidential signer | message bytes | none | - | - | - | - | - | 2941 B |
-| 4x16 | confidential in-proof | messages | none | - | - | - | - | - | 2905 B |
-| 4x16 | confidential in-proof | message bytes | none | - | - | - | - | - | 2940 B |
-| 4x16 | anonymous hidden | reply | none | - | - | - | - | - | 4858 B |
-| 4x16 | anonymous hidden | messages | none | - | - | - | - | - | 4858 B |
-| 4x16 | anonymous hidden | message bytes | none | - | - | - | - | - | 4893 B |
-| 4x16 | anonymous public owners | reply | none | - | - | - | - | - | 4987 B |
-| 4x16 | anonymous public owners | messages | none | - | - | - | - | - | 4987 B |
-| 4x16 | anonymous public owners | message bytes | none | - | - | - | - | - | 5022 B |
-| 5x8 | confidential signer | messages | none | - | - | - | - | - | 441 B |
-| 5x8 | confidential signer | message bytes | none | - | - | - | - | - | 476 B |
-| 5x8 | confidential in-proof | messages | none | - | - | - | - | - | 440 B |
-| 5x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 475 B |
-| 5x8 | anonymous hidden | reply | none | - | - | - | - | - | 1361 B |
-| 5x8 | anonymous hidden | messages | none | - | - | - | - | - | 1361 B |
-| 5x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1396 B |
-| 5x8 | anonymous public owners | reply | none | - | - | - | - | - | 1490 B |
-| 5x8 | anonymous public owners | messages | none | - | - | - | - | - | 1490 B |
-| 5x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1525 B |
-| 6x2 | confidential signer | messages | 40 | 2853 | 2779 | 4067 | 29 | 3 | 5 B |
-| 6x2 | confidential signer | message bytes | 1355 | 2882 | 2808 | 4096 | 29 | 3 | 1 B |
-| 6x2 | confidential in-proof | messages | 40 | 2949 | 2876 | 4066 | 28 | 2 | 4 B |
-| 6x2 | confidential in-proof | message bytes | 1356 | 2979 | 2906 | 4096 | 28 | 2 | 1 B |
-| 6x2 | anonymous hidden | reply | 1341 | 3075 | 3041 | 4096 | 25 | 2 | 1 B |
-| 6x2 | anonymous hidden | messages | 36 | 3056 | 3021 | 4077 | 25 | 2 | 15 B |
-| 6x2 | anonymous hidden | message bytes | 1209 | 3075 | 3040 | 4096 | 25 | 2 | 1 B |
-| 6x2 | anonymous public owners | reply | 1212 | 2882 | 2815 | 4096 | 29 | 3 | 1 B |
-| 6x2 | anonymous public owners | messages | 32 | 2856 | 2788 | 4070 | 29 | 3 | 8 B |
-| 6x2 | anonymous public owners | message bytes | 1080 | 2882 | 2814 | 4096 | 29 | 3 | 1 B |
-| 6x2 | confidential entry | messages | 5 | 2871 | 2797 | 4085 | 29 | 3 | 23 B |
-| 6x2 | confidential entry | message bytes | 147 | 2882 | 2808 | 4096 | 29 | 3 | 1 B |
-| 6x2 | anonymous entry | reply | 101 | 3075 | 3009 | 4096 | 25 | 2 | 1 B |
-| 6x2 | anonymous entry | messages | 0 | 3071 | 3005 | 4092 | 25 | 2 | 31 B |
-| 6x2 | anonymous entry | message bytes | none | - | - | - | - | - | 31 B |
-| 6x4 | confidential signer | messages | 22 | 2873 | 2867 | 4087 | 29 | 3 | 25 B |
-| 6x4 | confidential signer | message bytes | 723 | 2882 | 2876 | 4096 | 29 | 3 | 1 B |
-| 6x4 | confidential in-proof | messages | 22 | 2969 | 2964 | 4086 | 28 | 2 | 24 B |
-| 6x4 | confidential in-proof | message bytes | 724 | 2979 | 2974 | 4096 | 28 | 2 | 1 B |
-| 6x4 | anonymous hidden | reply | 215 | 3075 | 3109 | 4096 | 25 | 2 | 3 B |
-| 6x4 | anonymous hidden | messages | 10 | 3062 | 3095 | 4083 | 25 | 2 | 21 B |
-| 6x4 | anonymous hidden | message bytes | 319 | 3075 | 3108 | 4096 | 25 | 2 | 1 B |
-| 6x4 | anonymous public owners | reply | 172 | 2882 | 2883 | 4096 | 29 | 3 | 3 B |
-| 6x4 | anonymous public owners | messages | 6 | 2862 | 2862 | 4076 | 29 | 3 | 14 B |
-| 6x4 | anonymous public owners | message bytes | 190 | 2882 | 2882 | 4096 | 29 | 3 | 1 B |
-| 6x4 | confidential entry | messages | none | - | - | - | - | - | 450 B |
-| 6x4 | confidential entry | message bytes | none | - | - | - | - | - | 485 B |
-| 6x4 | anonymous entry | reply | none | - | - | - | - | - | 886 B |
-| 6x4 | anonymous entry | messages | none | - | - | - | - | - | 886 B |
-| 6x4 | anonymous entry | message bytes | none | - | - | - | - | - | 921 B |
-| 5x16 | confidential signer | messages | none | - | - | - | - | - | 2971 B |
-| 5x16 | confidential signer | message bytes | none | - | - | - | - | - | 3006 B |
-| 5x16 | confidential in-proof | messages | none | - | - | - | - | - | 2970 B |
-| 5x16 | confidential in-proof | message bytes | none | - | - | - | - | - | 3005 B |
-| 5x16 | anonymous hidden | reply | none | - | - | - | - | - | 4923 B |
-| 5x16 | anonymous hidden | messages | none | - | - | - | - | - | 4923 B |
-| 5x16 | anonymous hidden | message bytes | none | - | - | - | - | - | 4958 B |
-| 5x16 | anonymous public owners | reply | none | - | - | - | - | - | 5052 B |
-| 5x16 | anonymous public owners | messages | none | - | - | - | - | - | 5052 B |
-| 5x16 | anonymous public owners | message bytes | none | - | - | - | - | - | 5087 B |
-| 6x8 | confidential signer | messages | none | - | - | - | - | - | 506 B |
-| 6x8 | confidential signer | message bytes | none | - | - | - | - | - | 541 B |
-| 6x8 | confidential in-proof | messages | none | - | - | - | - | - | 505 B |
-| 6x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 540 B |
-| 6x8 | anonymous hidden | reply | none | - | - | - | - | - | 1426 B |
-| 6x8 | anonymous hidden | messages | none | - | - | - | - | - | 1426 B |
-| 6x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1461 B |
-| 6x8 | anonymous public owners | reply | none | - | - | - | - | - | 1555 B |
-| 6x8 | anonymous public owners | messages | none | - | - | - | - | - | 1555 B |
-| 6x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1590 B |
-| 8x2 | confidential signer | messages | 37 | 2815 | 2743 | 4095 | 31 | 3 | 33 B |
-| 8x2 | confidential signer | message bytes | 1225 | 2816 | 2744 | 4096 | 31 | 3 | 1 B |
-| 8x2 | confidential in-proof | messages | 37 | 2911 | 2840 | 4094 | 30 | 2 | 32 B |
-| 8x2 | confidential in-proof | message bytes | 1226 | 2913 | 2842 | 4096 | 30 | 2 | 1 B |
-| 8x2 | anonymous hidden | reply | 1211 | 3009 | 2977 | 4096 | 27 | 2 | 1 B |
-| 8x2 | anonymous hidden | messages | 32 | 2984 | 2951 | 4071 | 27 | 2 | 9 B |
-| 8x2 | anonymous hidden | message bytes | 1079 | 3009 | 2976 | 4096 | 27 | 2 | 1 B |
-| 8x2 | anonymous public owners | reply | 1082 | 2816 | 2751 | 4096 | 31 | 3 | 1 B |
-| 8x2 | anonymous public owners | messages | 28 | 2784 | 2718 | 4064 | 31 | 3 | 2 B |
-| 8x2 | anonymous public owners | message bytes | 950 | 2816 | 2750 | 4096 | 31 | 3 | 1 B |
-| 8x2 | confidential entry | messages | none | - | - | - | - | - | 348 B |
-| 8x2 | confidential entry | message bytes | none | - | - | - | - | - | 383 B |
-| 8x2 | anonymous entry | reply | none | - | - | - | - | - | 526 B |
-| 8x2 | anonymous entry | messages | none | - | - | - | - | - | 526 B |
-| 8x2 | anonymous entry | message bytes | none | - | - | - | - | - | 561 B |
-| 8x4 | confidential signer | messages | 18 | 2801 | 2797 | 4081 | 31 | 3 | 19 B |
-| 8x4 | confidential signer | message bytes | 593 | 2816 | 2812 | 4096 | 31 | 3 | 1 B |
-| 8x4 | confidential in-proof | messages | 18 | 2897 | 2894 | 4080 | 30 | 2 | 18 B |
-| 8x4 | confidential in-proof | message bytes | 594 | 2913 | 2910 | 4096 | 30 | 2 | 1 B |
-| 8x4 | anonymous hidden | reply | 171 | 3007 | 3043 | 4094 | 27 | 2 | 1 B |
-| 8x4 | anonymous hidden | messages | 6 | 2990 | 3025 | 4077 | 27 | 2 | 15 B |
-| 8x4 | anonymous hidden | message bytes | 189 | 3009 | 3044 | 4096 | 27 | 2 | 1 B |
-| 8x4 | anonymous public owners | reply | 128 | 2814 | 2817 | 4094 | 31 | 3 | 1 B |
-| 8x4 | anonymous public owners | messages | 2 | 2790 | 2792 | 4070 | 31 | 3 | 8 B |
-| 8x4 | anonymous public owners | message bytes | 60 | 2816 | 2818 | 4096 | 31 | 3 | 1 B |
-| 8x4 | confidential entry | messages | none | - | - | - | - | - | 980 B |
-| 8x4 | confidential entry | message bytes | none | - | - | - | - | - | 1015 B |
-| 8x4 | anonymous entry | reply | none | - | - | - | - | - | 1416 B |
-| 8x4 | anonymous entry | messages | none | - | - | - | - | - | 1416 B |
-| 8x4 | anonymous entry | message bytes | none | - | - | - | - | - | 1451 B |
-| 8x8 | confidential signer | messages | none | - | - | - | - | - | 636 B |
-| 8x8 | confidential signer | message bytes | none | - | - | - | - | - | 671 B |
-| 8x8 | confidential in-proof | messages | none | - | - | - | - | - | 635 B |
-| 8x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 670 B |
-| 8x8 | anonymous hidden | reply | none | - | - | - | - | - | 1556 B |
-| 8x8 | anonymous hidden | messages | none | - | - | - | - | - | 1556 B |
-| 8x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1591 B |
-| 8x8 | anonymous public owners | reply | none | - | - | - | - | - | 1685 B |
-| 8x8 | anonymous public owners | messages | none | - | - | - | - | - | 1685 B |
-| 8x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1720 B |
-| 8x16 | confidential signer | messages | none | - | - | - | - | - | 3166 B |
-| 8x16 | confidential signer | message bytes | none | - | - | - | - | - | 3201 B |
-| 8x16 | confidential in-proof | messages | none | - | - | - | - | - | 3165 B |
-| 8x16 | confidential in-proof | message bytes | none | - | - | - | - | - | 3200 B |
-| 8x16 | anonymous hidden | reply | none | - | - | - | - | - | 5118 B |
-| 8x16 | anonymous hidden | messages | none | - | - | - | - | - | 5118 B |
-| 8x16 | anonymous hidden | message bytes | none | - | - | - | - | - | 5153 B |
-| 8x16 | anonymous public owners | reply | none | - | - | - | - | - | 5247 B |
-| 8x16 | anonymous public owners | messages | none | - | - | - | - | - | 5247 B |
-| 8x16 | anonymous public owners | message bytes | none | - | - | - | - | - | 5282 B |
-| 12x2 | confidential signer | messages | 29 | 2672 | 2603 | 4084 | 35 | 3 | 22 B |
-| 12x2 | confidential signer | message bytes | 964 | 2684 | 2615 | 4096 | 35 | 3 | 1 B |
-| 12x2 | confidential in-proof | messages | 29 | 2768 | 2700 | 4083 | 34 | 2 | 21 B |
-| 12x2 | confidential in-proof | message bytes | 965 | 2781 | 2713 | 4096 | 34 | 2 | 1 B |
-| 12x2 | anonymous hidden | reply | 950 | 2877 | 2848 | 4096 | 31 | 2 | 1 B |
-| 12x2 | anonymous hidden | messages | 25 | 2875 | 2845 | 4094 | 31 | 2 | 32 B |
-| 12x2 | anonymous hidden | message bytes | 818 | 2877 | 2847 | 4096 | 31 | 2 | 1 B |
-| 12x2 | anonymous public owners | reply | 821 | 2684 | 2622 | 4096 | 35 | 3 | 1 B |
-| 12x2 | anonymous public owners | messages | 21 | 2675 | 2612 | 4087 | 35 | 3 | 25 B |
-| 12x2 | anonymous public owners | message bytes | 689 | 2684 | 2621 | 4096 | 35 | 3 | 1 B |
-| 12x2 | confidential entry | messages | none | - | - | - | - | - | 1409 B |
-| 12x2 | confidential entry | message bytes | none | - | - | - | - | - | 1444 B |
-| 12x2 | anonymous entry | reply | none | - | - | - | - | - | 1587 B |
-| 12x2 | anonymous entry | messages | none | - | - | - | - | - | 1587 B |
-| 12x2 | anonymous entry | message bytes | none | - | - | - | - | - | 1622 B |
-| 12x4 | confidential signer | messages | 10 | 2658 | 2657 | 4070 | 35 | 3 | 8 B |
-| 12x4 | confidential signer | message bytes | 332 | 2684 | 2683 | 4096 | 35 | 3 | 1 B |
-| 12x4 | confidential in-proof | messages | 10 | 2754 | 2754 | 4069 | 34 | 2 | 7 B |
-| 12x4 | confidential in-proof | message bytes | 333 | 2781 | 2781 | 4096 | 34 | 2 | 1 B |
-| 12x4 | anonymous hidden | reply | none | - | - | - | - | - | 37 B |
-| 12x4 | anonymous hidden | messages | none | - | - | - | - | - | 37 B |
-| 12x4 | anonymous hidden | message bytes | none | - | - | - | - | - | 72 B |
-| 12x4 | anonymous public owners | reply | none | - | - | - | - | - | 166 B |
-| 12x4 | anonymous public owners | messages | none | - | - | - | - | - | 166 B |
-| 12x4 | anonymous public owners | message bytes | none | - | - | - | - | - | 201 B |
-| 12x8 | confidential signer | messages | none | - | - | - | - | - | 897 B |
-| 12x8 | confidential signer | message bytes | none | - | - | - | - | - | 932 B |
-| 12x8 | confidential in-proof | messages | none | - | - | - | - | - | 896 B |
-| 12x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 931 B |
-| 12x8 | anonymous hidden | reply | none | - | - | - | - | - | 1817 B |
-| 12x8 | anonymous hidden | messages | none | - | - | - | - | - | 1817 B |
-| 12x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1852 B |
-| 12x8 | anonymous public owners | reply | none | - | - | - | - | - | 1946 B |
-| 12x8 | anonymous public owners | messages | none | - | - | - | - | - | 1946 B |
-| 12x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1981 B |
-| 16x2 | confidential signer | messages | 21 | 2528 | 2463 | 4072 | 39 | 3 | 10 B |
-| 16x2 | confidential signer | message bytes | 704 | 2552 | 2487 | 4096 | 39 | 3 | 1 B |
-| 16x2 | confidential in-proof | messages | 21 | 2624 | 2560 | 4071 | 38 | 2 | 9 B |
-| 16x2 | confidential in-proof | message bytes | 705 | 2649 | 2585 | 4096 | 38 | 2 | 1 B |
-| 16x2 | anonymous hidden | reply | 690 | 2745 | 2720 | 4096 | 35 | 2 | 1 B |
-| 16x2 | anonymous hidden | messages | 17 | 2731 | 2705 | 4082 | 35 | 2 | 20 B |
-| 16x2 | anonymous hidden | message bytes | 558 | 2745 | 2719 | 4096 | 35 | 2 | 1 B |
-| 16x2 | anonymous public owners | reply | 561 | 2552 | 2494 | 4096 | 39 | 3 | 1 B |
-| 16x2 | anonymous public owners | messages | 13 | 2531 | 2472 | 4075 | 39 | 3 | 13 B |
-| 16x2 | anonymous public owners | message bytes | 429 | 2552 | 2493 | 4096 | 39 | 3 | 1 B |
-| 16x2 | confidential entry | messages | none | - | - | - | - | - | 2469 B |
-| 16x2 | confidential entry | message bytes | none | - | - | - | - | - | 2504 B |
-| 16x2 | anonymous entry | reply | none | - | - | - | - | - | 2647 B |
-| 16x2 | anonymous entry | messages | none | - | - | - | - | - | 2647 B |
-| 16x2 | anonymous entry | message bytes | none | - | - | - | - | - | 2682 B |
-| 16x4 | confidential signer | messages | 3 | 2548 | 2551 | 4092 | 39 | 3 | 30 B |
-| 16x4 | confidential signer | message bytes | 72 | 2552 | 2555 | 4096 | 39 | 3 | 1 B |
-| 16x4 | confidential in-proof | messages | 3 | 2644 | 2648 | 4091 | 38 | 2 | 29 B |
-| 16x4 | confidential in-proof | message bytes | 73 | 2649 | 2653 | 4096 | 38 | 2 | 1 B |
-| 16x4 | anonymous hidden | reply | none | - | - | - | - | - | 297 B |
-| 16x4 | anonymous hidden | messages | none | - | - | - | - | - | 297 B |
-| 16x4 | anonymous hidden | message bytes | none | - | - | - | - | - | 332 B |
-| 16x4 | anonymous public owners | reply | none | - | - | - | - | - | 426 B |
-| 16x4 | anonymous public owners | messages | none | - | - | - | - | - | 426 B |
-| 16x4 | anonymous public owners | message bytes | none | - | - | - | - | - | 461 B |
-| 16x8 | confidential signer | messages | none | - | - | - | - | - | 1157 B |
-| 16x8 | confidential signer | message bytes | none | - | - | - | - | - | 1192 B |
-| 16x8 | confidential in-proof | messages | none | - | - | - | - | - | 1156 B |
-| 16x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 1191 B |
-| 16x8 | anonymous hidden | reply | none | - | - | - | - | - | 2077 B |
-| 16x8 | anonymous hidden | messages | none | - | - | - | - | - | 2077 B |
-| 16x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 2112 B |
-| 16x8 | anonymous public owners | reply | none | - | - | - | - | - | 2206 B |
-| 16x8 | anonymous public owners | messages | none | - | - | - | - | - | 2206 B |
-| 16x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 2241 B |
-| 24x2 | confidential signer | messages | 6 | 2275 | 2217 | 4083 | 47 | 3 | 21 B |
-| 24x2 | confidential signer | message bytes | 183 | 2288 | 2230 | 4096 | 47 | 3 | 1 B |
-| 24x2 | confidential in-proof | messages | 6 | 2371 | 2314 | 4082 | 46 | 2 | 20 B |
-| 24x2 | confidential in-proof | message bytes | 184 | 2385 | 2328 | 4096 | 46 | 2 | 1 B |
-| 24x2 | anonymous hidden | reply | 169 | 2481 | 2463 | 4096 | 43 | 2 | 1 B |
-| 24x2 | anonymous hidden | messages | 2 | 2478 | 2459 | 4093 | 43 | 2 | 31 B |
-| 24x2 | anonymous hidden | message bytes | 37 | 2481 | 2462 | 4096 | 43 | 2 | 1 B |
-| 24x2 | anonymous public owners | reply | none | - | - | - | - | - | 57 B |
-| 24x2 | anonymous public owners | messages | none | - | - | - | - | - | 57 B |
-| 24x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 92 B |
-| 24x2 | confidential entry | messages | none | - | - | - | - | - | 4590 B |
-| 24x2 | confidential entry | message bytes | none | - | - | - | - | - | 4625 B |
-| 24x2 | anonymous entry | reply | none | - | - | - | - | - | 4768 B |
-| 24x2 | anonymous entry | messages | none | - | - | - | - | - | 4768 B |
-| 24x2 | anonymous entry | message bytes | none | - | - | - | - | - | 4803 B |
-| 24x4 | confidential signer | messages | none | - | - | - | - | - | 414 B |
-| 24x4 | confidential signer | message bytes | none | - | - | - | - | - | 449 B |
-| 24x4 | confidential in-proof | messages | none | - | - | - | - | - | 413 B |
-| 24x4 | confidential in-proof | message bytes | none | - | - | - | - | - | 448 B |
-| 24x4 | anonymous hidden | reply | none | - | - | - | - | - | 818 B |
-| 24x4 | anonymous hidden | messages | none | - | - | - | - | - | 818 B |
-| 24x4 | anonymous hidden | message bytes | none | - | - | - | - | - | 853 B |
-| 24x4 | anonymous public owners | reply | none | - | - | - | - | - | 947 B |
-| 24x4 | anonymous public owners | messages | none | - | - | - | - | - | 947 B |
-| 24x4 | anonymous public owners | message bytes | none | - | - | - | - | - | 982 B |
-| 32x2 | confidential signer | messages | none | - | - | - | - | - | 303 B |
-| 32x2 | confidential signer | message bytes | none | - | - | - | - | - | 338 B |
-| 32x2 | confidential in-proof | messages | none | - | - | - | - | - | 302 B |
-| 32x2 | confidential in-proof | message bytes | none | - | - | - | - | - | 337 B |
-| 32x2 | anonymous hidden | reply | none | - | - | - | - | - | 449 B |
-| 32x2 | anonymous hidden | messages | none | - | - | - | - | - | 449 B |
-| 32x2 | anonymous hidden | message bytes | none | - | - | - | - | - | 484 B |
-| 32x2 | anonymous public owners | reply | none | - | - | - | - | - | 578 B |
-| 32x2 | anonymous public owners | messages | none | - | - | - | - | - | 578 B |
-| 32x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 613 B |
-| 40x2 | confidential signer | messages | none | - | - | - | - | - | 824 B |
-| 40x2 | confidential signer | message bytes | none | - | - | - | - | - | 859 B |
-| 40x2 | confidential in-proof | messages | none | - | - | - | - | - | 823 B |
-| 40x2 | confidential in-proof | message bytes | none | - | - | - | - | - | 858 B |
-| 40x2 | anonymous hidden | reply | none | - | - | - | - | - | 970 B |
-| 40x2 | anonymous hidden | messages | none | - | - | - | - | - | 970 B |
-| 40x2 | anonymous hidden | message bytes | none | - | - | - | - | - | 1005 B |
-| 40x2 | anonymous public owners | reply | none | - | - | - | - | - | 1099 B |
-| 40x2 | anonymous public owners | messages | none | - | - | - | - | - | 1099 B |
-| 40x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 1134 B |
-| 48x2 | confidential signer | messages | none | - | - | - | - | - | 1345 B, 7 accounts |
-| 48x2 | confidential signer | message bytes | none | - | - | - | - | - | 1380 B, 7 accounts |
-| 48x2 | confidential in-proof | messages | none | - | - | - | - | - | 1344 B, 6 accounts |
-| 48x2 | confidential in-proof | message bytes | none | - | - | - | - | - | 1379 B, 6 accounts |
-| 48x2 | anonymous hidden | reply | none | - | - | - | - | - | 1491 B, 3 accounts |
-| 48x2 | anonymous hidden | messages | none | - | - | - | - | - | 1491 B, 3 accounts |
-| 48x2 | anonymous hidden | message bytes | none | - | - | - | - | - | 1526 B, 3 accounts |
-| 48x2 | anonymous public owners | reply | none | - | - | - | - | - | 1620 B, 7 accounts |
-| 48x2 | anonymous public owners | messages | none | - | - | - | - | - | 1620 B, 7 accounts |
-| 48x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 1655 B, 7 accounts |
-| 49x2 | confidential signer | messages | none | - | - | - | - | - | 1411 B, 8 accounts |
-| 49x2 | confidential signer | message bytes | none | - | - | - | - | - | 1446 B, 8 accounts |
-| 49x2 | confidential in-proof | messages | none | - | - | - | - | - | 1410 B, 7 accounts |
-| 49x2 | confidential in-proof | message bytes | none | - | - | - | - | - | 1445 B, 7 accounts |
-| 49x2 | anonymous hidden | reply | none | - | - | - | - | - | 1557 B, 4 accounts |
-| 49x2 | anonymous hidden | messages | none | - | - | - | - | - | 1557 B, 4 accounts |
-| 49x2 | anonymous hidden | message bytes | none | - | - | - | - | - | 1592 B, 4 accounts |
-| 49x2 | anonymous public owners | reply | none | - | - | - | - | - | 1686 B, 8 accounts |
-| 49x2 | anonymous public owners | messages | none | - | - | - | - | - | 1686 B, 8 accounts |
-| 49x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 1721 B, 8 accounts |
+| 1x2 | confidential signer | messages | 54 | 3166 | 3090 | 4083 | 20 | 3 | 21 B |
+| 1x2 | confidential signer | message bytes | 1815 | 3179 | 3103 | 4096 | 20 | 3 | 1 B |
+| 1x2 | confidential in-proof | messages | 54 | 3262 | 3187 | 4082 | 19 | 2 | 20 B |
+| 1x2 | confidential in-proof | message bytes | 1816 | 3276 | 3201 | 4096 | 19 | 2 | 1 B |
+| 1x2 | anonymous hidden | reply | 1849 | 3372 | 3336 | 4096 | 16 | 2 | 1 B |
+| 1x2 | anonymous hidden | messages | 51 | 3355 | 3318 | 4079 | 16 | 2 | 17 B |
+| 1x2 | anonymous hidden | message bytes | 1717 | 3372 | 3335 | 4096 | 16 | 2 | 1 B |
+| 1x2 | anonymous public owners | reply | 1720 | 3179 | 3110 | 4096 | 20 | 3 | 1 B |
+| 1x2 | anonymous public owners | messages | 47 | 3155 | 3085 | 4072 | 20 | 3 | 10 B |
+| 1x2 | anonymous public owners | message bytes | 1588 | 3179 | 3109 | 4096 | 20 | 3 | 1 B |
+| 1x2 | confidential entry | messages | 48 | 3170 | 3094 | 4087 | 20 | 3 | 25 B |
+| 1x2 | confidential entry | message bytes | 1607 | 3179 | 3103 | 4096 | 20 | 3 | 1 B |
+| 1x2 | anonymous entry | reply | 1609 | 3372 | 3304 | 4096 | 16 | 2 | 1 B |
+| 1x2 | anonymous entry | messages | 44 | 3357 | 3288 | 4081 | 16 | 2 | 19 B |
+| 1x2 | anonymous entry | message bytes | 1477 | 3372 | 3303 | 4096 | 16 | 2 | 1 B |
+| 1x4 | confidential signer | messages | 35 | 3152 | 3144 | 4069 | 20 | 3 | 7 B |
+| 1x4 | confidential signer | message bytes | 1183 | 3179 | 3171 | 4096 | 20 | 3 | 1 B |
+| 1x4 | confidential in-proof | messages | 35 | 3248 | 3241 | 4068 | 19 | 2 | 6 B |
+| 1x4 | confidential in-proof | message bytes | 1184 | 3276 | 3269 | 4096 | 19 | 2 | 1 B |
+| 1x4 | anonymous hidden | reply | 384 | 3371 | 3403 | 4095 | 16 | 2 | 2 B |
+| 1x4 | anonymous hidden | messages | 25 | 3361 | 3392 | 4085 | 16 | 2 | 23 B |
+| 1x4 | anonymous hidden | message bytes | 827 | 3372 | 3403 | 4096 | 16 | 2 | 1 B |
+| 1x4 | anonymous public owners | reply | 341 | 3178 | 3177 | 4095 | 20 | 3 | 2 B |
+| 1x4 | anonymous public owners | messages | 21 | 3161 | 3159 | 4078 | 20 | 3 | 16 B |
+| 1x4 | anonymous public owners | message bytes | 698 | 3179 | 3177 | 4096 | 20 | 3 | 1 B |
+| 1x4 | confidential entry | messages | 29 | 3156 | 3148 | 4073 | 20 | 3 | 11 B |
+| 1x4 | confidential entry | message bytes | 975 | 3179 | 3171 | 4096 | 20 | 3 | 1 B |
+| 1x4 | anonymous entry | reply | 304 | 3371 | 3371 | 4095 | 16 | 2 | 2 B |
+| 1x4 | anonymous entry | messages | 18 | 3363 | 3362 | 4087 | 16 | 2 | 25 B |
+| 1x4 | anonymous entry | message bytes | 587 | 3372 | 3371 | 4096 | 16 | 2 | 1 B |
+| 1x8 | confidential signer | messages | none | - | - | - | - | - | 46 B |
+| 1x8 | confidential signer | message bytes | none | - | - | - | - | - | 81 B |
+| 1x8 | confidential in-proof | messages | none | - | - | - | - | - | 45 B |
+| 1x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 80 B |
+| 1x8 | anonymous hidden | reply | none | - | - | - | - | - | 918 B |
+| 1x8 | anonymous hidden | messages | none | - | - | - | - | - | 918 B |
+| 1x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 953 B |
+| 1x8 | anonymous public owners | reply | none | - | - | - | - | - | 1047 B |
+| 1x8 | anonymous public owners | messages | none | - | - | - | - | - | 1047 B |
+| 1x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1082 B |
+| 1x8 | confidential entry | messages | none | - | - | - | - | - | 254 B |
+| 1x8 | confidential entry | message bytes | none | - | - | - | - | - | 289 B |
+| 1x8 | anonymous entry | reply | none | - | - | - | - | - | 1158 B |
+| 1x8 | anonymous entry | messages | none | - | - | - | - | - | 1158 B |
+| 1x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1193 B |
+| 2x2 | confidential signer | messages | 52 | 3130 | 3055 | 4080 | 21 | 3 | 18 B |
+| 2x2 | confidential signer | message bytes | 1750 | 3146 | 3071 | 4096 | 21 | 3 | 1 B |
+| 2x2 | confidential in-proof | messages | 52 | 3226 | 3152 | 4079 | 20 | 2 | 17 B |
+| 2x2 | confidential in-proof | message bytes | 1751 | 3243 | 3169 | 4096 | 20 | 2 | 1 B |
+| 2x2 | anonymous hidden | reply | 1784 | 3339 | 3304 | 4096 | 17 | 2 | 1 B |
+| 2x2 | anonymous hidden | messages | 49 | 3319 | 3283 | 4076 | 17 | 2 | 14 B |
+| 2x2 | anonymous hidden | message bytes | 1652 | 3339 | 3303 | 4096 | 17 | 2 | 1 B |
+| 2x2 | anonymous public owners | reply | 1655 | 3146 | 3078 | 4096 | 21 | 3 | 1 B |
+| 2x2 | anonymous public owners | messages | 45 | 3119 | 3050 | 4069 | 21 | 3 | 7 B |
+| 2x2 | anonymous public owners | message bytes | 1523 | 3146 | 3077 | 4096 | 21 | 3 | 1 B |
+| 2x2 | confidential entry | messages | 40 | 3130 | 3055 | 4080 | 21 | 3 | 18 B |
+| 2x2 | confidential entry | message bytes | 1342 | 3146 | 3071 | 4096 | 21 | 3 | 1 B |
+| 2x2 | anonymous entry | reply | 1344 | 3339 | 3272 | 4096 | 17 | 2 | 1 B |
+| 2x2 | anonymous entry | messages | 36 | 3317 | 3249 | 4074 | 17 | 2 | 12 B |
+| 2x2 | anonymous entry | message bytes | 1212 | 3339 | 3271 | 4096 | 17 | 2 | 1 B |
+| 2x2 | delegate | messages | 59 | 3312 | 3293 | 4066 | 17 | 2 | 4 B |
+| 2x2 | delegate | message bytes | 2002 | 3342 | 3323 | 4096 | 17 | 2 | 1 B |
+| 2x2 | anonymous delegate | reply | 1907 | 3342 | 3330 | 4096 | 17 | 2 | 1 B |
+| 2x2 | anonymous delegate | messages | 53 | 3335 | 3322 | 4089 | 17 | 2 | 27 B |
+| 2x2 | anonymous delegate | message bytes | 1775 | 3342 | 3329 | 4096 | 17 | 2 | 1 B |
+| 2x4 | confidential signer | messages | 33 | 3116 | 3109 | 4066 | 21 | 3 | 4 B |
+| 2x4 | confidential signer | message bytes | 1118 | 3146 | 3139 | 4096 | 21 | 3 | 1 B |
+| 2x4 | confidential in-proof | messages | 33 | 3212 | 3206 | 4065 | 20 | 2 | 3 B |
+| 2x4 | confidential in-proof | message bytes | 1119 | 3243 | 3237 | 4096 | 20 | 2 | 1 B |
+| 2x4 | anonymous hidden | reply | 362 | 3337 | 3370 | 4094 | 17 | 2 | 1 B |
+| 2x4 | anonymous hidden | messages | 23 | 3325 | 3357 | 4082 | 17 | 2 | 20 B |
+| 2x4 | anonymous hidden | message bytes | 762 | 3339 | 3371 | 4096 | 17 | 2 | 1 B |
+| 2x4 | anonymous public owners | reply | 319 | 3144 | 3144 | 4094 | 21 | 3 | 1 B |
+| 2x4 | anonymous public owners | messages | 19 | 3125 | 3124 | 4075 | 21 | 3 | 13 B |
+| 2x4 | anonymous public owners | message bytes | 633 | 3146 | 3145 | 4096 | 21 | 3 | 1 B |
+| 2x4 | confidential entry | messages | 21 | 3116 | 3109 | 4066 | 21 | 3 | 4 B |
+| 2x4 | confidential entry | message bytes | 710 | 3146 | 3139 | 4096 | 21 | 3 | 1 B |
+| 2x4 | anonymous entry | reply | 216 | 3339 | 3340 | 4096 | 17 | 2 | 3 B |
+| 2x4 | anonymous entry | messages | 10 | 3323 | 3323 | 4080 | 17 | 2 | 18 B |
+| 2x4 | anonymous entry | message bytes | 322 | 3339 | 3339 | 4096 | 17 | 2 | 1 B |
+| 2x8 | confidential signer | messages | none | - | - | - | - | - | 111 B |
+| 2x8 | confidential signer | message bytes | none | - | - | - | - | - | 146 B |
+| 2x8 | confidential in-proof | messages | none | - | - | - | - | - | 110 B |
+| 2x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 145 B |
+| 2x8 | anonymous hidden | reply | none | - | - | - | - | - | 983 B |
+| 2x8 | anonymous hidden | messages | none | - | - | - | - | - | 983 B |
+| 2x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1018 B |
+| 2x8 | anonymous public owners | reply | none | - | - | - | - | - | 1112 B |
+| 2x8 | anonymous public owners | messages | none | - | - | - | - | - | 1112 B |
+| 2x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1147 B |
+| 2x8 | confidential entry | messages | none | - | - | - | - | - | 519 B |
+| 2x8 | confidential entry | message bytes | none | - | - | - | - | - | 554 B |
+| 2x8 | anonymous entry | reply | none | - | - | - | - | - | 1423 B |
+| 2x8 | anonymous entry | messages | none | - | - | - | - | - | 1423 B |
+| 2x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1458 B |
+| 3x2 | confidential signer | messages | 50 | 3094 | 3020 | 4077 | 22 | 3 | 15 B |
+| 3x2 | confidential signer | message bytes | 1685 | 3113 | 3039 | 4096 | 22 | 3 | 1 B |
+| 3x2 | confidential in-proof | messages | 50 | 3190 | 3117 | 4076 | 21 | 2 | 14 B |
+| 3x2 | confidential in-proof | message bytes | 1686 | 3210 | 3137 | 4096 | 21 | 2 | 1 B |
+| 3x2 | anonymous hidden | reply | 1719 | 3306 | 3272 | 4096 | 18 | 2 | 1 B |
+| 3x2 | anonymous hidden | messages | 47 | 3283 | 3248 | 4073 | 18 | 2 | 11 B |
+| 3x2 | anonymous hidden | message bytes | 1587 | 3306 | 3271 | 4096 | 18 | 2 | 1 B |
+| 3x2 | anonymous public owners | reply | 1590 | 3113 | 3046 | 4096 | 22 | 3 | 1 B |
+| 3x2 | anonymous public owners | messages | 43 | 3083 | 3015 | 4066 | 22 | 3 | 4 B |
+| 3x2 | anonymous public owners | message bytes | 1458 | 3113 | 3045 | 4096 | 22 | 3 | 1 B |
+| 3x2 | confidential entry | messages | 32 | 3090 | 3016 | 4073 | 22 | 3 | 11 B |
+| 3x2 | confidential entry | message bytes | 1077 | 3113 | 3039 | 4096 | 22 | 3 | 1 B |
+| 3x2 | anonymous entry | reply | 1079 | 3306 | 3240 | 4096 | 18 | 2 | 1 B |
+| 3x2 | anonymous entry | messages | 28 | 3277 | 3210 | 4067 | 18 | 2 | 5 B |
+| 3x2 | anonymous entry | message bytes | 947 | 3306 | 3239 | 4096 | 18 | 2 | 1 B |
+| 3x4 | confidential signer | messages | 31 | 3080 | 3074 | 4063 | 22 | 3 | 1 B |
+| 3x4 | confidential signer | message bytes | 1053 | 3113 | 3107 | 4096 | 22 | 3 | 1 B |
+| 3x4 | confidential in-proof | messages | 32 | 3210 | 3205 | 4096 | 21 | 2 | 34 B |
+| 3x4 | confidential in-proof | message bytes | 1054 | 3210 | 3205 | 4096 | 21 | 2 | 1 B |
+| 3x4 | anonymous hidden | reply | 341 | 3306 | 3340 | 4096 | 18 | 2 | 3 B |
+| 3x4 | anonymous hidden | messages | 21 | 3289 | 3322 | 4079 | 18 | 2 | 17 B |
+| 3x4 | anonymous hidden | message bytes | 697 | 3306 | 3339 | 4096 | 18 | 2 | 1 B |
+| 3x4 | anonymous public owners | reply | 298 | 3113 | 3114 | 4096 | 22 | 3 | 3 B |
+| 3x4 | anonymous public owners | messages | 17 | 3089 | 3089 | 4072 | 22 | 3 | 10 B |
+| 3x4 | anonymous public owners | message bytes | 568 | 3113 | 3113 | 4096 | 22 | 3 | 1 B |
+| 3x4 | confidential entry | messages | 14 | 3110 | 3104 | 4093 | 22 | 3 | 31 B |
+| 3x4 | confidential entry | message bytes | 445 | 3113 | 3107 | 4096 | 22 | 3 | 1 B |
+| 3x4 | anonymous entry | reply | 127 | 3304 | 3306 | 4094 | 18 | 2 | 1 B |
+| 3x4 | anonymous entry | messages | 2 | 3283 | 3284 | 4073 | 18 | 2 | 11 B |
+| 3x4 | anonymous entry | message bytes | 57 | 3306 | 3307 | 4096 | 18 | 2 | 1 B |
+| 3x8 | confidential signer | messages | none | - | - | - | - | - | 176 B |
+| 3x8 | confidential signer | message bytes | none | - | - | - | - | - | 211 B |
+| 3x8 | confidential in-proof | messages | none | - | - | - | - | - | 175 B |
+| 3x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 210 B |
+| 3x8 | anonymous hidden | reply | none | - | - | - | - | - | 1048 B |
+| 3x8 | anonymous hidden | messages | none | - | - | - | - | - | 1048 B |
+| 3x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1083 B |
+| 3x8 | anonymous public owners | reply | none | - | - | - | - | - | 1177 B |
+| 3x8 | anonymous public owners | messages | none | - | - | - | - | - | 1177 B |
+| 3x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1212 B |
+| 3x8 | confidential entry | messages | none | - | - | - | - | - | 784 B |
+| 3x8 | confidential entry | message bytes | none | - | - | - | - | - | 819 B |
+| 3x8 | anonymous entry | reply | none | - | - | - | - | - | 1688 B |
+| 3x8 | anonymous entry | messages | none | - | - | - | - | - | 1688 B |
+| 3x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1723 B |
+| 4x2 | confidential signer | messages | 48 | 3058 | 2985 | 4074 | 23 | 3 | 12 B |
+| 4x2 | confidential signer | message bytes | 1620 | 3080 | 3007 | 4096 | 23 | 3 | 1 B |
+| 4x2 | confidential in-proof | messages | 48 | 3154 | 3082 | 4073 | 22 | 2 | 11 B |
+| 4x2 | confidential in-proof | message bytes | 1621 | 3177 | 3105 | 4096 | 22 | 2 | 1 B |
+| 4x2 | anonymous hidden | reply | 1654 | 3273 | 3240 | 4096 | 19 | 2 | 1 B |
+| 4x2 | anonymous hidden | messages | 45 | 3247 | 3213 | 4070 | 19 | 2 | 8 B |
+| 4x2 | anonymous hidden | message bytes | 1522 | 3273 | 3239 | 4096 | 19 | 2 | 1 B |
+| 4x2 | anonymous public owners | reply | 1525 | 3080 | 3014 | 4096 | 23 | 3 | 1 B |
+| 4x2 | anonymous public owners | messages | 41 | 3047 | 2980 | 4063 | 23 | 3 | 1 B |
+| 4x2 | anonymous public owners | message bytes | 1393 | 3080 | 3013 | 4096 | 23 | 3 | 1 B |
+| 4x2 | confidential entry | messages | 24 | 3050 | 2977 | 4066 | 23 | 3 | 4 B |
+| 4x2 | confidential entry | message bytes | 812 | 3080 | 3007 | 4096 | 23 | 3 | 1 B |
+| 4x2 | anonymous entry | reply | 814 | 3273 | 3208 | 4096 | 19 | 2 | 1 B |
+| 4x2 | anonymous entry | messages | 21 | 3271 | 3205 | 4094 | 19 | 2 | 32 B |
+| 4x2 | anonymous entry | message bytes | 682 | 3273 | 3207 | 4096 | 19 | 2 | 1 B |
+| 4x4 | confidential signer | messages | 30 | 3078 | 3073 | 4094 | 23 | 3 | 32 B |
+| 4x4 | confidential signer | message bytes | 988 | 3080 | 3075 | 4096 | 23 | 3 | 1 B |
+| 4x4 | confidential in-proof | messages | 30 | 3174 | 3170 | 4093 | 22 | 2 | 31 B |
+| 4x4 | confidential in-proof | message bytes | 989 | 3177 | 3173 | 4096 | 22 | 2 | 1 B |
+| 4x4 | anonymous hidden | reply | 319 | 3272 | 3307 | 4095 | 19 | 2 | 2 B |
+| 4x4 | anonymous hidden | messages | 19 | 3253 | 3287 | 4076 | 19 | 2 | 14 B |
+| 4x4 | anonymous hidden | message bytes | 632 | 3273 | 3307 | 4096 | 19 | 2 | 1 B |
+| 4x4 | anonymous public owners | reply | 276 | 3079 | 3081 | 4095 | 23 | 3 | 2 B |
+| 4x4 | anonymous public owners | messages | 15 | 3053 | 3054 | 4069 | 23 | 3 | 7 B |
+| 4x4 | anonymous public owners | message bytes | 503 | 3080 | 3081 | 4096 | 23 | 3 | 1 B |
+| 4x4 | confidential entry | messages | 6 | 3070 | 3065 | 4086 | 23 | 3 | 24 B |
+| 4x4 | confidential entry | message bytes | 180 | 3080 | 3075 | 4096 | 23 | 3 | 1 B |
+| 4x4 | anonymous entry | reply | none | - | - | - | - | - | 173 B |
+| 4x4 | anonymous entry | messages | none | - | - | - | - | - | 173 B |
+| 4x4 | anonymous entry | message bytes | none | - | - | - | - | - | 208 B |
+| 4x4 | delegate | messages | 37 | 3260 | 3311 | 4080 | 19 | 2 | 18 B |
+| 4x4 | delegate | message bytes | 1240 | 3276 | 3327 | 4096 | 19 | 2 | 1 B |
+| 4x4 | anonymous delegate | reply | 360 | 3275 | 3333 | 4095 | 19 | 2 | 2 B |
+| 4x4 | anonymous delegate | messages | 23 | 3269 | 3326 | 4089 | 19 | 2 | 27 B |
+| 4x4 | anonymous delegate | message bytes | 755 | 3276 | 3333 | 4096 | 19 | 2 | 1 B |
+| 4x8 | confidential signer | messages | none | - | - | - | - | - | 241 B |
+| 4x8 | confidential signer | message bytes | none | - | - | - | - | - | 276 B |
+| 4x8 | confidential in-proof | messages | none | - | - | - | - | - | 240 B |
+| 4x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 275 B |
+| 4x8 | anonymous hidden | reply | none | - | - | - | - | - | 1113 B |
+| 4x8 | anonymous hidden | messages | none | - | - | - | - | - | 1113 B |
+| 4x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1148 B |
+| 4x8 | anonymous public owners | reply | none | - | - | - | - | - | 1242 B |
+| 4x8 | anonymous public owners | messages | none | - | - | - | - | - | 1242 B |
+| 4x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1277 B |
+| 4x8 | confidential entry | messages | none | - | - | - | - | - | 1049 B |
+| 4x8 | confidential entry | message bytes | none | - | - | - | - | - | 1084 B |
+| 4x8 | anonymous entry | reply | none | - | - | - | - | - | 1953 B |
+| 4x8 | anonymous entry | messages | none | - | - | - | - | - | 1953 B |
+| 4x8 | anonymous entry | message bytes | none | - | - | - | - | - | 1988 B |
+| 5x2 | confidential signer | messages | 46 | 3022 | 2950 | 4071 | 24 | 3 | 9 B |
+| 5x2 | confidential signer | message bytes | 1555 | 3047 | 2975 | 4096 | 24 | 3 | 1 B |
+| 5x2 | confidential in-proof | messages | 46 | 3118 | 3047 | 4070 | 23 | 2 | 8 B |
+| 5x2 | confidential in-proof | message bytes | 1556 | 3144 | 3073 | 4096 | 23 | 2 | 1 B |
+| 5x2 | anonymous hidden | reply | 1589 | 3240 | 3208 | 4096 | 20 | 2 | 1 B |
+| 5x2 | anonymous hidden | messages | 43 | 3211 | 3178 | 4067 | 20 | 2 | 5 B |
+| 5x2 | anonymous hidden | message bytes | 1457 | 3240 | 3207 | 4096 | 20 | 2 | 1 B |
+| 5x2 | anonymous public owners | reply | 1460 | 3047 | 2982 | 4096 | 24 | 3 | 1 B |
+| 5x2 | anonymous public owners | messages | 40 | 3045 | 2979 | 4094 | 24 | 3 | 32 B |
+| 5x2 | anonymous public owners | message bytes | 1328 | 3047 | 2981 | 4096 | 24 | 3 | 1 B |
+| 5x2 | confidential entry | messages | 17 | 3044 | 2972 | 4093 | 24 | 3 | 31 B |
+| 5x2 | confidential entry | message bytes | 547 | 3047 | 2975 | 4096 | 24 | 3 | 1 B |
+| 5x2 | anonymous entry | reply | 549 | 3240 | 3176 | 4096 | 20 | 2 | 1 B |
+| 5x2 | anonymous entry | messages | 13 | 3231 | 3166 | 4087 | 20 | 2 | 25 B |
+| 5x2 | anonymous entry | message bytes | 417 | 3240 | 3175 | 4096 | 20 | 2 | 1 B |
+| 5x4 | confidential signer | messages | 28 | 3042 | 3038 | 4091 | 24 | 3 | 29 B |
+| 5x4 | confidential signer | message bytes | 923 | 3047 | 3043 | 4096 | 24 | 3 | 1 B |
+| 5x4 | confidential in-proof | messages | 28 | 3138 | 3135 | 4090 | 23 | 2 | 28 B |
+| 5x4 | confidential in-proof | message bytes | 924 | 3144 | 3141 | 4096 | 23 | 2 | 1 B |
+| 5x4 | anonymous hidden | reply | 297 | 3238 | 3274 | 4094 | 20 | 2 | 1 B |
+| 5x4 | anonymous hidden | messages | 17 | 3217 | 3252 | 4073 | 20 | 2 | 11 B |
+| 5x4 | anonymous hidden | message bytes | 567 | 3240 | 3275 | 4096 | 20 | 2 | 1 B |
+| 5x4 | anonymous public owners | reply | 254 | 3045 | 3048 | 4094 | 24 | 3 | 1 B |
+| 5x4 | anonymous public owners | messages | 13 | 3017 | 3019 | 4066 | 24 | 3 | 4 B |
+| 5x4 | anonymous public owners | message bytes | 438 | 3047 | 3049 | 4096 | 24 | 3 | 1 B |
+| 5x4 | confidential entry | messages | none | - | - | - | - | - | 50 B |
+| 5x4 | confidential entry | message bytes | none | - | - | - | - | - | 85 B |
+| 5x4 | anonymous entry | reply | none | - | - | - | - | - | 438 B |
+| 5x4 | anonymous entry | messages | none | - | - | - | - | - | 438 B |
+| 5x4 | anonymous entry | message bytes | none | - | - | - | - | - | 473 B |
+| 5x8 | confidential signer | messages | none | - | - | - | - | - | 306 B |
+| 5x8 | confidential signer | message bytes | none | - | - | - | - | - | 341 B |
+| 5x8 | confidential in-proof | messages | none | - | - | - | - | - | 305 B |
+| 5x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 340 B |
+| 5x8 | anonymous hidden | reply | none | - | - | - | - | - | 1178 B |
+| 5x8 | anonymous hidden | messages | none | - | - | - | - | - | 1178 B |
+| 5x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1213 B |
+| 5x8 | anonymous public owners | reply | none | - | - | - | - | - | 1307 B |
+| 5x8 | anonymous public owners | messages | none | - | - | - | - | - | 1307 B |
+| 5x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1342 B |
+| 5x8 | confidential entry | messages | none | - | - | - | - | - | 1314 B |
+| 5x8 | confidential entry | message bytes | none | - | - | - | - | - | 1349 B |
+| 5x8 | anonymous entry | reply | none | - | - | - | - | - | 2218 B |
+| 5x8 | anonymous entry | messages | none | - | - | - | - | - | 2218 B |
+| 5x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2253 B |
+| 6x2 | confidential signer | messages | 44 | 2986 | 2915 | 4068 | 25 | 3 | 6 B |
+| 6x2 | confidential signer | message bytes | 1490 | 3014 | 2943 | 4096 | 25 | 3 | 1 B |
+| 6x2 | confidential in-proof | messages | 44 | 3082 | 3012 | 4067 | 24 | 2 | 5 B |
+| 6x2 | confidential in-proof | message bytes | 1491 | 3111 | 3041 | 4096 | 24 | 2 | 1 B |
+| 6x2 | anonymous hidden | reply | 1524 | 3207 | 3176 | 4096 | 21 | 2 | 1 B |
+| 6x2 | anonymous hidden | messages | 41 | 3175 | 3143 | 4064 | 21 | 2 | 2 B |
+| 6x2 | anonymous hidden | message bytes | 1392 | 3207 | 3175 | 4096 | 21 | 2 | 1 B |
+| 6x2 | anonymous public owners | reply | 1395 | 3014 | 2950 | 4096 | 25 | 3 | 1 B |
+| 6x2 | anonymous public owners | messages | 38 | 3009 | 2944 | 4091 | 25 | 3 | 29 B |
+| 6x2 | anonymous public owners | message bytes | 1263 | 3014 | 2949 | 4096 | 25 | 3 | 1 B |
+| 6x2 | confidential entry | messages | 9 | 3004 | 2933 | 4086 | 25 | 3 | 24 B |
+| 6x2 | confidential entry | message bytes | 282 | 3014 | 2943 | 4096 | 25 | 3 | 1 B |
+| 6x2 | anonymous entry | reply | 284 | 3207 | 3144 | 4096 | 21 | 2 | 1 B |
+| 6x2 | anonymous entry | messages | 5 | 3191 | 3127 | 4080 | 21 | 2 | 18 B |
+| 6x2 | anonymous entry | message bytes | 152 | 3207 | 3143 | 4096 | 21 | 2 | 1 B |
+| 6x4 | confidential signer | messages | 26 | 3006 | 3003 | 4088 | 25 | 3 | 26 B |
+| 6x4 | confidential signer | message bytes | 858 | 3014 | 3011 | 4096 | 25 | 3 | 1 B |
+| 6x4 | confidential in-proof | messages | 26 | 3102 | 3100 | 4087 | 24 | 2 | 25 B |
+| 6x4 | confidential in-proof | message bytes | 859 | 3111 | 3109 | 4096 | 24 | 2 | 1 B |
+| 6x4 | anonymous hidden | reply | 276 | 3207 | 3244 | 4096 | 21 | 2 | 3 B |
+| 6x4 | anonymous hidden | messages | 15 | 3181 | 3217 | 4070 | 21 | 2 | 8 B |
+| 6x4 | anonymous hidden | message bytes | 502 | 3207 | 3243 | 4096 | 21 | 2 | 1 B |
+| 6x4 | anonymous public owners | reply | 233 | 3014 | 3018 | 4096 | 25 | 3 | 3 B |
+| 6x4 | anonymous public owners | messages | 11 | 2981 | 2984 | 4063 | 25 | 3 | 1 B |
+| 6x4 | anonymous public owners | message bytes | 373 | 3014 | 3017 | 4096 | 25 | 3 | 1 B |
+| 6x4 | confidential entry | messages | none | - | - | - | - | - | 315 B |
+| 6x4 | confidential entry | message bytes | none | - | - | - | - | - | 350 B |
+| 6x4 | anonymous entry | reply | none | - | - | - | - | - | 703 B |
+| 6x4 | anonymous entry | messages | none | - | - | - | - | - | 703 B |
+| 6x4 | anonymous entry | message bytes | none | - | - | - | - | - | 738 B |
+| 6x8 | confidential signer | messages | none | - | - | - | - | - | 371 B |
+| 6x8 | confidential signer | message bytes | none | - | - | - | - | - | 406 B |
+| 6x8 | confidential in-proof | messages | none | - | - | - | - | - | 370 B |
+| 6x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 405 B |
+| 6x8 | anonymous hidden | reply | none | - | - | - | - | - | 1243 B |
+| 6x8 | anonymous hidden | messages | none | - | - | - | - | - | 1243 B |
+| 6x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1278 B |
+| 6x8 | anonymous public owners | reply | none | - | - | - | - | - | 1372 B |
+| 6x8 | anonymous public owners | messages | none | - | - | - | - | - | 1372 B |
+| 6x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1407 B |
+| 6x8 | confidential entry | messages | none | - | - | - | - | - | 1579 B |
+| 6x8 | confidential entry | message bytes | none | - | - | - | - | - | 1614 B |
+| 6x8 | anonymous entry | reply | none | - | - | - | - | - | 2483 B |
+| 6x8 | anonymous entry | messages | none | - | - | - | - | - | 2483 B |
+| 6x8 | anonymous entry | message bytes | none | - | - | - | - | - | 2518 B |
+| 8x2 | confidential signer | messages | 41 | 2948 | 2879 | 4096 | 27 | 3 | 34 B |
+| 8x2 | confidential signer | message bytes | 1360 | 2948 | 2879 | 4096 | 27 | 3 | 1 B |
+| 8x2 | confidential in-proof | messages | 41 | 3044 | 2976 | 4095 | 26 | 2 | 33 B |
+| 8x2 | confidential in-proof | message bytes | 1361 | 3045 | 2977 | 4096 | 26 | 2 | 1 B |
+| 8x2 | anonymous hidden | reply | 1394 | 3141 | 3112 | 4096 | 23 | 2 | 1 B |
+| 8x2 | anonymous hidden | messages | 38 | 3137 | 3107 | 4092 | 23 | 2 | 30 B |
+| 8x2 | anonymous hidden | message bytes | 1262 | 3141 | 3111 | 4096 | 23 | 2 | 1 B |
+| 8x2 | anonymous public owners | reply | 1265 | 2948 | 2886 | 4096 | 27 | 3 | 1 B |
+| 8x2 | anonymous public owners | messages | 34 | 2937 | 2874 | 4085 | 27 | 3 | 23 B |
+| 8x2 | anonymous public owners | message bytes | 1133 | 2948 | 2885 | 4096 | 27 | 3 | 1 B |
+| 8x2 | confidential entry | messages | none | - | - | - | - | - | 213 B |
+| 8x2 | confidential entry | message bytes | none | - | - | - | - | - | 248 B |
+| 8x2 | anonymous entry | reply | none | - | - | - | - | - | 343 B |
+| 8x2 | anonymous entry | messages | none | - | - | - | - | - | 343 B |
+| 8x2 | anonymous entry | message bytes | none | - | - | - | - | - | 378 B |
+| 8x4 | confidential signer | messages | 22 | 2934 | 2933 | 4082 | 27 | 3 | 20 B |
+| 8x4 | confidential signer | message bytes | 728 | 2948 | 2947 | 4096 | 27 | 3 | 1 B |
+| 8x4 | confidential in-proof | messages | 22 | 3030 | 3030 | 4081 | 26 | 2 | 19 B |
+| 8x4 | confidential in-proof | message bytes | 729 | 3045 | 3045 | 4096 | 26 | 2 | 1 B |
+| 8x4 | anonymous hidden | reply | 232 | 3139 | 3178 | 4094 | 23 | 2 | 1 B |
+| 8x4 | anonymous hidden | messages | 11 | 3109 | 3147 | 4064 | 23 | 2 | 2 B |
+| 8x4 | anonymous hidden | message bytes | 372 | 3141 | 3179 | 4096 | 23 | 2 | 1 B |
+| 8x4 | anonymous public owners | reply | 189 | 2946 | 2952 | 4094 | 27 | 3 | 1 B |
+| 8x4 | anonymous public owners | messages | 8 | 2943 | 2948 | 4091 | 27 | 3 | 29 B |
+| 8x4 | anonymous public owners | message bytes | 243 | 2948 | 2953 | 4096 | 27 | 3 | 1 B |
+| 8x4 | confidential entry | messages | none | - | - | - | - | - | 845 B |
+| 8x4 | confidential entry | message bytes | none | - | - | - | - | - | 880 B |
+| 8x4 | anonymous entry | reply | none | - | - | - | - | - | 1233 B |
+| 8x4 | anonymous entry | messages | none | - | - | - | - | - | 1233 B |
+| 8x4 | anonymous entry | message bytes | none | - | - | - | - | - | 1268 B |
+| 8x8 | confidential signer | messages | none | - | - | - | - | - | 501 B |
+| 8x8 | confidential signer | message bytes | none | - | - | - | - | - | 536 B |
+| 8x8 | confidential in-proof | messages | none | - | - | - | - | - | 500 B |
+| 8x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 535 B |
+| 8x8 | anonymous hidden | reply | none | - | - | - | - | - | 1373 B |
+| 8x8 | anonymous hidden | messages | none | - | - | - | - | - | 1373 B |
+| 8x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1408 B |
+| 8x8 | anonymous public owners | reply | none | - | - | - | - | - | 1502 B |
+| 8x8 | anonymous public owners | messages | none | - | - | - | - | - | 1502 B |
+| 8x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1537 B |
+| 8x8 | confidential entry | messages | none | - | - | - | - | - | 2109 B |
+| 8x8 | confidential entry | message bytes | none | - | - | - | - | - | 2144 B |
+| 8x8 | anonymous entry | reply | none | - | - | - | - | - | 3013 B |
+| 8x8 | anonymous entry | messages | none | - | - | - | - | - | 3013 B |
+| 8x8 | anonymous entry | message bytes | none | - | - | - | - | - | 3048 B |
+| 12x2 | confidential signer | messages | 33 | 2805 | 2739 | 4085 | 31 | 3 | 23 B |
+| 12x2 | confidential signer | message bytes | 1099 | 2816 | 2750 | 4096 | 31 | 3 | 1 B |
+| 12x2 | confidential in-proof | messages | 33 | 2901 | 2836 | 4084 | 30 | 2 | 22 B |
+| 12x2 | confidential in-proof | message bytes | 1100 | 2913 | 2848 | 4096 | 30 | 2 | 1 B |
+| 12x2 | anonymous hidden | reply | 1133 | 3009 | 2983 | 4096 | 27 | 2 | 1 B |
+| 12x2 | anonymous hidden | messages | 30 | 2994 | 2967 | 4081 | 27 | 2 | 19 B |
+| 12x2 | anonymous hidden | message bytes | 1001 | 3009 | 2982 | 4096 | 27 | 2 | 1 B |
+| 12x2 | anonymous public owners | reply | 1004 | 2816 | 2757 | 4096 | 31 | 3 | 1 B |
+| 12x2 | anonymous public owners | messages | 26 | 2794 | 2734 | 4074 | 31 | 3 | 12 B |
+| 12x2 | anonymous public owners | message bytes | 872 | 2816 | 2756 | 4096 | 31 | 3 | 1 B |
+| 12x4 | confidential signer | messages | 14 | 2791 | 2793 | 4071 | 31 | 3 | 9 B |
+| 12x4 | confidential signer | message bytes | 467 | 2816 | 2818 | 4096 | 31 | 3 | 1 B |
+| 12x4 | confidential in-proof | messages | 14 | 2887 | 2890 | 4070 | 30 | 2 | 8 B |
+| 12x4 | confidential in-proof | message bytes | 468 | 2913 | 2916 | 4096 | 30 | 2 | 1 B |
+| 12x4 | anonymous hidden | reply | 145 | 3007 | 3049 | 4094 | 27 | 2 | 1 B |
+| 12x4 | anonymous hidden | messages | 4 | 3000 | 3041 | 4087 | 27 | 2 | 25 B |
+| 12x4 | anonymous hidden | message bytes | 111 | 3009 | 3050 | 4096 | 27 | 2 | 1 B |
+| 12x4 | anonymous public owners | reply | 102 | 2814 | 2823 | 4094 | 31 | 3 | 1 B |
+| 12x4 | anonymous public owners | messages | 0 | 2799 | 2808 | 4079 | 31 | 3 | 18 B |
+| 12x4 | anonymous public owners | message bytes | none | - | - | - | - | - | 18 B |
+| 12x8 | confidential signer | messages | none | - | - | - | - | - | 762 B |
+| 12x8 | confidential signer | message bytes | none | - | - | - | - | - | 797 B |
+| 12x8 | confidential in-proof | messages | none | - | - | - | - | - | 761 B |
+| 12x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 796 B |
+| 12x8 | anonymous hidden | reply | none | - | - | - | - | - | 1634 B |
+| 12x8 | anonymous hidden | messages | none | - | - | - | - | - | 1634 B |
+| 12x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1669 B |
+| 12x8 | anonymous public owners | reply | none | - | - | - | - | - | 1763 B |
+| 12x8 | anonymous public owners | messages | none | - | - | - | - | - | 1763 B |
+| 12x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 1798 B |
+| 16x2 | confidential signer | messages | 25 | 2661 | 2599 | 4073 | 35 | 3 | 11 B |
+| 16x2 | confidential signer | message bytes | 839 | 2684 | 2622 | 4096 | 35 | 3 | 1 B |
+| 16x2 | confidential in-proof | messages | 25 | 2757 | 2696 | 4072 | 34 | 2 | 10 B |
+| 16x2 | confidential in-proof | message bytes | 840 | 2781 | 2720 | 4096 | 34 | 2 | 1 B |
+| 16x2 | anonymous hidden | reply | 873 | 2877 | 2855 | 4096 | 31 | 2 | 1 B |
+| 16x2 | anonymous hidden | messages | 22 | 2850 | 2827 | 4069 | 31 | 2 | 7 B |
+| 16x2 | anonymous hidden | message bytes | 741 | 2877 | 2854 | 4096 | 31 | 2 | 1 B |
+| 16x2 | anonymous public owners | reply | 744 | 2684 | 2629 | 4096 | 35 | 3 | 1 B |
+| 16x2 | anonymous public owners | messages | 19 | 2684 | 2628 | 4096 | 35 | 3 | 34 B |
+| 16x2 | anonymous public owners | message bytes | 612 | 2684 | 2628 | 4096 | 35 | 3 | 1 B |
+| 16x4 | confidential signer | messages | 7 | 2681 | 2687 | 4093 | 35 | 3 | 31 B |
+| 16x4 | confidential signer | message bytes | 207 | 2684 | 2690 | 4096 | 35 | 3 | 1 B |
+| 16x4 | confidential in-proof | messages | 7 | 2777 | 2784 | 4092 | 34 | 2 | 30 B |
+| 16x4 | confidential in-proof | message bytes | 208 | 2781 | 2788 | 4096 | 34 | 2 | 1 B |
+| 16x4 | anonymous hidden | reply | none | - | - | - | - | - | 114 B |
+| 16x4 | anonymous hidden | messages | none | - | - | - | - | - | 114 B |
+| 16x4 | anonymous hidden | message bytes | none | - | - | - | - | - | 149 B |
+| 16x4 | anonymous public owners | reply | none | - | - | - | - | - | 243 B |
+| 16x4 | anonymous public owners | messages | none | - | - | - | - | - | 243 B |
+| 16x4 | anonymous public owners | message bytes | none | - | - | - | - | - | 278 B |
+| 16x8 | confidential signer | messages | none | - | - | - | - | - | 1022 B |
+| 16x8 | confidential signer | message bytes | none | - | - | - | - | - | 1057 B |
+| 16x8 | confidential in-proof | messages | none | - | - | - | - | - | 1021 B |
+| 16x8 | confidential in-proof | message bytes | none | - | - | - | - | - | 1056 B |
+| 16x8 | anonymous hidden | reply | none | - | - | - | - | - | 1894 B |
+| 16x8 | anonymous hidden | messages | none | - | - | - | - | - | 1894 B |
+| 16x8 | anonymous hidden | message bytes | none | - | - | - | - | - | 1929 B |
+| 16x8 | anonymous public owners | reply | none | - | - | - | - | - | 2023 B |
+| 16x8 | anonymous public owners | messages | none | - | - | - | - | - | 2023 B |
+| 16x8 | anonymous public owners | message bytes | none | - | - | - | - | - | 2058 B |
+| 24x2 | confidential signer | messages | 10 | 2408 | 2353 | 4084 | 43 | 3 | 22 B |
+| 24x2 | confidential signer | message bytes | 318 | 2420 | 2365 | 4096 | 43 | 3 | 1 B |
+| 24x2 | confidential in-proof | messages | 10 | 2504 | 2450 | 4083 | 42 | 2 | 21 B |
+| 24x2 | confidential in-proof | message bytes | 319 | 2517 | 2463 | 4096 | 42 | 2 | 1 B |
+| 24x2 | anonymous hidden | reply | 352 | 2613 | 2598 | 4096 | 39 | 2 | 1 B |
+| 24x2 | anonymous hidden | messages | 7 | 2597 | 2581 | 4080 | 39 | 2 | 18 B |
+| 24x2 | anonymous hidden | message bytes | 220 | 2613 | 2597 | 4096 | 39 | 2 | 1 B |
+| 24x2 | anonymous public owners | reply | 223 | 2420 | 2372 | 4096 | 43 | 3 | 1 B |
+| 24x2 | anonymous public owners | messages | 3 | 2397 | 2348 | 4073 | 43 | 3 | 11 B |
+| 24x2 | anonymous public owners | message bytes | 91 | 2420 | 2371 | 4096 | 43 | 3 | 1 B |
+| 24x4 | confidential signer | messages | none | - | - | - | - | - | 279 B |
+| 24x4 | confidential signer | message bytes | none | - | - | - | - | - | 314 B |
+| 24x4 | confidential in-proof | messages | none | - | - | - | - | - | 278 B |
+| 24x4 | confidential in-proof | message bytes | none | - | - | - | - | - | 313 B |
+| 24x4 | anonymous hidden | reply | none | - | - | - | - | - | 635 B |
+| 24x4 | anonymous hidden | messages | none | - | - | - | - | - | 635 B |
+| 24x4 | anonymous hidden | message bytes | none | - | - | - | - | - | 670 B |
+| 24x4 | anonymous public owners | reply | none | - | - | - | - | - | 764 B |
+| 24x4 | anonymous public owners | messages | none | - | - | - | - | - | 764 B |
+| 24x4 | anonymous public owners | message bytes | none | - | - | - | - | - | 799 B |
+| 32x2 | confidential signer | messages | none | - | - | - | - | - | 168 B |
+| 32x2 | confidential signer | message bytes | none | - | - | - | - | - | 203 B |
+| 32x2 | confidential in-proof | messages | none | - | - | - | - | - | 167 B |
+| 32x2 | confidential in-proof | message bytes | none | - | - | - | - | - | 202 B |
+| 32x2 | anonymous hidden | reply | none | - | - | - | - | - | 266 B |
+| 32x2 | anonymous hidden | messages | none | - | - | - | - | - | 266 B |
+| 32x2 | anonymous hidden | message bytes | none | - | - | - | - | - | 301 B |
+| 32x2 | anonymous public owners | reply | none | - | - | - | - | - | 395 B |
+| 32x2 | anonymous public owners | messages | none | - | - | - | - | - | 395 B |
+| 32x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 430 B |
+| 40x2 | confidential signer | messages | none | - | - | - | - | - | 689 B |
+| 40x2 | confidential signer | message bytes | none | - | - | - | - | - | 724 B |
+| 40x2 | confidential in-proof | messages | none | - | - | - | - | - | 688 B |
+| 40x2 | confidential in-proof | message bytes | none | - | - | - | - | - | 723 B |
+| 40x2 | anonymous hidden | reply | none | - | - | - | - | - | 787 B |
+| 40x2 | anonymous hidden | messages | none | - | - | - | - | - | 787 B |
+| 40x2 | anonymous hidden | message bytes | none | - | - | - | - | - | 822 B |
+| 40x2 | anonymous public owners | reply | none | - | - | - | - | - | 916 B |
+| 40x2 | anonymous public owners | messages | none | - | - | - | - | - | 916 B |
+| 40x2 | anonymous public owners | message bytes | none | - | - | - | - | - | 951 B |
