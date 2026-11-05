@@ -5,10 +5,11 @@ use spr_hasher::primitives::solana_owner_identity;
 use spr_keypair::NullifierKey;
 use zolana_ring_client::{rpc::WalletNoteStatus, CreatedUtxo, KnownUtxo, UtxoOwner};
 
-use super::*;
+use super::{page_work::MAX_LATE_NOTES, *};
 use crate::{
     database::Store,
     hub::Clock,
+    owner_notes::{OwnerNotesPage, OPENED_ROWS},
     projection_lease::LeaseClaim,
     spend_machine::{InputRead, Observation},
     spent_index::{HistoryScope, LoadSpends, NoteSeal, ProjectionWriter},
@@ -214,11 +215,7 @@ fn a_late_key_recomputes_the_owners_notes_and_resolves_their_rows() {
         Some(SpendState::UnresolvedReal)
     ));
     keys.grant(owner, 7);
-    store
-        .late_owners
-        .write()
-        .expect("late")
-        .insert(owner.to_bytes());
+    store.queue_late_owners([owner.to_bytes()]);
     apply(&store, &keys, |work| work.late_keys());
     assert_eq!(
         store.row_state(&nullifier),
@@ -774,16 +771,20 @@ async fn a_wallet_page_and_balance_read_only_the_owners_active_rows() {
             .expect("member")
             .as_bytes()
     };
-    let read = |owner| OwnerNotesRead {
-        db: store.connection(),
+    let read = |owner| OwnerNotesPage {
         ring: RING,
         seal: &seal,
-        member: member(owner),
+        range: OwnerRange {
+            member: member(owner),
+            after: None,
+            limit: 100,
+        },
     };
-    let rows = read(first).read().await.expect("rows");
-    assert_eq!(rows.len(), 1, "the spent notes left the index");
-    assert_eq!(rows[0].commitment, live.commitment);
-    assert_eq!(read(second).read().await.expect("rows").len(), 2);
+    let rows = read(first).read(store.connection()).await.expect("rows");
+    assert_eq!(rows.notes.len(), 1, "the spent notes left the index");
+    assert_eq!(rows.notes[0].commitment, live.commitment);
+    let others = read(second).read(store.connection()).await.expect("rows");
+    assert_eq!(others.notes.len(), 2);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM owner_notes").await, 3);
     let status = book.wallet_status(query(first)).await.expect("status");
     assert_eq!((status.notes.len(), balance(&status)), (1, 5));
@@ -810,7 +811,7 @@ async fn a_wallet_page_and_balance_read_only_the_owners_active_rows() {
         })
         .await
         .expect("page");
-    assert_eq!((balance(&first_page), balance(&next)), (13, 13));
+    assert_eq!((balance(&first_page), next.balances.len()), (13, 0));
     assert_ne!(first_page.notes[0].utxo_hash, next.notes[0].utxo_hash);
     assert!(next.cursor.is_none());
 }
@@ -1070,5 +1071,192 @@ async fn a_restart_after_enrollment_resumes_old_note_derivation() {
             note: created.commitment
         }
     );
+    assert!(writer.pending_owners().await.expect("completed").is_empty());
+}
+
+/// The read's value and the owner rows it opened.
+async fn opened_by<T>(read: impl std::future::Future<Output = T>) -> (T, usize) {
+    OPENED_ROWS.with(|opened| opened.set(0));
+    let value = read.await;
+    (value, OPENED_ROWS.with(std::cell::Cell::get))
+}
+
+/// A note whose commitment and blinding end in a 16 bit index, past the 256 notes of `note`.
+/// The leading bytes stay below the field modulus, the nullifier derives.
+fn indexed_note(owner: Address, key: &NullifierKey, index: u16, amount: u64) -> CreatedUtxo {
+    let mut created = note(owner, key, 0, amount);
+    created.commitment[29] = 0xc0;
+    created.commitment[30..].copy_from_slice(&index.to_be_bytes());
+    created.utxo.blinding[30..].copy_from_slice(&index.to_be_bytes());
+    created.leaf_index = u64::from(index);
+    created
+}
+
+#[tokio::test]
+async fn a_wallet_read_page_by_page_opens_each_listed_row_once() {
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = indexed_store(&store);
+    let seal = seal();
+    let created: Vec<CreatedUtxo> = (0..10)
+        .map(|index| indexed_note(owner, &secret(7), index, 10))
+        .collect();
+    let history: PageScript<'_> = Box::new(|work| {
+        work.open(frame(2), created.iter().copied());
+        terminal(work, 3);
+    });
+    commit_page(&store, &book, &seal, &keys, history.as_ref())
+        .await
+        .expect("history");
+    let limit = 3;
+    let page = |after| WalletStatusQuery {
+        after,
+        limit,
+        ..query(owner)
+    };
+    // 1. The first page opens every row once, its listed rows and the balance pass share them.
+    let (first, opened) = opened_by(book.wallet_status(page(None))).await;
+    let first = first.expect("first page");
+    assert_eq!((opened, first.notes.len(), balance(&first)), (10, 3, 100));
+    // 2. Every later page opens its own rows alone and carries no balance.
+    let mut listed: BTreeSet<[u8; 32]> = first.notes.iter().map(|note| note.utxo_hash.0).collect();
+    let mut cursor = first.cursor.clone();
+    let mut later_opens = 0;
+    while let Some(next) = cursor {
+        let after = <[u8; 32]>::try_from(next.0).expect("tag");
+        let (read, opened) = opened_by(book.wallet_status(page(Some(after)))).await;
+        let read = read.expect("page");
+        assert!(opened <= limit && read.balances.is_empty());
+        later_opens += opened;
+        for note in &read.notes {
+            assert!(listed.insert(note.utxo_hash.0), "a row lists once");
+        }
+        cursor = read.cursor;
+    }
+    assert_eq!((later_opens, listed.len()), (7, 10));
+}
+
+#[tokio::test]
+async fn a_wallet_read_never_pairs_rows_with_a_mirror_that_moved_past_them() {
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let created = note(owner, &secret(7), 0x10, 50);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let book = indexed_store(&store);
+    let seal = seal();
+    let open: PageScript<'_> = Box::new(|work| {
+        work.open(frame(2), [created]);
+        terminal(work, 3);
+    });
+    commit_page(&store, &book, &seal, &keys, open.as_ref())
+        .await
+        .expect("open");
+    // The writer's mirror takes the spend page its transaction has not yet committed, the state a
+    // read sees when the commit lands between its row read and its coverage read.
+    let opener = |held: &HeldEnrollment| keys.open(held);
+    let mut work = PageWork::new(&book, &opener);
+    work.observe(real(nullifier_of(&created, &secret(7)), frame(4), 0));
+    terminal(&mut work, 5);
+    book.commit(work.finish().await.expect("spend page"));
+    assert_eq!(book.read_book().history_through(), 5);
+    let read = book.wallet_status(query(owner)).await.expect("status");
+    assert_eq!(
+        read.history_through, 3,
+        "the slot comes from the rows' snapshot"
+    );
+    assert_eq!(statuses(&read), [WalletNoteStatus::Unspent]);
+}
+
+#[tokio::test]
+async fn a_stale_follower_reads_newer_rows_at_their_own_history_slot() {
+    let owner = wallet(1);
+    let keys = Keys::with(owner, 7);
+    let input = note(owner, &secret(7), 0x10, 50);
+    let change = note(owner, &secret(7), 0x11, 30);
+    let store = Store::open("sqlite::memory:", 1).await.expect("store");
+    let writer = indexed_store(&store);
+    let follower = indexed_store(&store);
+    let seal = seal();
+    let pages: [PageScript<'_>; 3] = [
+        Box::new(|work| {
+            work.open(frame(2), [input]);
+            terminal(work, 3);
+        }),
+        Box::new(|work| {
+            work.open(frame(4), [change]);
+            work.observe(real(nullifier_of(&input, &secret(7)), frame(4), 0));
+            terminal(work, 5);
+        }),
+        Box::new(|work| terminal(work, 6)),
+    ];
+    for page in &pages {
+        commit_page(&store, &writer, &seal, &keys, page.as_ref())
+            .await
+            .expect("page");
+    }
+    // The follower never reloaded, its mirror still holds slot zero.
+    assert_eq!(follower.read_book().history_through(), 0);
+    let read = follower.wallet_status(query(owner)).await.expect("status");
+    assert_eq!((read.history_through, balance(&read)), (6, 30));
+    assert_eq!(read.notes[0].utxo_hash.0, change.commitment);
+}
+
+#[tokio::test]
+async fn a_late_owner_derives_in_bounded_steps_and_resumes_after_each_restart() {
+    let database = Store::open("sqlite::memory:", 1).await.expect("store");
+    let seal = seal();
+    let owner = wallet(1);
+    let count_notes = MAX_LATE_NOTES * 2 + 1;
+    let created: Vec<CreatedUtxo> = (0..count_notes)
+        .map(|index| indexed_note(owner, &secret(7), index as u16, 1))
+        .collect();
+    let before = indexed_store(&database);
+    commit_page(&database, &before, &seal, &Keys::none(), &|work| {
+        work.open(frame(5), created.iter().copied());
+        terminal(work, 6);
+    })
+    .await
+    .expect("history without enrollment");
+    drop(before);
+    let writer = ProjectionWriter {
+        db: database.connection(),
+        ring: RING,
+        seal: &seal,
+        lease: LeaseClaim {
+            db: database.connection(),
+            ring: RING,
+            holder: database.lease_holder(),
+            now: NOW,
+        }
+        .claim()
+        .await
+        .expect("claim")
+        .expect("lease"),
+        clock: Clock::Fixed(NOW),
+    };
+    writer
+        .commit_enrollments(
+            &[HeldEnrollment::unsealed(owner.to_bytes(), &secret(7))],
+            TrackingCursor::default(),
+        )
+        .await
+        .expect("enrollment");
+    let keys = Keys::with(owner, 7);
+    let derived = "SELECT COUNT(*) FROM finalized_notes WHERE nullifier_tag IS NOT NULL";
+    // Each step is a fresh replica, it knows only the resume tag the last commit stored.
+    for expected in [MAX_LATE_NOTES, MAX_LATE_NOTES * 2, count_notes] {
+        let restarted = indexed_store(&database);
+        let pending = writer.pending_owners().await.expect("pending");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].resume.is_some(), expected != MAX_LATE_NOTES);
+        restarted.queue_late_owners(pending);
+        let opener = |held: &HeldEnrollment| keys.open(held);
+        let mut work = PageWork::new(&restarted, &opener);
+        work.late_keys();
+        let delta = work.finish().await.expect("derive");
+        writer.commit_page(&delta).await.expect("derived page");
+        assert_eq!(count(&database, derived).await, expected as i64);
+    }
     assert!(writer.pending_owners().await.expect("completed").is_empty());
 }

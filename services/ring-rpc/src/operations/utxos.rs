@@ -1,7 +1,9 @@
 //! The notes a ring's auditor opened, their nullifiers, and the keys its enrollments hold.
 //!
 //! Each page also names the notes it moved in an owner's active set, the page commit writes them
-//! to `storage/owner_notes.rs`. Wallet reads page over that set.
+//! to `storage/owner_notes.rs`. Wallet reads page over that set. A wallet read takes its rows and
+//! its history slot from one snapshot, a database snapshot or one hold of the mirror's lock, so a
+//! commit between the two never pairs older rows with newer coverage or the reverse.
 //!
 //! Beside a database the mirror is a bounded cache of the projection, storage answers what it
 //! evicted. Only commits and reloads fill the cache, a read never does.
@@ -10,6 +12,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    ops::Bound,
     sync::{PoisonError, RwLock},
     time::Duration,
 };
@@ -39,11 +42,11 @@ use crate::{
     database::Store,
     error::RingRpcError,
     frame_repairs::RepairBook,
-    owner_notes::OwnerNotesRead,
+    owner_notes::{snapshot_history_through, OwnerNotesPage, OWNER_ROW_BATCH},
     projection_lease::ProjectionLease,
     projection_reads::{EnrollmentKey, ProjectionReads},
     spend_machine::{NoteRead, SpendRow, SpendState},
-    spent_index::{state_name, Checkpoint, HistoryScope, LoadedSpends, NoteSeal},
+    spent_index::{read_snapshot, state_name, Checkpoint, HistoryScope, LoadedSpends, NoteSeal},
     tracking::{EnrollmentAdmission, HeldEnrollment, HeldEnrollments, TrackingCursor},
 };
 
@@ -67,8 +70,9 @@ pub(crate) struct AuditStore {
     enrollments: RwLock<HeldEnrollments>,
     /// The registry last named on the notes, a different one names them again.
     assets: RwLock<Option<RingAssets>>,
-    /// Owners whose key arrived, kept until a committed page derived their notes.
-    late_owners: RwLock<BTreeSet<[u8; 32]>>,
+    /// Owners whose key arrived, each with the key its derivation resumes after, kept until a
+    /// committed page derived their last note.
+    late_owners: RwLock<BTreeMap<[u8; 32], Option<[u8; 32]>>>,
     /// One backfill and key refresh at a time.
     pub(crate) backfill: AsyncMutex<Backfill>,
     backing: Backing,
@@ -127,7 +131,7 @@ pub(crate) struct PageDelta {
     read: BTreeSet<CreatedIn>,
     faults: Vec<SpendRow>,
     checkpoint: Option<Checkpoint>,
-    late_owners: Vec<[u8; 32]>,
+    late_owners: BTreeMap<[u8; 32], LateProgress>,
     owners: Vec<OwnerChange>,
     /// The history slot before the page, a spend at or before it leaves the index.
     prune_through: u64,
@@ -156,6 +160,36 @@ pub(crate) struct IndexedNote {
     pub commitment: [u8; 32],
     pub note: StoredUtxo,
     pub spent_at: Option<u64>,
+}
+
+/// One owner's rows after `after` in key order, `limit` rows at most.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct OwnerRange {
+    pub member: [u8; 32],
+    pub after: Option<[u8; 32]>,
+    pub limit: usize,
+}
+
+/// `more` when a row past the range exists.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OwnerPage {
+    pub notes: Vec<IndexedNote>,
+    pub more: bool,
+}
+
+/// An owner whose key arrived, `resume` names the key a committed page derived through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LateOwner {
+    pub owner: [u8; 32],
+    pub resume: Option<[u8; 32]>,
+}
+
+/// How far one page derived a late owner's notes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LateProgress {
+    Done,
+    /// The next page resumes after this key.
+    After([u8; 32]),
 }
 
 /// The inputs of a page that resolved to the reading wallet's notes.
@@ -241,7 +275,10 @@ impl SpendBook {
     }
 
     fn history_through(&self) -> u64 {
-        history_through(self.unread.first(), self.context.slot)
+        history_through(
+            self.unread.first().map(|frame| frame.slot),
+            self.context.slot,
+        )
     }
 
     fn history_scope(&self) -> HistoryScope {
@@ -252,11 +289,15 @@ impl SpendBook {
         }
     }
 
-    fn owner_notes(&self, member: &[u8; 32]) -> Vec<IndexedNote> {
-        let Some(keys) = self.active.by_owner.get(member) else {
-            return Vec::new();
+    fn owner_page(&self, range: OwnerRange) -> OwnerPage {
+        let Some(keys) = self.active.by_owner.get(&range.member) else {
+            return OwnerPage::default();
         };
-        keys.iter()
+        let lower = range.after.map_or(Bound::Unbounded, Bound::Excluded);
+        let mut rows = keys.range::<[u8; 32], _>((lower, Bound::Unbounded));
+        let notes = rows
+            .by_ref()
+            .take(range.limit)
             .filter_map(|(commitment, spent_at)| {
                 Some(IndexedNote {
                     key: *commitment,
@@ -265,14 +306,18 @@ impl SpendBook {
                     spent_at: *spent_at,
                 })
             })
-            .collect()
+            .collect();
+        OwnerPage {
+            notes,
+            more: rows.next().is_some(),
+        }
     }
 }
 
 /// Only an unreadable frame holds the claim back, an unresolved row never does.
-fn history_through(first_unread: Option<&CreatedIn>, context_slot: u64) -> u64 {
-    first_unread.map_or(context_slot, |frame| {
-        context_slot.min(frame.slot.saturating_sub(1))
+pub(crate) fn history_through(first_unread_slot: Option<u64>, context_slot: u64) -> u64 {
+    first_unread_slot.map_or(context_slot, |slot| {
+        context_slot.min(slot.saturating_sub(1))
     })
 }
 
@@ -320,59 +365,65 @@ impl IndexedNote {
         }
         .status()
     }
+
+    /// `None` for a note the wallet no longer lists. A note past the history slot stays out, so a
+    /// spent input and its change never both count.
+    fn listed_status(&self, through: u64) -> Option<WalletNoteStatus> {
+        if self.note.created_in.slot > through {
+            return None;
+        }
+        Some(self.status(through)).filter(|status| *status != WalletNoteStatus::Spent)
+    }
 }
 
-/// Balances over every listed note, the page holds those after the cursor in key order.
+/// `Unspent` notes summed by asset.
+#[derive(Default)]
+struct Balances(BTreeMap<[u8; 32], WalletBalance>);
+
+impl Balances {
+    fn add(&mut self, indexed: &IndexedNote, through: u64) {
+        if indexed.listed_status(through) != Some(WalletNoteStatus::Unspent) {
+            return;
+        }
+        let utxo = &indexed.note.utxo;
+        let balance = self.0.entry(utxo.asset).or_insert_with(|| WalletBalance {
+            asset: Hash(utxo.asset),
+            mint: utxo.mint.map(Into::into),
+            amount: 0,
+        });
+        balance.amount = balance.amount.saturating_add(utxo.amount);
+    }
+}
+
+/// One snapshot's page. The cursor is the last row the page read, listed or not, so a page past
+/// a run of spent rows still moves forward.
 fn wallet_page(
-    notes: &[IndexedNote],
+    page: &OwnerPage,
+    balances: Option<Balances>,
     query: WalletStatusQuery,
     through: u64,
 ) -> GetWalletStatusResponse {
-    let mut balances: BTreeMap<[u8; 32], WalletBalance> = BTreeMap::new();
-    let mut listed = Vec::new();
-    let mut last_key = None;
-    let mut cursor = None;
-    for indexed in notes {
-        let note = &indexed.note;
-        // A spent input and its change never both count.
-        if note.created_in.slot > through {
-            continue;
-        }
-        let status = indexed.status(through);
-        if status == WalletNoteStatus::Spent {
-            continue;
-        }
-        if status == WalletNoteStatus::Unspent {
-            let balance = balances
-                .entry(note.utxo.asset)
-                .or_insert_with(|| WalletBalance {
-                    asset: Hash(note.utxo.asset),
-                    mint: note.utxo.mint.map(Into::into),
-                    amount: 0,
-                });
-            balance.amount = balance.amount.saturating_add(note.utxo.amount);
-        }
-        if query.after.is_some_and(|after| indexed.key <= after) {
-            continue;
-        }
-        if listed.len() == query.limit {
-            cursor = last_key.map(|key: [u8; 32]| key.to_vec().into());
-            continue;
-        }
-        last_key = Some(indexed.key);
-        listed.push(note.wallet_note(&indexed.commitment, status));
-    }
+    let last = page.notes.last().map(|indexed| indexed.key);
     GetWalletStatusResponse {
         history_through: through,
         enrollment: query.enrollment,
-        balances: balances.into_values().collect(),
-        notes: listed,
-        cursor,
+        balances: balances
+            .map(|balances| balances.0.into_values().collect())
+            .unwrap_or_default(),
+        notes: page
+            .notes
+            .iter()
+            .filter_map(|indexed| {
+                let status = indexed.listed_status(through)?;
+                Some(indexed.note.wallet_note(&indexed.commitment, status))
+            })
+            .collect(),
+        cursor: last.filter(|_| page.more).map(|key| key.to_vec().into()),
     }
 }
 
 impl PageDelta {
-    pub(crate) fn derived_owners(&self) -> &[[u8; 32]] {
+    pub(crate) const fn derived_owners(&self) -> &BTreeMap<[u8; 32], LateProgress> {
         &self.late_owners
     }
 
@@ -478,7 +529,10 @@ impl AuditStore {
                 .collect(),
             notes: notes.into_iter().collect(),
             rows: rows.into_iter().map(|row| (row.nullifier, row)).collect(),
-            prune_through: history_through(unread.first(), checkpoint.through.slot),
+            prune_through: history_through(
+                unread.first().map(|frame| frame.slot),
+                checkpoint.through.slot,
+            ),
             checkpoint: Some(checkpoint),
             revision: Some(revision),
             ..PageDelta::default()
@@ -498,8 +552,11 @@ impl AuditStore {
             .late_owners
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        for owner in &delta.late_owners {
-            late.remove(owner);
+        for (owner, progress) in &delta.late_owners {
+            match progress {
+                LateProgress::Done => late.remove(owner),
+                LateProgress::After(key) => late.insert(*owner, Some(*key)),
+            };
         }
         drop(late);
         self.book
@@ -583,39 +640,136 @@ impl AuditStore {
         self.read_book().rows.get(nullifier).map(|row| row.state)
     }
 
-    /// The owner's live notes and unsettled spends, never another owner's row or a settled spend.
-    async fn indexed_notes(&self, member: &[u8; 32]) -> Result<Vec<IndexedNote>, RingRpcError> {
+    /// One bounded range of the owner's live notes and unsettled spends, never another owner's
+    /// row or a settled spend.
+    pub(crate) async fn owner_page(&self, range: OwnerRange) -> Result<OwnerPage, RingRpcError> {
         match &self.backing {
-            Backing::Memory => Ok(self.read_book().owner_notes(member)),
+            Backing::Memory => Ok(self.read_book().owner_page(range)),
             Backing::Database {
                 store, ring, seal, ..
-            } => Ok(OwnerNotesRead {
-                db: store.connection(),
+            } => Ok(OwnerNotesPage {
                 ring: *ring,
                 seal,
-                member: *member,
+                range,
             }
-            .read()
+            .read(store.connection())
             .await?),
             Backing::Unavailable => Err(RingRpcError::StateUnavailable),
         }
     }
 
+    /// Every live note of the owner, storage read in bounded batches inside one snapshot.
     async fn owner_notes(&self, owner_key: &[u8; 32]) -> Result<Vec<IndexedNote>, RingRpcError> {
-        match Member::owner_tag(owner_key) {
-            Ok(member) => self.indexed_notes(member.as_bytes()).await,
-            Err(_) => Ok(Vec::new()),
+        let Ok(member) = Member::owner_tag(owner_key) else {
+            return Ok(Vec::new());
+        };
+        let range = OwnerRange {
+            member: *member.as_bytes(),
+            after: None,
+            limit: OWNER_ROW_BATCH,
+        };
+        match &self.backing {
+            Backing::Memory => Ok(self
+                .read_book()
+                .owner_page(OwnerRange {
+                    limit: usize::MAX,
+                    ..range
+                })
+                .notes),
+            Backing::Database {
+                store, ring, seal, ..
+            } => {
+                let snapshot = read_snapshot(store.connection()).await?;
+                let mut notes = Vec::new();
+                OwnerNotesPage {
+                    ring: *ring,
+                    seal,
+                    range,
+                }
+                .for_each(&snapshot, |indexed| notes.push(indexed))
+                .await?;
+                snapshot.commit().await?;
+                Ok(notes)
+            }
+            Backing::Unavailable => Err(RingRpcError::StateUnavailable),
         }
     }
 
+    /// Opens `query.limit` rows past the cursor. Only the first page carries balances, its read
+    /// opens each remaining row once in batches of `OWNER_ROW_BATCH`. A later page opens its own
+    /// rows alone and carries none.
     pub(crate) async fn wallet_status(
         &self,
         query: WalletStatusQuery,
     ) -> Result<GetWalletStatusResponse, RingRpcError> {
-        let notes = self.owner_notes(query.wallet.as_array()).await?;
-        // Read after the rows, a commit deletes a spend only at or before the slot it found.
-        let through = self.read_book().history_through();
-        Ok(wallet_page(&notes, query, through))
+        let Ok(member) = Member::owner_tag(query.wallet.as_array()) else {
+            return Ok(wallet_page(
+                &OwnerPage::default(),
+                query.after.is_none().then(Balances::default),
+                query,
+                self.read_book().history_through(),
+            ));
+        };
+        let range = OwnerRange {
+            member: *member.as_bytes(),
+            after: query.after,
+            limit: query.limit,
+        };
+        match &self.backing {
+            // 1. One hold of the lock copies the rows and the history slot together.
+            Backing::Memory => {
+                let book = self.read_book();
+                let through = book.history_through();
+                let page = book.owner_page(range);
+                let balances = query.after.is_none().then(|| {
+                    let mut balances = Balances::default();
+                    let every = book.owner_page(OwnerRange {
+                        limit: usize::MAX,
+                        ..range
+                    });
+                    for indexed in &every.notes {
+                        balances.add(indexed, through);
+                    }
+                    balances
+                });
+                Ok(wallet_page(&page, balances, query, through))
+            }
+            // 2. One read snapshot answers the rows, the checkpoint and the unread frames. The
+            //    mirror's slot may lag or lead the rows a follower or the writer reads.
+            Backing::Database {
+                store, ring, seal, ..
+            } => {
+                let snapshot = read_snapshot(store.connection()).await?;
+                let through = snapshot_history_through(&snapshot, *ring).await?;
+                let pages = |range| OwnerNotesPage {
+                    ring: *ring,
+                    seal,
+                    range,
+                };
+                let page = pages(range).read(&snapshot).await?;
+                let mut balances = None;
+                if query.after.is_none() {
+                    let mut sum = Balances::default();
+                    for indexed in &page.notes {
+                        sum.add(indexed, through);
+                    }
+                    // 3. The rest of the owner's rows open once each, in bounded batches.
+                    if let Some(last) = page.notes.last().filter(|_| page.more) {
+                        pages(OwnerRange {
+                            after: Some(last.key),
+                            limit: OWNER_ROW_BATCH,
+                            ..range
+                        })
+                        .for_each(&snapshot, |indexed| sum.add(&indexed, through))
+                        .await?;
+                    }
+                    balances = Some(sum);
+                }
+                snapshot.commit().await?;
+                Ok(wallet_page(&page, balances, query, through))
+            }
+            Backing::Unavailable => Err(RingRpcError::StateUnavailable),
+        }
     }
 
     /// A cache counts the rows storage holds, a complete mirror counts its own.
@@ -751,11 +905,15 @@ impl AuditStore {
         self.queue_late_owners(owners);
     }
 
-    pub(crate) fn queue_late_owners(&self, owners: impl IntoIterator<Item = [u8; 32]>) {
-        self.late_owners
+    /// An owner already queued keeps the key its derivation reached.
+    pub(crate) fn queue_late_owners(&self, owners: impl IntoIterator<Item = impl Into<LateOwner>>) {
+        let mut late = self
+            .late_owners
             .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(owners);
+            .unwrap_or_else(PoisonError::into_inner);
+        for LateOwner { owner, resume } in owners.into_iter().map(Into::into) {
+            late.entry(owner).or_insert(resume);
+        }
     }
 
     /// Moves each capsule the cache could not name to its stored owner, the rest stay unowned.
@@ -860,6 +1018,15 @@ impl AuditStore {
                 .map(|(nullifier, _)| nullifier)
                 .collect(),
         })
+    }
+}
+
+impl From<[u8; 32]> for LateOwner {
+    fn from(owner: [u8; 32]) -> Self {
+        Self {
+            owner,
+            resume: None,
+        }
     }
 }
 

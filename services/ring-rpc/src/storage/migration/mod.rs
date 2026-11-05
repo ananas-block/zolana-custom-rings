@@ -75,7 +75,7 @@ impl MigrationTrait for Schema {
             format!("CREATE TABLE spend_unread_frames (ring {blob} NOT NULL, slot BIGINT NOT NULL, tx_signature {blob} NOT NULL, event_index INTEGER NOT NULL, attempts BIGINT NOT NULL DEFAULT 0, retry_after BIGINT NOT NULL DEFAULT 0, PRIMARY KEY(ring, tx_signature, event_index))"),
             format!("CREATE TABLE tracking_cursors (ring {blob} NOT NULL PRIMARY KEY, next_leaf BIGINT NOT NULL)"),
             format!("CREATE TABLE held_enrollments (ring {blob} NOT NULL, member {blob} NOT NULL, sealed {blob} NOT NULL, owner_hash_tag {blob} NOT NULL, list_key_tag {blob} NOT NULL, revision BIGINT NOT NULL, PRIMARY KEY(ring, member))"),
-            format!("CREATE TABLE pending_derivations (ring {blob} NOT NULL, member {blob} NOT NULL, PRIMARY KEY(ring, member))"),
+            format!("CREATE TABLE pending_derivations (ring {blob} NOT NULL, member {blob} NOT NULL, after_tag {blob}, PRIMARY KEY(ring, member))"),
             format!("CREATE TABLE projection_leases (ring {blob} NOT NULL PRIMARY KEY, holder {blob} NOT NULL, instance {blob} NOT NULL, token BIGINT NOT NULL, expires_at BIGINT NOT NULL)"),
             "CREATE INDEX cosign_usage_window ON cosign_usage(ring, asset, slot)".to_owned(),
             "CREATE INDEX cosign_usage_message ON cosign_usage(message_digest)".to_owned(),
