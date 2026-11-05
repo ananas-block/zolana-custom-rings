@@ -48,6 +48,7 @@ func TestStorageFixtures(t *testing.T) {
 				entries = append(entries, ringregistry.Entry{Member: big.NewInt(member), Mask: big.NewInt(3), Value: big.NewInt(1)})
 			}
 		case 1:
+			// A block list addition retires every earlier root.
 			entries = []ringregistry.Entry{{Member: bob, Mask: big.NewInt(3), Value: big.NewInt(3)}}
 		case 2:
 			// A list grant rotates graced, no earlier root was stricter.
@@ -57,7 +58,7 @@ func TestStorageFixtures(t *testing.T) {
 		if revision == 0 {
 			capacity, circuit = 4, "custom-ring-apply-records-4"
 		}
-		request := (registryBatch{
+		request, restrictive := (registryBatch{
 			circuit: circuit, capacity: capacity, members: members, entries: entries,
 			chainStart: ringregistry.ChainStart(t, raw, uint64(revision)),
 		}).request(t)
@@ -66,7 +67,7 @@ func TestStorageFixtures(t *testing.T) {
 			writes[i] = write.Entry
 		}
 		update := map[string]any{
-			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes,
+			"proof": prove(circuit, request), "root": request.NewRoot, "nextIndex": request.NewNextIndex, "writes": writes, "restrictive": restrictive,
 		}
 		vectors["update"+big.NewInt(int64(revision)).String()] = update
 	}

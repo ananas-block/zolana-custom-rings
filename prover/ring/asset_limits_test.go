@@ -34,7 +34,7 @@ func TestAnApplyProofOverAssetLimitsVerifies(t *testing.T) {
 	if write.Hash(t).Cmp(row.EntryHash.Int) != 0 {
 		t.Fatal("record write differs from Rust")
 	}
-	params := (registryBatch{circuit: circuit, capacity: 2, members: ringregistry.New(t), entries: []ringregistry.Entry{write}, chainStart: big.NewInt(0)}).request(t)
+	params, _ := (registryBatch{circuit: circuit, capacity: 2, members: ringregistry.New(t), entries: []ringregistry.Entry{write}, chainStart: big.NewInt(0)}).request(t)
 	system := loadRingSystem(t, circuit)
 	payload := mustMarshal(t, params)
 	request := extensionOf(t, circuit).Request()

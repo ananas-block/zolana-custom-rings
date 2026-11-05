@@ -84,7 +84,7 @@ func BindPrivateBatch(t testing.TB, c *registry.PrivateApplyRecordsCircuit) {
 	t.Helper()
 	fields := []frontend.Variable{
 		shared.ApplyRecordsDomain, c.OldRoot, c.NewRoot, c.OldNextIndex, c.NewNextIndex, c.ChainStart, c.ChainEnd, c.Count,
-		c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot,
+		Restrictive(c.Writes, int(ringtest.AsBigInt(c.Count).Int64())), c.CredentialWrites, c.PrivateRingID, c.CredentialOwner, c.AddressRoot,
 	}
 	for _, root := range c.StateRoots {
 		fields = append(fields, root[:]...)
