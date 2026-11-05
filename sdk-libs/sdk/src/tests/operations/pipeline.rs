@@ -3330,6 +3330,82 @@ fn a_salted_payee_read_alone_refuses_an_enrolled_owner_the_zero_key() {
     ));
 }
 
+/// An old zero key address of a rotated owner resolves to the authorization's key, a salted payee read still refuses it.
+#[tokio::test]
+async fn a_zero_key_payment_to_a_rotated_owner_builds_with_its_current_key() {
+    use crate::{
+        tests::support::{keypair, Registry},
+        SaltedOwnerCheck,
+    };
+    use custom_ring_interface::domain;
+    use zolana_ring_policy::{ListId, Rule, RuleTable, Subject};
+    let (sender, payee) = (keypair(1), keypair(2));
+    let (from, current) = (
+        sender.shielded_address().unwrap(),
+        payee.shielded_address().unwrap(),
+    );
+    let old = RingAddress {
+        recipient: spr_keypair::ShieldedAddress {
+            nullifier_pubkey: ZERO_NULLIFIER_PUBKEY,
+            viewing_pubkey: spr_keypair::ViewingKey::new().pubkey(),
+            ..current
+        },
+        ring_program_id: ring().program_id(),
+        list_salt: [0; 32],
+    };
+    let paying = |recipient: &spr_keypair::ShieldedAddress| {
+        let mut transaction = ring_transaction(vec![ring_utxo(&sender, Mint::SOL, 10, 0)]);
+        transaction
+            .transfer_with_ring(recipient, Mint::SOL, 3, Some(ring().program_id()))
+            .unwrap();
+        owner_transfer(&sender, transaction)
+    };
+    let chain =
+        Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[from, current]);
+    let resolved = SaltedOwnerCheck {
+        ring: ring(),
+        address: &old,
+    }
+    .run(&chain)
+    .await
+    .unwrap();
+    assert_eq!(resolved.nullifier_pk, ZERO_NULLIFIER_PUBKEY);
+    assert_eq!(resolved.viewing_pubkey, current.viewing_pubkey);
+    let refreshed = spr_keypair::ShieldedAddress {
+        viewing_pubkey: resolved.viewing_pubkey,
+        ..old.recipient
+    };
+    let client = chain.client();
+    assert!(paying(&refreshed).frame(&client).await.is_ok());
+    assert!(matches!(
+        paying(&old.recipient).frame(&client).await.err(),
+        Some(RingError::RecipientViewingKeyStale { .. })
+    ));
+
+    let rules = RuleTable::builder()
+        .rule(Rule::forbid(Subject::OutputOwner, ListId::PrivateBlock))
+        .build();
+    // Both owners' salts reach the output key check, the enrolled payee at the zero key refuses there.
+    let salt = [7; 32];
+    let salted = Chain::ring(RingSettings::new(RingMode::Confidential))
+        .with_registry(Registry::new(&[(&sender, 0)]), &rules)
+        .with_tracking_tag(&[from, current], domain::list_tag(&salt).unwrap())
+        .client();
+    let member_of = |address: &spr_keypair::ShieldedAddress| {
+        Member::from_bytes(address.signing_pubkey.owner_proof_input_hash().unwrap()).unwrap()
+    };
+    let refused = paying(&refreshed)
+        .with_list_salt(member_of(&from), salt)
+        .with_list_salt(member_of(&current), salt)
+        .frame(&salted)
+        .await
+        .err();
+    assert!(
+        matches!(refused, Some(RingError::EnrolledRecipientAtZeroKey { .. })),
+        "{refused:?}"
+    );
+}
+
 /// A record of one class covers nothing.
 #[tokio::test]
 async fn a_second_co_signer_covers_what_the_first_record_leaves() {

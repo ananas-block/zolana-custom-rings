@@ -80,11 +80,14 @@ pub struct AuthorizationCheck<'a> {
     pub account: Option<&'a Account>,
 }
 
-/// What the opening alone settles, an enrolled keyed row still needs its authorization.
+/// What the opening alone settles, an enrolled owner still needs its authorization's viewing key.
 #[derive(Debug)]
 enum Opened {
     Resolved(ResolvedRecipient),
-    Enrolled,
+    Enrolled {
+        nullifier_pk: [u8; 32],
+        list_tag: [u8; 32],
+    },
 }
 
 impl RecipientResolver<'_> {
@@ -110,10 +113,14 @@ impl RecipientResolver<'_> {
         let [opening] = response.openings.as_slice() else {
             return Err(ResolveError::OpeningCount(response.openings.len()));
         };
-        if let Opened::Resolved(resolved) = self.verify(&member, opening)? {
-            return Ok(resolved);
-        }
-        // 2. The leaf holds no viewing key, the owner's authorization account names it.
+        let (nullifier_pk, list_tag) = match self.verify(&member, opening)? {
+            Opened::Resolved(resolved) => return Ok(resolved),
+            Opened::Enrolled {
+                nullifier_pk,
+                list_tag,
+            } => (nullifier_pk, list_tag),
+        };
+        // 2. The leaf holds no viewing key, the owner's authorization account names it at either key.
         let owner = self.owner()?;
         let (authorization, _) = TrackingAuthorization::find_address(&self.registry, &owner);
         let account = client
@@ -127,9 +134,9 @@ impl RecipientResolver<'_> {
         }
         .viewing_u()?;
         Ok(ResolvedRecipient {
-            nullifier_pk: self.address.recipient.nullifier_pubkey,
+            nullifier_pk,
             viewing_pubkey: X25519Pubkey::from_u(viewing_u)?,
-            list_tag: domain::list_tag(&self.address.list_salt)?,
+            list_tag,
         })
     }
 
@@ -156,11 +163,15 @@ impl RecipientResolver<'_> {
         .map_err(ResolveError::Opening)?;
         let nullifier_pk = address.recipient.nullifier_pubkey;
         match (row, nullifier_pk == ZERO_NULLIFIER_PUBKEY) {
-            (_, true) => Ok(Opened::Resolved(ResolvedRecipient {
+            (None, true) => Ok(Opened::Resolved(ResolvedRecipient {
                 nullifier_pk,
                 viewing_pubkey: address.recipient.viewing_pubkey,
                 list_tag: [0; 32],
             })),
+            (Some(_), true) => Ok(Opened::Enrolled {
+                nullifier_pk,
+                list_tag: [0; 32],
+            }),
             (None, false) => Err(ResolveError::NotEnrolled),
             (Some(row), false) if row.nullifier_pk != nullifier_pk => {
                 Err(ResolveError::NullifierKeyMismatch)
@@ -168,7 +179,10 @@ impl RecipientResolver<'_> {
             (Some(row), false) if domain::list_tag(&address.list_salt)? != row.list_tag => {
                 Err(ResolveError::ListTagMismatch)
             }
-            (Some(_), false) => Ok(Opened::Enrolled),
+            (Some(row), false) => Ok(Opened::Enrolled {
+                nullifier_pk,
+                list_tag: row.list_tag,
+            }),
         }
     }
 
@@ -487,15 +501,36 @@ mod tests {
 
     /// No salted payee read runs here, the payment refuses an enrolled zero key under one.
     #[tokio::test]
-    async fn a_zero_key_address_resolves_to_the_zero_key_with_or_without_a_row() {
+    async fn a_zero_key_address_keeps_the_zero_key_and_an_enrolled_owner_takes_its_current_viewing_key(
+    ) {
         let owner = wallet(3);
         let address = zero_key(&owner);
-        for entries in [vec![], vec![entry(&owner)]] {
-            let resolved = Served::new(&entries, None).resolve(&address).await.unwrap();
-            assert_eq!(resolved.nullifier_pk, ZERO_NULLIFIER_PUBKEY);
-            assert_eq!(resolved.viewing_pubkey, address.recipient.viewing_pubkey);
-            assert_eq!(resolved.list_tag, [0; 32]);
-        }
+        let unenrolled = Served::new(&[], None).resolve(&address).await.unwrap();
+        assert_eq!(
+            unenrolled,
+            ResolvedRecipient {
+                nullifier_pk: ZERO_NULLIFIER_PUBKEY,
+                viewing_pubkey: address.recipient.viewing_pubkey,
+                list_tag: [0; 32],
+            }
+        );
+        let rotated = ViewingKey::new().pubkey();
+        let enrolled = Served::new(
+            &[entry(&owner)],
+            Some(authorization(REGISTRY, solana_owner(&owner), rotated)),
+        );
+        assert_eq!(
+            enrolled.resolve(&address).await.unwrap(),
+            ResolvedRecipient {
+                nullifier_pk: ZERO_NULLIFIER_PUBKEY,
+                viewing_pubkey: rotated,
+                list_tag: [0; 32],
+            }
+        );
+        assert!(matches!(
+            Served::new(&[entry(&owner)], None).resolve(&address).await,
+            Err(ResolveError::AuthorizationMissing)
+        ));
     }
 
     #[test]
