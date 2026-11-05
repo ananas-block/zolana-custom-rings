@@ -70,8 +70,10 @@ spr-transaction = { workspace = true, features = ["serde"] }
 [dev-dependencies]
 http = { workspace = true }
 bs58 = { workspace = true }
+solana-hash = { workspace = true }
 solana-keypair = { workspace = true }
 solana-signature = { workspace = true, features = ["verify"] }
+solana-transaction = { workspace = true }
 solana-transaction-status-client-types = { workspace = true }
 spr-user-registry-interface = { workspace = true, features = ["pda"] }
 tokio = { workspace = true }

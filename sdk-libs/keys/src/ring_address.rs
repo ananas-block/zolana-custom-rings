@@ -10,8 +10,8 @@ use spr_interface::ZERO_NULLIFIER_PUBKEY;
 use spr_keypair::{
     shielded::{ShieldedAddress, SHIELDED_ADDRESS_LEN},
     viewing_key::ViewTag,
-    ShieldedKeypairTrait,
 };
+use spr_transaction::ShieldedKeys;
 
 use crate::{ListSaltHolder, RingKeyError};
 
@@ -52,11 +52,12 @@ impl fmt::Debug for RingAddress {
 }
 
 impl RingAddress {
-    pub fn enrolled<H: ShieldedKeypairTrait + ListSaltHolder + ?Sized>(
+    /// The holder's current viewing key, a rotated holder names its newest.
+    pub fn enrolled<H: ShieldedKeys + ListSaltHolder + ?Sized>(
         holder: &H,
         ring_program_id: Address,
     ) -> Result<Self, RingKeyError> {
-        let recipient = holder.shielded_address()?;
+        let recipient = holder.address()?;
         let list_salt = holder.list_salt(&ring_program_id)?;
         Self::check_list_salt(&recipient, &list_salt)?;
         Ok(Self {

@@ -57,6 +57,9 @@ mod types;
 pub mod viewing_history;
 #[path = "operations/viewing_key.rs"]
 mod viewing_key;
+#[cfg(feature = "rpc")]
+#[path = "operations/viewing_rotation.rs"]
+mod viewing_rotation;
 
 pub(crate) const REDACTED: &str = "<redacted>";
 
@@ -119,6 +122,10 @@ pub use crate::{
     viewing_key::{ResolvedViewingKey, ViewingKeyError, ViewingKeyResolver},
 };
 pub use program_data::{program_data, ProgramData, PROGRAM_DATA_METADATA_LEN};
+#[cfg(feature = "rpc")]
+pub use viewing_rotation::{
+    UpdateViewingKey, UpdatedViewingKey, ViewingRotation, ViewingRotationError,
+};
 pub use zolana_ring_indexer::rpc::RingRpcError;
 
 /// The answer to a one-item request, a holder that answers more or less is refused.

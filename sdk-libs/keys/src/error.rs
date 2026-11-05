@@ -1,6 +1,7 @@
 use custom_ring_interface::stream::StreamError;
 use spr_hasher::HasherError;
 use spr_keypair::KeypairError;
+use spr_transaction::TransactionError;
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq)]
@@ -11,6 +12,8 @@ pub enum RingKeyError {
     Stream(#[from] StreamError),
     #[error(transparent)]
     Hasher(#[from] HasherError),
+    #[error(transparent)]
+    Transaction(#[from] TransactionError),
     #[error("the keypair holds no viewing key for the requested public key")]
     UnknownViewingKey,
     #[error("merge seed is not a nonzero field element")]
