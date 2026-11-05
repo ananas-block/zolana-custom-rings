@@ -87,6 +87,29 @@ async fn a_deposit_takes_the_owners_tracking_key_before_any_proof() {
     ));
 }
 
+/// A note sealed to a viewing key the recipient's row no longer names stays unread.
+#[tokio::test]
+async fn a_deposit_refuses_a_viewing_key_its_recipients_row_replaced() {
+    let (member, payer) = (keypair(2), keypair(9));
+    let enrolled = member.shielded_address().unwrap();
+    let rotated = spr_keypair::ShieldedAddress {
+        viewing_pubkey: keypair(3).shielded_address().unwrap().viewing_pubkey,
+        ..enrolled
+    };
+    let chain = Chain::ring(RingSettings::new(RingMode::Confidential)).with_tracking(&[enrolled]);
+    let stale = deposit(&payer, DepositRecipient::Confidential(rotated))
+        .prepare(&chain)
+        .await
+        .unwrap();
+    assert!(matches!(
+        stale.prove_bound(&chain.clone().client()).await,
+        Err(RingError::RecipientViewingKeyStale {
+            slot_index: 0,
+            row_revision: 1
+        })
+    ));
+}
+
 #[tokio::test]
 async fn a_deposit_names_the_co_signer_a_deposit_scope_demands() {
     let member = keypair(1);

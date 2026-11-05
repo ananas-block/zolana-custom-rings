@@ -53,7 +53,9 @@ use crate::{
     },
     projection::retry_projection_lag,
     prover::{to_instruction_proof, RingRequest},
-    records::{check_output_key, PoolRead, TrackingPoolRead, TrackingRead},
+    records::{
+        check_output_key, check_recipient_viewing_key, PoolRead, TrackingPoolRead, TrackingRead,
+    },
     relay_message::{ExpectedDeposit, ExpectedMessage},
     request::{
         self, DepositRequest, MintChunks, OwnerEntry, PolicyParams, PolicyTable, PoolEntry,
@@ -243,6 +245,7 @@ struct SlotDisclosure {
     owner_utxo_hash: [u8; 32],
     owner_pk_hash: [u8; 32],
     nullifier_pk: [u8; 32],
+    viewing_u: [u8; 32],
     /// Zero when unknown.
     list_salt: [u8; 32],
     blinding_secret: Zeroizing<[u8; 32]>,
@@ -1075,6 +1078,7 @@ impl SealedBatch {
                     owner_utxo_hash: note.deposit.owner_utxo_hash,
                     owner_pk_hash: note.address.signing_pubkey.owner_proof_input_hash()?,
                     nullifier_pk: note.address.nullifier_pubkey,
+                    viewing_u: note.address.viewing_pubkey.u(),
                     list_salt: note.list_salt,
                     blinding_secret: note.blinding_secret,
                     mint: note.deposit.asset.mint().to_bytes(),
@@ -1114,7 +1118,8 @@ impl DepositDisclosure {
     ) -> Result<DepositRecords, RingError> {
         let policy = ring.require_policy(rpc).await?;
         let tracking = BoundRoot::tracking(&policy, rpc).await?;
-        // 1. Each distinct recipient opens one tracking row, a slot points at its recipient's row.
+        // 1. Each distinct recipient opens one tracking row, a slot points at its recipient's row. A note
+        // sealed to a viewing key the row no longer names stays unread.
         let mut tracked = PoolSubjects::default();
         let mut output_entries: Vec<u32> = self
             .slots
@@ -1133,6 +1138,11 @@ impl DepositDisclosure {
             check_output_key(
                 rows.record(&slot.owner_pk_hash),
                 &slot.nullifier_pk,
+                slot_index,
+            )?;
+            check_recipient_viewing_key(
+                rows.record(&slot.owner_pk_hash),
+                &slot.viewing_u,
                 slot_index,
             )?;
         }
