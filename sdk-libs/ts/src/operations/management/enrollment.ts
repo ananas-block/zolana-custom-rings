@@ -95,6 +95,23 @@ export async function ownerGrantInstruction(input: WriteOwnerGrant): Promise<Ins
   );
 }
 
+const OWNER_GRANT_DISCRIMINATOR = 5;
+const OWNER_GRANT_SIZE = 2;
+
+/** The address names the ring program, the owner and the reader. */
+export interface OwnerGrant {
+  readonly active: boolean;
+}
+
+/** Rust `OwnerGrant::from_data`, only `active == 1` grants. */
+export function decodeOwnerGrant(data: Uint8Array): OwnerGrant {
+  if (data.length !== OWNER_GRANT_SIZE || data[0] !== OWNER_GRANT_DISCRIMINATOR)
+    throw new RingError("RING_OWNER_GRANT_INVALID", {
+      details: { length: data.length, discriminator: data[0] },
+    });
+  return Object.freeze({ active: data[1] === 1 });
+}
+
 /** The program rebuilds the credential, a field differing from its own fails RegisterKey. */
 export interface ProvenCredential {
   readonly credential: AuditCredential;

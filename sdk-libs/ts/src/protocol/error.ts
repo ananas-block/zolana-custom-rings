@@ -197,6 +197,7 @@ export const RING_ERROR_CODES = [
   "RING_CREDENTIAL_LIST_TAG_MISMATCH",
   "RING_CREDENTIAL_UNKNOWN",
   "RING_VIEWING_KEY_UNVERIFIED",
+  "RING_OWNER_GRANT_INVALID",
 ] as const;
 import { extractCauseCodes, hideCause, sanitizeDetails } from "@heliuslabs/zolana/internal";
 import type { ErrorEnvelope } from "@heliuslabs/zolana";

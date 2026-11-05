@@ -40,6 +40,7 @@ import {
   type CredentialEnrollmentClient,
   type PreparedEnrollment,
 } from "../../../src/operations/management/enrollment.js";
+import { RingDomain } from "../../../src/crypto/derivation/ring-domain.js";
 import { prepareEnrollmentRelay } from "../../../src/operations/management/enroll-relay.js";
 import { RingBufferLedger } from "../../../src/operations/workflow/buffer-ledger.js";
 import { reconcileRingSubmissions } from "../../../src/operations/workflow/submission.js";
@@ -47,6 +48,7 @@ import {
   ADDRESS_TREE_ID,
   credentialAddress,
   credentialAddressInput,
+  credentialElements,
   credentialPda,
   credentialSeed,
   credentialStateHash,
@@ -56,13 +58,9 @@ import {
 } from "../../../src/protocol/membership/credential.js";
 import { memberOfTag } from "../../../src/protocol/membership/policy.js";
 import { ringPolicyPda } from "../../../src/protocol/pda/index.js";
-import { registerKeyStatementHash } from "../../../src/protocol/proof/statement.js";
 import { credentialAccounts } from "../../../src/protocol/ring-rpc/relay-enroll-inputs.js";
 import { RingInstructionTag } from "../../../src/protocol/transaction/instruction-tag.js";
-import {
-  resolveCredential,
-  type ResolvedCredential,
-} from "../../../src/rpc/credential-resolver.js";
+import { resolveCredential, type CredentialLookup } from "../../../src/rpc/credential-resolver.js";
 import { BLOCKHASH } from "../../../../../zolana/sdk-libs/ts/test/helpers/clients.js";
 import { ownedAccount, ringPolicyData } from "../../helpers/ring-accounts.js";
 import { filled, randomAddress } from "../../helpers/ring-pipeline.js";
@@ -135,9 +133,15 @@ async function userRecord(owner: Address, nullifierPk: Bytes32): Promise<[Addres
 }
 
 describe("credential hashes", () => {
-  it("keeps the RegisterKey input and moves only the domain for the state hash", () => {
+  it("moves only the domain between the RegisterKey input and the state hash", () => {
     const credential = credentialOf(randomAddress(), randomAddress());
-    expect(registerKeyHash(credential)).toEqual(registerKeyStatementHash(credential));
+    const [proofDomain, ...proofFields] = credentialElements(credential, RingDomain.registerKey);
+    const [stateDomain, ...stateFields] = credentialElements(
+      credential,
+      RingDomain.credentialState,
+    );
+    expect(stateFields).toEqual(proofFields);
+    expect(stateDomain).not.toEqual(proofDomain);
     expect(credentialStateHash(credential)).not.toEqual(registerKeyHash(credential));
   });
 });
@@ -382,13 +386,13 @@ describe("prepared enrollment", () => {
   const PRESENT = {
     kind: "present",
     address: filled(1),
-    leaf: {},
-  } as unknown as ResolvedCredential;
-  const ABSENT = { kind: "absent", address: filled(1), gap: {} } as unknown as ResolvedCredential;
-  const QUEUED: ResolvedCredential = { kind: "unknown", address: filled(1), reason: "queued" };
+    credential: {},
+  } as unknown as CredentialLookup;
+  const ABSENT = { kind: "absent", address: filled(1), gap: {} } as unknown as CredentialLookup;
+  const QUEUED: CredentialLookup = { kind: "unknown", reason: "queued" };
 
   async function setup(
-    resolved: ResolvedCredential,
+    resolved: CredentialLookup,
     extra: ReadonlyMap<Address, RpcAccount> = new Map(),
   ) {
     vi.mocked(resolveCredential).mockResolvedValue(resolved);
@@ -440,7 +444,7 @@ describe("prepared enrollment", () => {
     expect(vi.mocked(resolveCredential)).toHaveBeenCalledWith(
       expect.objectContaining({
         ring: f.input.ringProgramId,
-        member: memberOfTag(addressBytes(f.input.owner)),
+        owner: f.input.owner,
       }),
       undefined,
     );
@@ -586,8 +590,8 @@ describe("stored credential", () => {
       ({
         kind: "present",
         address: filled(1),
-        leaf: { credential: stored },
-      }) as unknown as ResolvedCredential;
+        credential: stored,
+      }) as unknown as CredentialLookup;
     expect(() => checkEnrolledCredential(present(credential), credential)).not.toThrow();
     expect(() =>
       checkEnrolledCredential(present({ ...credential, ephU: filled(8) }), credential),
