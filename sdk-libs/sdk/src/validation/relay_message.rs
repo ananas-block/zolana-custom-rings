@@ -182,7 +182,7 @@ pub struct ApprovalOpening {
 pub struct OutputTotalsOpening {
     pub asset: Hash,
     pub peak: String,
-    pub outflow: String,
+    pub charged_outflow: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -952,7 +952,7 @@ impl ApprovalOpening {
                 .map(|slot| OutputTotalsOpening {
                     asset: Hash(slot.asset),
                     peak: slot.peak.to_string(),
-                    outflow: slot.outflow.to_string(),
+                    charged_outflow: slot.charged_outflow.to_string(),
                 })
                 .collect(),
             public: totals
@@ -977,7 +977,7 @@ impl ApprovalOpening {
                     Some(OutputTotals {
                         asset: slot.asset.0,
                         peak: slot.peak.parse().ok()?,
-                        outflow: slot.outflow.parse().ok()?,
+                        charged_outflow: slot.charged_outflow.parse().ok()?,
                     })
                 })
                 .collect::<Option<_>>()?,

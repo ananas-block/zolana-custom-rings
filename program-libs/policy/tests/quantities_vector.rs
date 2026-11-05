@@ -21,7 +21,6 @@ struct Row {
     debit: u128,
     kept: u128,
     charge: u128,
-    #[serde(rename = "outflow")]
     charged_outflow: u128,
 }
 

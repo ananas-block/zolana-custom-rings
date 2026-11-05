@@ -18,7 +18,7 @@ pub struct OutputTotals {
     /// Zero on a dummy slot.
     pub asset: [u8; 32],
     pub peak: u128,
-    pub outflow: u128,
+    pub charged_outflow: u128,
 }
 
 /// `peak` and `outflow` read debits alone, a charged asset reads whole under its live output.
@@ -54,7 +54,7 @@ impl ApprovalTotals {
                 .iter()
                 .map(|slot| {
                     slot.map_or(OutputTotals::default(), |asset| {
-                        let (peak, outflow) = peak_and_sum(
+                        let (peak, charged_outflow) = peak_and_sum(
                             asset_flows(transfer, &owners, &asset)
                                 .iter()
                                 .map(|row| row.charged_outflow),
@@ -62,7 +62,7 @@ impl ApprovalTotals {
                         OutputTotals {
                             asset,
                             peak,
-                            outflow,
+                            charged_outflow,
                         }
                     })
                 })
@@ -103,7 +103,7 @@ impl ApprovalTotals {
             fields.extend([
                 slot.asset,
                 right_align(&slot.peak.to_be_bytes()),
-                right_align(&slot.outflow.to_be_bytes()),
+                right_align(&slot.charged_outflow.to_be_bytes()),
             ]);
         }
         for slot in &self.public {
@@ -124,7 +124,7 @@ impl ApprovalTotals {
             .outputs
             .iter()
             .filter(|slot| slot.asset == *asset)
-            .map(|slot| read(slot.peak, slot.outflow));
+            .map(|slot| read(slot.peak, slot.charged_outflow));
         let public = self
             .public
             .iter()

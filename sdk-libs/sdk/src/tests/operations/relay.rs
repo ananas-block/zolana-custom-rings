@@ -3148,7 +3148,7 @@ mod public_signers {
         .0;
 
         let mut false_opening = opening.clone();
-        false_opening.outputs[0].outflow = "1".to_owned();
+        false_opening.outputs[0].charged_outflow = "1".to_owned();
 
         // Another key funds the withdrawal and the one spent note holds no value, so no owner debits
         // the mint and the public row's gross alone shows the size.
