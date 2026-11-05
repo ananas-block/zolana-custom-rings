@@ -559,7 +559,7 @@ export class RingTransactionSubmission {
     if (close.status.kind !== "failed") return close.signature;
     if (!(await bufferHeld(chain, frame.buffer, context))) return undefined;
     throw new RingError("RING_FRAME_BUFFER_CLOSE", {
-      details: { buffer: frame.buffer, signature: close.signature },
+      details: { buffer: frame.buffer, transactionId: close.signature },
     });
   }
 }
@@ -639,7 +639,9 @@ export async function closeAbandonedFrameBuffers(
     );
     const refused = await broadcast(transport, signed, context);
     if (refused?.kind === "failed")
-      throw new RingError("RING_FRAME_BUFFER_CLOSE", { details: { buffer, signature } });
+      throw new RingError("RING_FRAME_BUFFER_CLOSE", {
+        details: { buffer, transactionId: signature },
+      });
     signatures.push(signature);
   }
   return Object.freeze(signatures);
