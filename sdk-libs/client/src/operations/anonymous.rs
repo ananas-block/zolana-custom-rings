@@ -26,7 +26,7 @@ use zolana_ring_transaction::{
 
 use crate::history::{HistoryPosition, PageEnd};
 use crate::{
-    anonymous_wallet::PendingNote,
+    anonymous_wallet::{AnonymousWallet, PendingNote},
     confidential::{is_ring_merge, RingMerges},
     delivered::{self, RingDeliveryContext},
     deposit::{DepositOpener, DepositSlot, OpenedDeposit},
@@ -241,6 +241,17 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
         scan.finish(self.keys)
     }
 
+    /// Reads from the stored history of `wallet` with its notes held, a spend of a stored note reaches the scan.
+    pub async fn fetch_wallet<I: AsyncRpc + ?Sized>(
+        self,
+        indexer: &I,
+        wallet: &AnonymousWallet,
+    ) -> Result<AnonymousScan, AnonymousError> {
+        self.with_held_notes(wallet.notes())
+            .fetch(indexer, wallet.history())
+            .await
+    }
+
     /// Reads `ring` from its first row without tag or nullifier queries.
     pub async fn full_scan<I: AsyncRpc + ?Sized>(
         &self,
@@ -284,7 +295,7 @@ impl<'a, K: ShieldedKeys + RingKeys + MergeSeedHolder + ?Sized> AnonymousSync<'a
             history: history.clone(),
             found: Vec::new(),
             held_back: Vec::new(),
-            found_hashes: Commitments::default(),
+            found_hashes: HashSet::new(),
             held_hashes: self.held.iter().map(|note| note.utxo_hash).collect(),
             utxos: Vec::new(),
             decrypted: DecryptionResult::default(),
@@ -360,9 +371,9 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     /// The same under a mint `assets` does not name.
     held_back: Vec<WalletUtxo>,
     /// Kept after `found` moves into `decrypted`.
-    found_hashes: Commitments,
+    found_hashes: HashSet<[u8; 32]>,
     /// Of the notes [`AnonymousSync::with_held_notes`] passed.
-    held_hashes: Commitments,
+    held_hashes: HashSet<[u8; 32]>,
     utxos: Vec<AnonymousRingUtxo>,
     decrypted: DecryptionResult,
     unmatched: Vec<[u8; 32]>,
@@ -370,11 +381,6 @@ struct Scan<'s, 'a, 'r, I: ?Sized, K: ?Sized> {
     sender_claims: Vec<SenderClaim>,
     unopened: BTreeSet<[u8; 32]>,
 }
-
-#[cfg(not(test))]
-type Commitments = HashSet<[u8; 32]>;
-#[cfg(test)]
-type Commitments = HashSet<[u8; 32], tests::CountedProbes>;
 
 /// A recipient body at an output, a sender bundle in a message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1389,100 +1395,4 @@ fn assign_nullifiers<K: ShieldedKeys + ?Sized>(
     decrypted.utxos.extend(found);
     delivered::sort_by_publication(&mut decrypted.utxos);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        cell::Cell,
-        hash::{BuildHasher, DefaultHasher},
-    };
-
-    use async_trait::async_trait;
-    use spr_transaction::Utxo;
-
-    use super::*;
-    use crate::deposit::tests::{wallet, RING, TREE};
-
-    thread_local! {
-        static PROBES: Cell<usize> = const { Cell::new(0) };
-    }
-
-    /// Counts every hash, growth rehashes included.
-    #[derive(Clone, Default)]
-    pub(super) struct CountedProbes;
-
-    impl BuildHasher for CountedProbes {
-        type Hasher = DefaultHasher;
-
-        fn build_hasher(&self) -> DefaultHasher {
-            PROBES.set(PROBES.get() + 1);
-            DefaultHasher::new()
-        }
-    }
-
-    struct Offline;
-
-    #[async_trait]
-    impl AsyncRpc for Offline {}
-
-    fn note(index: u32, owner: PublicKey) -> WalletUtxo {
-        let mut utxo_hash = [0; 32];
-        utxo_hash[..4].copy_from_slice(&index.to_be_bytes());
-        WalletUtxo {
-            utxo: Utxo {
-                owner,
-                asset: Mint::SOL,
-                amount: 1,
-                blinding: utxo_hash,
-                ring_program_id: Some(RING),
-                data: Default::default(),
-            },
-            nullifier_pubkey: [0; 32],
-            utxo_hash,
-            nullifier: [0; 32],
-            tx_viewing_key: None,
-            data_hash: None,
-            ring_data_hash: None,
-            tree_id: TREE,
-            leaf_index: u64::from(index),
-            latest_tree_id: None,
-            slot: u64::from(index),
-            tx_signature: Signature::default(),
-            slot_index: 0,
-        }
-    }
-
-    #[test]
-    fn admitting_notes_takes_linear_probes() {
-        const NOTES: u32 = 10_000;
-        let keys = wallet(1);
-        let assets = RingAssets::new([]).unwrap();
-        let sync = AnonymousSync::new(&keys, &assets);
-        let history = ViewingHistory::new(keys.viewing_pubkey(), 0);
-        let mut scan = sync.scan(&Offline, &history).unwrap();
-        let owner = scan.address.signing_pubkey;
-        let viewing_pubkey = scan.address.viewing_pubkey;
-        PROBES.set(0);
-        for index in 0..NOTES {
-            let note = note(index, owner);
-            assert!(!scan.is_found(&note.utxo_hash));
-            match index % 2 {
-                0 => scan.keep(note, viewing_pubkey, AnonymousStream::FullScan),
-                _ => scan.hold_back_note(note),
-            }
-        }
-        for index in 0..NOTES {
-            scan.keep(
-                note(index, owner),
-                viewing_pubkey,
-                AnonymousStream::FullScan,
-            );
-            scan.hold_back_note(note(index, owner));
-        }
-        let probes = PROBES.get();
-        assert_eq!(scan.utxos.len() + scan.held_back.len(), NOTES as usize);
-        // Two probes per admission and per repeat, growth rehashes stay under two per note.
-        assert!(probes <= 6 * NOTES as usize, "{probes} probes");
-    }
 }

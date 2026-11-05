@@ -1806,8 +1806,7 @@ async fn the_stored_wallet_keeps_only_its_own_nullifiers() {
     publish_merge(&indexer, &bob, vec![note.nullifier], 30);
     alice.pay(&indexer, &[pay(&carol.address(), 10)]);
     let scan = AnonymousSync::new(&bob.keys, &assets())
-        .with_held_notes(wallet.notes())
-        .fetch(&indexer, wallet.history())
+        .fetch_wallet(&indexer, &wallet)
         .await
         .unwrap();
     wallet.absorb(scan).unwrap();
@@ -1816,6 +1815,30 @@ async fn the_stored_wallet_keeps_only_its_own_nullifiers() {
     let mut restored = AnonymousWallet::new(fresh(&bob));
     restored.absorb(bob.recover(&indexer).await).unwrap();
     assert_eq!(restored.decrypted().spent_nullifiers, own);
+}
+
+/// Another device of the wallet spends a stored note, the next sync marks it spent with no held notes passed.
+#[tokio::test]
+async fn a_stored_note_spent_elsewhere_is_spent_after_a_wallet_sync() {
+    let indexer = Indexer::default();
+    let mut alice = Wallet::new(1);
+    let carol = Wallet::new(3);
+    let bob = Wallet::new(2);
+    alice.pay(&indexer, &[pay(&bob.address(), 30)]);
+    let mut wallet = AnonymousWallet::new(fresh(&bob));
+    wallet
+        .absorb(bob.sync(&indexer, wallet.history()).await)
+        .unwrap();
+    let note = wallet.notes()[0].clone();
+    let mut other_device = Wallet::new(2);
+    other_device.funding = vec![note.clone()];
+    other_device.pay(&indexer, &[pay(&carol.address(), 30)]);
+    let scan = AnonymousSync::new(&bob.keys, &assets())
+        .fetch_wallet(&indexer, &wallet)
+        .await
+        .unwrap();
+    wallet.absorb(scan).unwrap();
+    assert_eq!(wallet.note_state(&note), NoteState::Spent);
 }
 
 #[test]
