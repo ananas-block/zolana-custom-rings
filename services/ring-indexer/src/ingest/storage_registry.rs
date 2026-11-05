@@ -126,11 +126,8 @@ impl<C: ConnectionTrait> Projection<'_, '_, C, StorageRegistry> {
         // 1. The program admits the update at the projected revision.
         self.authorize(&authority)?;
         let account = &*self.state.account;
-        // The instruction omits the accepted address checkpoint, a credential write keeps the projected floor and no read serves it.
-        let credential_writes = data
-            .credential_writes()
-            .map_err(|error| fault(format!("update refused ({error})")))?;
-        let absence_checkpoint = (credential_writes != 0).then(|| account.absence_floor());
+        // The program refuses a header sequence other than the sequence of the tree 0 root it read, and a failed transaction never reaches here.
+        let absence_checkpoint = data.private_write.map(|checkpoint| checkpoint.sequence);
         let mut rotated = *account;
         rotated
             .update(RootUpdate {

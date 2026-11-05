@@ -135,7 +135,7 @@ pub use record_update::{
     RecordUpdateRefusal, BATCH_WINDOW_SLOTS, MAX_BATCH_ATTEMPTS, MAX_LIMIT_WINDOW_SLOTS,
     MAX_LIST_APPROVAL_WINDOW_SLOTS,
 };
-pub use record_writer::{RecordWriter, RECORD_FLUSH_INTERVAL};
+pub use record_writer::{CredentialWrites, RecordWriter, SaltedOwner, RECORD_FLUSH_INTERVAL};
 pub use relay::{
     Relay, RelayError, RelayParts, RelayPayload, ServedRings, ABANDONED_AFTER_SLOTS, QUOTE_SLOTS,
     RELAY_TRACK_INTERVAL,

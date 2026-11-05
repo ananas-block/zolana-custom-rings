@@ -9,7 +9,7 @@ use custom_ring_interface::{
     key_catalog::RingCircuit,
     mint_policy_write,
     storage::{chain_start, RegistryId, Revision, StorageRegistry},
-    storage_instruction::{tag, InitializeIxData, StorageUpdateIxData},
+    storage_instruction::{tag, InitializeIxData, PrivateWriteCheckpoint, StorageUpdateIxData},
     ApplyRecordsIxData, CredentialRead, RecordWriteData, WriteRecordsIxData, STORAGE_PROGRAM_ID,
 };
 use jsonrpsee::{server::ServerHandle, types::ErrorObjectOwned};
@@ -31,7 +31,7 @@ use crate::{
     api,
     indexer::{Indexer, Progress, Readiness, StartSlot},
     rpc::SolanaRpc,
-    storage::StorageStore,
+    storage::{StorageState, StorageStore},
     tests::{database, field},
 };
 
@@ -266,7 +266,7 @@ impl StorageReplay {
                 writes,
                 asset_writes: vec![],
                 credential_read: CredentialRead::new(0, &[]).unwrap(),
-                ring_program: None,
+                private_write: None,
                 apply: &apply_data(inputs.new_root, inputs.new_next_index),
             },
         );
@@ -383,8 +383,14 @@ impl PolicySource {
         }
     }
 
-    /// The root an honest proof reaches.
-    fn update(&mut self, revision: u64, mask: u64, accounts: &[Address]) -> ([u8; 32], Value) {
+    /// The root an honest proof reaches, a private write names `sequence` as its checkpoint.
+    fn update(
+        &mut self,
+        revision: u64,
+        mask: u64,
+        sequence: u64,
+        accounts: &[Address],
+    ) -> ([u8; 32], Value) {
         let revision = Revision::from(revision);
         let write = RecordWriteData {
             member: field(4),
@@ -405,7 +411,7 @@ impl PolicySource {
         self.tree = applied.tree;
         let inputs = applied.proof;
         // A private list write names its credential roots, the indexer verifies no proof.
-        let (credential_read, ring_program) = match mask & PRIVATE_MASK {
+        let (credential_read, private_write) = match mask & PRIVATE_MASK {
             0 => (CredentialRead::new(0, &[]).unwrap(), None),
             _ => {
                 let RingCircuit::ApplyRecords { writes } = RingCircuit::apply_records(1) else {
@@ -414,7 +420,10 @@ impl PolicySource {
                 let state_roots = vec![0; usize::from(writes)];
                 (
                     CredentialRead::new(0, &state_roots).unwrap(),
-                    Some(Address::new_from_array([43; 32])),
+                    Some(PrivateWriteCheckpoint {
+                        ring_program: Address::new_from_array([43; 32]),
+                        sequence,
+                    }),
                 )
             }
         };
@@ -423,7 +432,7 @@ impl PolicySource {
             writes: vec![write],
             asset_writes: vec![],
             credential_read,
-            ring_program,
+            private_write,
             apply: &apply_data(inputs.new_root, inputs.new_next_index),
         };
         let wire = [&[tag::UPDATE][..], &data.encode().unwrap()].concat();
@@ -453,8 +462,8 @@ async fn replayed(blocks: Vec<Vec<Value>>) -> (Indexer, ServerHandle) {
 async fn a_write_a_rule_can_read_stops_every_older_root_in_the_same_slot() {
     let mut source = PolicySource::new([0; 32]);
     let accounts = [PolicySource::CREATOR, source.source];
-    let (graced_root, graced) = source.update(0, READER_MASK, &accounts);
-    let (policy_root, policy) = source.update(1, BLOCK_MASK, &accounts);
+    let (graced_root, graced) = source.update(0, READER_MASK, 0, &accounts);
+    let (policy_root, policy) = source.update(1, BLOCK_MASK, 0, &accounts);
     let initialized = std::mem::take(&mut source.initialized);
     let (indexer, handle) = replayed(vec![initialized, vec![graced], vec![policy]]).await;
     let state = StorageStore::new(indexer.db.as_ref(), source.source.to_bytes())
@@ -482,21 +491,44 @@ async fn a_write_a_rule_can_read_stops_every_older_root_in_the_same_slot() {
     handle.stopped().await;
 }
 
-#[tokio::test]
-async fn a_credential_write_moves_the_root_and_keeps_the_projected_absence_floor() {
-    let mut source = PolicySource::new(field(9));
-    let accounts = [PolicySource::CREATOR, source.source];
-    let (root, update) = source.update(0, PRIVATE_ALLOW_MASK, &accounts);
-    let initialized = std::mem::take(&mut source.initialized);
-    let (indexer, handle) = replayed(vec![initialized, vec![update]]).await;
-    let state = StorageStore::new(indexer.db.as_ref(), source.source.to_bytes())
+async fn projected(indexer: &Indexer, registry: Address) -> StorageState {
+    StorageStore::new(indexer.db.as_ref(), registry.to_bytes())
         .state()
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_credential_write_raises_the_floor_and_a_lower_sequence_never_lowers_it() {
+    let mut source = PolicySource::new(field(9));
+    let accounts = [PolicySource::CREATOR, source.source];
+    let (_, raised) = source.update(0, PRIVATE_ALLOW_MASK, 7, &accounts);
+    let (root, lower) = source.update(1, PRIVATE_ALLOW_MASK, 3, &accounts);
+    let initialized = std::mem::take(&mut source.initialized);
+    let (indexer, handle) = replayed(vec![initialized, vec![raised], vec![lower]]).await;
+    let state = projected(&indexer, source.source).await;
     assert_eq!(state.fault, None);
     assert_eq!(state.account.newest().hash, root);
-    assert_eq!(state.account.absence_floor(), 0);
+    assert_eq!(state.account.absence_floor(), 7);
+    handle.stop().unwrap();
+    handle.stopped().await;
+}
+
+#[tokio::test]
+async fn a_failed_credential_write_leaves_the_root_and_the_floor() {
+    let mut source = PolicySource::new(field(9));
+    let accounts = [PolicySource::CREATOR, source.source];
+    let (root, raised) = source.update(0, PRIVATE_ALLOW_MASK, 4, &accounts);
+    let (_, mut failed) = source.update(1, PRIVATE_ALLOW_MASK, 9, &accounts);
+    failed["meta"]["err"] = json!({"InstructionError": [0, {"Custom": 1}]});
+    failed["meta"]["status"] = json!({"Err": {"InstructionError": [0, {"Custom": 1}]}});
+    let initialized = std::mem::take(&mut source.initialized);
+    let (indexer, handle) = replayed(vec![initialized, vec![raised], vec![failed]]).await;
+    let state = projected(&indexer, source.source).await;
+    assert_eq!(state.fault, None);
+    assert_eq!(state.account.newest().hash, root);
+    assert_eq!(state.account.absence_floor(), 4);
     handle.stop().unwrap();
     handle.stopped().await;
 }
@@ -505,16 +537,10 @@ async fn a_credential_write_moves_the_root_and_keeps_the_projected_absence_floor
 async fn a_credential_write_on_a_registry_without_a_ring_stops_the_projection() {
     let mut source = PolicySource::new([0; 32]);
     let accounts = [PolicySource::CREATOR, source.source];
-    let (_, update) = source.update(0, PRIVATE_ALLOW_MASK, &accounts);
+    let (_, update) = source.update(0, PRIVATE_ALLOW_MASK, 5, &accounts);
     let initialized = std::mem::take(&mut source.initialized);
     let (indexer, handle) = replayed(vec![initialized, vec![update]]).await;
-    let fault = StorageStore::new(indexer.db.as_ref(), source.source.to_bytes())
-        .state()
-        .await
-        .unwrap()
-        .unwrap()
-        .fault
-        .unwrap();
+    let fault = projected(&indexer, source.source).await.fault.unwrap();
     assert!(fault.contains("update refused"), "{fault}");
     handle.stop().unwrap();
     handle.stopped().await;
