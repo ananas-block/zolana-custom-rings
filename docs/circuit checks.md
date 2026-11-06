@@ -116,40 +116,54 @@
 
 ## Policy checks
 
+### Activation and table
+
 1. **Policy activation:**
    1. **Rules:** Enforce when `policy_hash != 0`, except in delegate mode.
    2. **Caps and approval thresholds:** Enforce when `own_root != 0`, even without a rule table.
    3. **Delegate:** Bypass both; require `policy_hash`, `own_root` and `curator_root` to be zero.
 2. **Policy binding:** When rules are active, hash the domain, nine list sources (list ID and registry), the salted list mask, the rule count and sixteen rule rows, and require the result to equal the program’s configured `policy_hash`.
-3. **Policy records:** Authenticate each required owner or asset record under its configured ring or curator root.
+3. **Policy decoding:** Require `0 <= policy_len <= 16` and activate only that prefix. Range-check rule fields, list masks and asset-limit fields, and require their decoded components to reconstruct the packed values. List masks are bounded to the nine source bits. The table decodes and hashes unconditionally; only the match to `policy_hash` is gated.
+4. **List conditions:** A rule’s list condition passes if the subject belongs to at least one selected `present` list or is absent from at least one selected `absent` list. All applicable rules must pass. Stored tables are narrower: one polarity per rule, grant lists by presence, one deny list by absence; see 18.
+
+### Records and lookups
+
+5. **Policy records:** Authenticate each required owner or asset record under its configured ring or curator root.
    1. **Present:** Prove inclusion and use the committed record fields.
    2. **Absent:** Prove non-inclusion and use zero values.
    3. **Source:** A nonzero source registry selects the curator root. The circuit does not check which registry that root belongs to; see 18.
-4. **Private-list lookup IDs:** Bind each owner’s private-list lookup ID to their registration. The salted mask selects which lists owners read at that ID; assets always read public records.
+6. **Private-list lookup IDs:** Bind each owner’s private-list lookup ID to their registration. The salted mask selects which lists owners read at that ID; assets always read public records.
    1. **Registered:** The supplied salt must hash to the registered `list_tag`; derive the lookup ID from the owner identity and that salt.
    2. **Unregistered:** Prove absence from the tracking tree and treat private-list membership as absent. This holds only under the tracking floor; see 18.
-5. **Sender rules:** Require every owner row, and so every spent UTXO owner, to satisfy every active sender rule using authenticated list membership. Sender rules apply regardless of amount.
-6. **Recipient rules:** Require every real output owner, including exits, and every public withdrawal recipient to satisfy each active owner rule, unless its amount guard exempts the corresponding payment total. Owner rules skip a zero owner identity.
-7. **Asset rules:**
+
+### Rules
+
+7. **Senders:** Require every owner row, and so every spent UTXO owner, to satisfy every active sender rule using authenticated list membership. Sender rules apply regardless of amount.
+8. **Recipients:** Require every real output owner, including exits, and every public withdrawal recipient to satisfy each active owner rule, unless its amount guard exempts the corresponding payment total. Owner rules skip a zero owner identity.
+9. **Assets:**
    1. **Outputs and withdrawals:** Require each asset to satisfy every active asset rule, unless its amount guard exempts the aggregate payment total for that asset.
    2. **Inputs:** Apply every unguarded asset rule to each spent UTXO’s asset, including zero-amount UTXOs.
-8. **Guard totals:** Aggregate payments before applying amount thresholds.
-   1. **Recipient:** Per owner and asset, `max(ring_outputs - ring_inputs, 0) + exits + withdrawals`.
-   2. **Asset:** Sum these totals once per distinct owner.
-   3. **Default-ring entry:** Default-ring inputs do not reduce the total; entry funding is a receipt.
-9. **Guard thresholds:**
-   1. **Always:** Enforce the list condition regardless of amount.
-   2. **AboveAmount:** Exempt the rule when its guard total is at or below the rule’s fixed threshold.
-   3. **AboveAmountByAsset:** Exempt a recipient rule when its guard total is at or below the threshold in the ring’s asset record. An asset without a record reads threshold zero, so the rule applies to any nonzero total.
-10. **Owner debit:** For each input owner and asset, compute `max(total_inputs - same_owner_ring_outputs, 0)`. Include default-ring inputs; exits and withdrawals do not count as returned funds.
-11. **Charged outflow:** Add each owner’s share of exits and gross withdrawals not covered by total owner debits. Limit the extra charge to retained input value and split it proportionally to retained balances, using owner-row order for rounding. An exit a third party’s deposit funds still charges the owners who retained value.
-12. **Outflow caps:** Require each owner’s charged outflow per asset to be at or below the cap in the ring’s asset record. A zero cap disables the limit; an asset without a record has no cap, no `cosign_above` and no withdrawal threshold.
-13. **Approval mask:** Require `approval_mask` to equal the computed threshold results. It identifies the threshold-triggered co-signer approvals required: `0` means neither threshold triggered; `3` means both. The circuit proves the mask, and the program checks the required signatures.
+10. **Guard totals:** Aggregate payments before applying amount thresholds.
+    1. **Recipient:** Per owner and asset, `max(ring_outputs - ring_inputs, 0) + exits + withdrawals`.
+    2. **Asset:** Sum these totals once per distinct owner.
+    3. **Default-ring entry:** Default-ring inputs do not reduce the total; entry funding is a receipt.
+11. **Guard thresholds:**
+    1. **Always:** Enforce the list condition regardless of amount.
+    2. **AboveAmount:** Exempt the rule when its guard total is at or below the rule’s fixed threshold.
+    3. **AboveAmountByAsset:** Exempt a recipient rule when its guard total is at or below the threshold in the ring’s asset record. An asset without a record reads threshold zero, so the rule applies to any nonzero total.
+
+### Outflow and approval
+
+12. **Owner debit:** For each input owner and asset, compute `max(total_inputs - same_owner_ring_outputs, 0)`. Include default-ring inputs; exits and withdrawals do not count as returned funds.
+13. **Charged outflow:** Add each owner’s share of exits and gross withdrawals not covered by total owner debits. Limit the extra charge to retained input value and split it proportionally to retained balances, using owner-row order for rounding. An exit a third party’s deposit funds still charges the owners who retained value.
+14. **Outflow caps:** Require each owner’s charged outflow per asset to be at or below the cap in the ring’s asset record. A zero cap disables the limit; an asset without a record has no cap, no `cosign_above` and no withdrawal threshold.
+15. **Approval mask:** Require `approval_mask` to equal the computed threshold results. It identifies the threshold-triggered co-signer approvals required: `0` means neither threshold triggered; `3` means both. The circuit proves the mask, and the program checks the required signatures.
     1. **Outflow (bit 0, value `1`):** Set when any owner’s charged outflow exceeds the asset’s nonzero `cosign_above`.
     2. **Withdrawal (bit 1, value `2`):** Set when an asset’s gross public withdrawals exceed its nonzero withdrawal threshold; deposits do not offset withdrawals.
-14. **Approval totals:** When `approval_totals != 0`, require it to match a blinded hash of the assets, computed peak and total charged outflows, and gross withdrawals. Require zero when outflow checks are inactive.
-15. **List conditions:** A rule’s list condition passes if the subject belongs to at least one selected `present` list or is absent from at least one selected `absent` list. All applicable rules must pass. Stored tables are narrower: one polarity per rule, grant lists by presence, one deny list by absence; see 18.
-16. **Policy decoding:** Require `0 <= policy_len <= 16` and activate only that prefix. Range-check rule fields, list masks and asset-limit fields, and require their decoded components to reconstruct the packed values. List masks are bounded to the nine source bits. The table decodes and hashes unconditionally; only the match to `policy_hash` is gated.
+16. **Approval totals:** When `approval_totals != 0`, require it to match a blinded hash of the assets, computed peak and total charged outflows, and gross withdrawals. Require zero when outflow checks are inactive.
+
+### Shared
+
 17. **Integer arithmetic:** Use bounded values to prevent field wraparound.
     1. **Comparisons:** Constrain the range-checked decomposition and comparison bit.
     2. **Division:** Require `numerator = quotient * divisor + remainder`, with `0 <= remainder < divisor`.
