@@ -1,11 +1,37 @@
+**Things to go over:**
+
+1. current state
+2. encryption scheme
+   1. unified, everything is encrypted verifiably
+   2. encrypt with 
+3. why do we need registration?
+   1. encrypt nullifier key so that the auditor can link utxos and serve spendable balance to the user
+   2. not related to the auditor encryption 
+   3. impl
+      1. one off registration
+      2. encrypt with every transfer
+4. **tree storage**
+   1. 
+5. edge cases for each rule
+6. do we need each rule?
+7. How can we reduce complexity?
+8. Where are we in general?
+
+
+
 **Use cases:**
 
-1. KYC-gated payments.
-2. Sanctions screening.
-3. Transaction monitoring.
-4. Freezing funds.
-5. Recovering funds through a permanent delegate.
-6. Small payments without KYC, with KYC required above a threshold.
+without cosigner we can do the following:
+
+1. freeze user funds
+2. move user funds
+3. decrypt everything
+4. block sanctions
+5. enforce kyc
+
+with cosigner we can do anything eg:
+
+1. transaction limits, etc
 
 **Features:**
 
@@ -58,7 +84,7 @@
    
       **Cases:**
    
-   Apply the configured sender and recipient allowlisting to each case, regardless of which instruction handles it.
+      Apply the configured sender and recipient allowlisting to each case, regardless of which instruction handles it.
    4. **Transfer within the ring:** Check spent UTXO owners and receiving UTXO owners.
    5. **Deposit:** Check receiving ring UTXO owners.
    6. **Withdrawal:** Check spent UTXO owners and public withdrawal recipients.
@@ -78,7 +104,7 @@
    
       **Cases:**
    
-   Apply the configured sender and recipient restrictions to each case.
+      Apply the configured sender and recipient restrictions to each case.
    5. **Transfer within the ring:** Check spent UTXO owners and receiving UTXO owners.
    6. **Deposit:** Check receiving ring UTXO owners.
    7. **Withdrawal:** Check spent UTXO owners and public withdrawal recipients.
@@ -113,7 +139,7 @@
    
       **Cases:**
    
-       Sum receipts per owner and asset for recipient rules, or per asset for asset rules, within the transaction.
+        Sum receipts per owner and asset for recipient rules, or per asset for asset rules, within the transaction.
    4. **Transfer within the ring:** Evaluate guards using transferred amounts.
    5. **Deposit:** Evaluate guards using deposited amounts.
    6. **Withdrawal:** Evaluate guards using withdrawn amounts.
@@ -131,7 +157,7 @@
    
       **Cases:**
    
-       Aggregate outflow per owner and asset across the transaction. Subtract funds returned to the same owner in ring UTXOs.
+        Aggregate outflow per owner and asset across the transaction. Subtract funds returned to the same owner in ring UTXOs.
    3. **Transfer within the ring:** Count funds sent to other owners.
    4. **Deposit:** No outflow-cap checks; public funds enter the ring.
    5. **Withdrawal:** Count withdrawn funds toward the owner’s outflow.
@@ -150,7 +176,7 @@
    
       **Cases:**
    
-      Calculate owner outflow as defined by the outflow cap. Aggregate gross public withdrawals per asset across the transaction, without subtracting deposits.
+       Calculate owner outflow as defined by the outflow cap. Aggregate gross public withdrawals per asset across the transaction, without subtracting deposits.
    4. **Transfer within the ring:** Apply owner-outflow thresholds to funds sent to other owners.
    5. **Deposit:** No outflow or withdrawal threshold applies to a deposit alone.
    6. **Withdrawal:** Apply both owner-outflow and gross-withdrawal thresholds.
@@ -158,27 +184,23 @@
    8. **Exit to the default ring:** Apply owner-outflow thresholds, including exits to the same owner.
    9. **Merge:** No approval-threshold checks.
    10. **Delegate transfer:** No approval-threshold checks; authorization is covered by the permanent delegate policy.
-
 10. **Permanent delegate**
 
     **Purpose:**
-
     1. Allow a configured delegate to move funds without owner authorization.
-
-    **Technical requirements:**
-
-    1. Require authorization from the delegate configured by the ring policy.
-    2. Delegate transfers bypass the other transfer policies; auditor recovery remains required.
-
-    **Cases:**
-
-    1. **Transfer within the ring:** The delegate may move funds between owners without their signatures.
-    2. **Deposit:** Delegate authority cannot authorize spending public funds.
-    3. **Withdrawal:** Permitted with delegate authorization.
-    4. **Entry from the default ring:** Delegate authority cannot spend default-ring UTXOs.
-    5. **Exit to the default ring:** Permitted with delegate authorization.
-    6. **Merge:** Normal merge authorization applies; no additional delegate-policy checks.
-    7. **Delegate transfer:** Require the configured delegate’s authorization and apply auditor recovery, without the other transfer-policy checks.
+    
+       **Technical requirements:**
+    2. Require authorization from the delegate configured by the ring policy.
+    3. Delegate transfers bypass the other transfer policies; auditor recovery remains required.
+    
+       **Cases:**
+    4. **Transfer within the ring:** The delegate may move funds between owners without their signatures.
+    5. **Deposit:** Delegate authority cannot authorize spending public funds.
+    6. **Withdrawal:** Permitted with delegate authorization.
+    7. **Entry from the default ring:** Delegate authority cannot spend default-ring UTXOs.
+    8. **Exit to the default ring:** Permitted with delegate authorization.
+    9. **Merge:** Normal merge authorization applies; no additional delegate-policy checks.
+    10. **Delegate transfer:** Require the configured delegate’s authorization and apply auditor recovery, without the other transfer-policy checks.
 
 
 
