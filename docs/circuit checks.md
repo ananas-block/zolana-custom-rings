@@ -235,4 +235,34 @@ Transfer output blindings are derived from the encrypted transaction viewing sec
 14. Note 9 likely makes the separate single-asset payout circuit unnecessary; sharing the mint can remain an optional encoding optimization.
 15. The withdrawal `amount < 2^64` check is probably redundant: `withdrawal_hash` binds the amount to the program’s `u64` value. The nonzero checks are separate.
 16. Consider unifying list lookups as `Poseidon(domain, owner_id, salt)`: use zero salt for public lists and the registered salt for private lists, selected by the policy. Both use the same hashing and membership logic; public entries require no registration.
-17. Let's consider unifying the tree types. The tracking tree and the policy registries keep separate roots and revisions, so enrollment writes never race policy writes, but they could share one leaf layout and one pool gadget. A tracking leaf would be a registry record whose policy columns are zero, read under its own root. The circuit then opens every owner subject through one record pool with a per-subject root, and a sender's row and salted lookup read one view instead of two.
+17. Consider to unify the two trees. todo do a separate doc on the tree design.
+18. Consider one guard kind: a guard bit and a threshold. `AboveAmount(t)` is the bit with threshold `t`, `AboveAmountByAsset` is the bit with threshold zero, which reads the asset record's threshold; `AboveAmount(0)` is already refused. Behaviour is unchanged, including an absent asset record binding on any nonzero total. The circuit drops the second guard tag and the per-payment record comparison; the table shape rule for per-asset guards can stay or go.
+19. Consider keeping non-policy lists out of the policy tree. No rule reads `Reader`, `RingViewing` or a wallet grant, yet their writes move the root every transfer proof opens. Write them as a memo instead, instruction data the indexer picks up as it does for the Solana memo program, with no leaf and no root change.
+20. Consider removing the charge. `displaced` is nonzero only when a public deposit of an asset meets an exit or withdrawal of the same asset in one transaction: without the deposit, SPP's balance gives `leaving <= sum(debit)`. Refuse that case, the withdrawal half in the program's public slot fold and the exit half in the circuit (an exit's asset must not equal a deposited slot's asset, where a slot deposits iff `net + gross != 0`), and charged outflow is the debit. That deletes `flowsOf`, `floorDiv`, `min` and the division hint, about 105 lines of circuit code, plus a dozen 72-bit range checks per asset slot. The spec's mixed-owner rule becomes unconditional; single-owner pass-through of public funds is the one feature lost.
+
+## Limitations
+
+1. At most four screened owners per transfer on commitment keys and one on entry keys; a spend with more distinct input owners cannot be proven.
+2. Sixteen rules per table, nine lists, one curator registry beside the ring’s own.
+3. A rule is one polarity: any of its grant lists by presence, or one deny list by absence. No AND inside a rule, no mixed present and absent lists, no present rule on a deny list.
+4. Sender rules take no amount guard. A per-asset guard fits only owner rules.
+5. Guards exempt by total, so a rule cannot refuse one payment while admitting a split of it, and a zero total is always exempt.
+6. Owner rules skip a payment whose owner identity is zero.
+7. Asset rules on inputs are the unguarded ones only, and only because a zero-amount input’s asset reaches no payment total.
+8. An asset without an own record has no cap, no `cosign_above` and no withdrawal threshold, and a per-asset guard on it binds on any nonzero total.
+9. Limits are per transaction. Window limits exist only in Ring RPC, on transactions it co-signs.
+10. Caps and rows key on owner identity, so one person with several keys is several owners.
+11. A private list reads only through a tracking row. An unregistered owner is off every private list: an allow rule refuses it, a block rule admits it.
+12. The circuit cannot see a root’s age. Freshness, the salted-source floor and which registry a curator root belongs to are program checks.
+13. The circuit decodes any row; table shape is a write-time check. A table that bypasses that check is honoured by the proof.
+14. Three public assets per transaction, and withdrawal legs capped by the key’s slot count.
+15. The delegate rail runs no rule, cap or approval, and must present zero policy, own and curator roots.
+16. The charge attributes third-party-funded exits to owners who kept funds, by row order for rounding, and is not a trace of whose funds left.
+17. Guard totals net only ring inputs; debit nets entry inputs too. The same transfer has two notions of what an owner received.
+18. Two approval classes, outflow and withdrawal, each from one per-asset threshold. No approval on a deposit, a recipient or a list event.
+19. The withdrawal bit reads gross per public slot, with no deposit offset and no per-owner attribution.
+20. Approval totals reach a co-signer only as a blinded digest; the blinder’s freshness is not constrained.
+21. Record pool capacity is fixed per key: senders, two per output slot, withdrawals, salted keys, spent inputs and public assets. More distinct subjects than that cannot be proven.
+22. The single-asset payout key allows one ring input, one public signer, sixteen outputs of that asset, and no entry, exits, public legs or data.
+23. The merge circuit reads no policy, so a merge is unscreened by any rule or cap.
+24. Exits are screened as recipients only; there is no exit-specific subject or rule.
