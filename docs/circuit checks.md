@@ -235,4 +235,4 @@ Transfer output blindings are derived from the encrypted transaction viewing sec
 14. Note 9 likely makes the separate single-asset payout circuit unnecessary; sharing the mint can remain an optional encoding optimization.
 15. The withdrawal `amount < 2^64` check is probably redundant: `withdrawal_hash` binds the amount to the program’s `u64` value. The nonzero checks are separate.
 16. Consider unifying list lookups as `Poseidon(domain, owner_id, salt)`: use zero salt for public lists and the registered salt for private lists, selected by the policy. Both use the same hashing and membership logic; public entries require no registration.
-
+17. Let's consider unifying the tree types. The tracking tree and the policy registries keep separate roots and revisions, so enrollment writes never race policy writes, but they could share one leaf layout and one pool gadget. A tracking leaf would be a registry record whose policy columns are zero, read under its own root. The circuit then opens every owner subject through one record pool with a per-subject root, and a sender's row and salted lookup read one view instead of two.
